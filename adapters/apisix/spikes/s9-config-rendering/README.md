@@ -13,6 +13,7 @@ docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s9-config-rendering
 | [`consul-template.hcl`](consul-template.hcl) | consul-template's configuration: Consul, Vault, the template, its quiet period |
 | [`config.yaml`](config.yaml) | The APISIX config of S8, with the internal listener |
 | [`compose.override.yaml`](compose.override.yaml) | Adds consul-template and a second backend for `qwen3`, and lets APISIX read the rendered file from a shared volume |
+| [`backends.json`](backends.json) | The backends as they are registered in Consul: two for `qwen3`, one of them also for `llama3.2`, and one for `cloud-large` with a key in Vault |
 | [`run.sh`](run.sh) | Registers the backends, then checks rendering, routing, reloads under load, streams in flight, a backend that dies, key rotation, unreachable sources and broken files. Exits non-zero on any unexpected result |
 
 ## What the template reads

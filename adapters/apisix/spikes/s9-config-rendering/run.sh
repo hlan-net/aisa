@@ -29,43 +29,62 @@ trap cleanup EXIT
 
 failures=0
 check() { # check <label> <expected> <actual>
-    if [[ "$2" == "$3" ]]; then
-        printf '  ok    %-66s %s\n' "$1" "$3"
+    local label=$1 expected=$2 actual=$3
+    if [[ "$expected" == "$actual" ]]; then
+        printf '  ok    %-66s %s\n' "$label" "$actual"
     else
-        printf '  FAIL  %-66s %s (expected %s)\n' "$1" "$3" "$2"
+        printf '  FAIL  %-66s %s (expected %s)\n' "$label" "$actual" "$expected"
         failures=$((failures + 1))
     fi
 }
-note() { printf '        %-66s %s\n' "$1" "$2"; }
+note() { # note <label> <value>
+    local label=$1 value=$2
+    printf '        %-66s %s\n' "$label" "$value"
+}
 
 rendered() { "${COMPOSE[@]}" exec -T consul-template cat /rendered/apisix.yaml; }
 overwrite() { "${COMPOSE[@]}" exec -T consul-template sh -c 'cat >/rendered/apisix.yaml'; }
-instances() { rendered | grep -c "name: \"$1\"" || true; }
+instances() { # instances <backend>: how often the rendered file names it
+    local backend=$1
+    rendered | grep -c "name: \"$backend\"" || true
+}
 reloads() { "${COMPOSE[@]}" logs apisix 2>/dev/null | grep -c 'apisix.yaml reloaded' || true; }
 now() { date +%s.%N; }
-since() { awk -v a="$1" -v b="$(now)" 'BEGIN { printf "%.1f s", b - a }'; }
+since() { # since <time>
+    local began=$1
+    awk -v a="$began" -v b="$(now)" 'BEGIN { printf "%.1f s", b - a }'
+}
 
 # wait_until <seconds> <command...>: until the command succeeds; fails after the time is up
 wait_until() {
-    local end=$(($(date +%s) + $1))
+    local seconds=$1 end
     shift
+    end=$(($(date +%s) + seconds))
     until "$@" >/dev/null 2>&1; do
         (($(date +%s) < end)) || return 1
         sleep 0.2
     done
 }
-in_rotation() { [[ "$(instances "$1")" -ge 1 ]]; }
-out_of_rotation() { [[ "$(instances "$1")" -eq 0 ]]; }
-
-# register <id> <models> [key]: a backend in the Consul catalog, as the Terraform module will do.
-# The key names the Vault secret under secret/aisa/providers/ that holds the backend's API key.
-register() {
-    curl -fsS -X PUT "$CONSUL/v1/agent/service/register" -d "$(jq -cn --arg id "$1" --arg models "$2" --arg key "${3:-}" \
-        '{ID: $id, Name: "aisa-backend", Address: $id, Port: 8080,
-          Meta: ({provider: "openai-compatible", models: $models} + (if $key != "" then {key: $key} else {} end)),
-          Check: {CheckID: "service:\($id)", HTTP: "http://\($id):8080/healthz", Interval: "2s", Timeout: "1s"}}')"
+in_rotation() {
+    local backend=$1
+    [[ "$(instances "$backend")" -ge 1 ]]
 }
-maintenance() { curl -fsS -X PUT "$CONSUL/v1/agent/service/maintenance/$1?enable=$2&reason=spike-s9" >/dev/null; }
+out_of_rotation() {
+    local backend=$1
+    [[ "$(instances "$backend")" -eq 0 ]]
+}
+
+# register: the backends of backends.json in the Consul catalog, as the Terraform module will do
+register() {
+    local backend
+    jq -c '.[]' "$here/backends.json" | while read -r backend; do
+        curl -fsS -X PUT "$CONSUL/v1/agent/service/register" -d "$backend"
+    done
+}
+maintenance() { # maintenance <backend> <true|false>
+    local backend=$1 enable=$2
+    curl -fsS -X PUT "$CONSUL/v1/agent/service/maintenance/$backend?enable=$enable&reason=spike-s9" >/dev/null
+}
 
 # ask <model> [curl args...] → sets STATUS; the body is in $tmp/body
 ask() {
@@ -82,18 +101,18 @@ clear_events() { curl -fsS -X DELETE "$STUB/debug/requests" >/dev/null; }
 # Load: workers that ask for qwen3 until $tmp/loading is removed, a line
 # "<status> <time it began> <seconds it took>" per request.
 worker() { # worker <id> <stream: true|false> <tokens>
-    local code began
+    local id=$1 stream=$2 tokens=$3 code began
     while [[ -e "$tmp/loading" ]]; do
         began=$(now)
-        code=$(curl -sS -N -m 60 -o "$tmp/load.body.$1" -w '%{http_code}' -H 'Authorization: Bearer dev-key-chat-ui' \
-            -H 'Content-Type: application/json' -H "X-Mock-Completion-Tokens: $3" \
-            -d "{\"model\":\"qwen3\",\"messages\":[{\"role\":\"user\",\"content\":\"hello there\"}],\"stream\":$2}" \
+        code=$(curl -sS -N -m 60 -o "$tmp/load.body.$id" -w '%{http_code}' -H 'Authorization: Bearer dev-key-chat-ui' \
+            -H 'Content-Type: application/json' -H "X-Mock-Completion-Tokens: $tokens" \
+            -d "{\"model\":\"qwen3\",\"messages\":[{\"role\":\"user\",\"content\":\"hello there\"}],\"stream\":$stream}" \
             "$GATEWAY/v1/chat/completions" 2>/dev/null) || code=000
-        if [[ "$2" == true ]] && [[ "$code" == 200 ]] && ! grep -q '^data: \[DONE\]' "$tmp/load.body.$1"; then
+        if [[ "$stream" == true ]] && [[ "$code" == 200 ]] && ! grep -q '^data: \[DONE\]' "$tmp/load.body.$id"; then
             code=incomplete
         fi
         echo "$code $began $(awk -v a="$began" -v b="$(now)" 'BEGIN { printf "%.1f", b - a }')"
-    done >"$tmp/load.result.$1"
+    done >"$tmp/load.result.$id"
 }
 LOAD_PIDS=()
 start_load() { # 4 workers with short answers, 2 with streams of 2 s
@@ -118,9 +137,7 @@ load_total() { wc -l <"$tmp/load.all" | tr -d ' '; }
 load_failed() { awk '$1 != 200' "$tmp/load.all" | wc -l | tr -d ' '; }
 
 echo "== Rendering: backends from the Consul catalog, the provider key from Vault"
-register mock-local "qwen3, llama3.2"
-register mock-local-2 "qwen3"
-register mock-cloud "cloud-large" cloud
+register
 wait_until 30 in_rotation mock-local-2
 sleep 2 # APISIX looks at the file once a second
 check "routes (client, one per model, no-backend)" "client model-cloud-large model-llama3.2 model-qwen3 no-backend" \
@@ -275,10 +292,11 @@ echo
 echo "== A broken file: what APISIX does with it"
 good=$(rendered)
 broken() { # broken <label> <expected status of a request for qwen3> ; the file comes from stdin
+    local label=$1 expected=$2
     overwrite
     sleep 3
     ask qwen3
-    check "$1: request for qwen3" "$2" "$STATUS"
+    check "$label: request for qwen3" "$expected" "$STATUS"
 }
 printf 'routes:\n  - id: [unclosed\n#END\n' | broken "invalid YAML" 200
 { echo "$good" | sed '$d'; } | broken "no #END at the end (a file cut short)" 200
