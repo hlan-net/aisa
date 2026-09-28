@@ -7,12 +7,13 @@ aisa gives every application an identity, a quota and a budget, and keeps the bo
 
 ---
 
-## Current state: design phase
+## Current state: early development
 
 - Architecture and the three aisa ↔ gateway contracts are written down ([docs/concepts/](docs/concepts/))
 - Quotas, money budgets and usage metrics are specified ([docs/features/](docs/features/))
 - Open questions are listed as spikes ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S8 and S6 are answered, S2 in part
 - Local dev stack with a mock backend and a stub aisa ([dev/](dev/))
+- aisa is a skeleton: it starts, reports its health and exports metrics, and decides nothing yet ([cmd/aisa/](cmd/aisa/))
 
 ---
 
@@ -33,7 +34,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 
 | PR | Branch | Scope | Status |
 |----|--------|-------|--------|
-| 1 | `feature/core-skeleton` | `cmd/aisa`, config, health endpoints, `aisa_*` metrics registry, CI | — |
+| 1 | `feature/core-skeleton` | `cmd/aisa`, config, health endpoints, `aisa_*` metrics registry, the product `Dockerfile`, CI | In review |
 | 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) and fail policies | — |
 | 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | — |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | — |

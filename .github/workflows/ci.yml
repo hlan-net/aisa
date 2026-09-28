@@ -33,8 +33,6 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          # There is no go.sum until the first dependency lands.
-          cache-dependency-path: go.mod
 
       - name: Vet
         run: go vet ./...
@@ -52,12 +50,49 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.mod
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.14
+
+  image:
+    # The product image builds and starts on both architectures.
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build
+        run: docker build --build-arg VERSION=ci -t aisa:ci .
+
+      - name: Start
+        run: |
+          docker run -d --name aisa -p 127.0.0.1:8080:8080 aisa:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+
+      - name: Check
+        run: |
+          curl -fsS http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/readyz
+          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_build_info{version="ci"} 1'
+          [[ "$(docker run --rm aisa:ci -version)" == "ci" ]]
+
+      - name: Stop
+        run: |
+          docker stop aisa
+          [[ "$(docker inspect aisa --format '{{.State.ExitCode}}')" == "0" ]]
+
+      - name: Logs
+        if: always()
+        run: docker logs aisa || true
 
   dev-stack:
     # End-to-end check of the dev stack: APISIX, stub aisa, mock backends, Vault, Consul, Redis.
