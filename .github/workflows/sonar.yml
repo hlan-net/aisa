@@ -58,7 +58,8 @@ jobs:
       pull-requests: read
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      # An empty SONAR_HOST_URL breaks the scanner, so default to SonarQube Cloud.
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
 
     steps:
       - name: No SONAR_TOKEN, skipping the scan
