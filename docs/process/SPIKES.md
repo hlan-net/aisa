@@ -11,7 +11,7 @@ Most spikes test whether the **APISIX adapter** can meet the contract in [`ADAPT
 | S6 | Can APISIX `http-logger` produce the usage event schema: token counts, model, TTFT and upstream from the AI plugin variables in `log_format`? | Contract 2 | Configure `log_format` with the `llm_*` variables and receive the events in the stub | **Yes** (2026-09-28), with type and latency caveats. [Details](#s2--s6-usage-events-from-apisix) |
 | S7 | Resource use on a small arm64 node (e.g. Raspberry Pi 4) of APISIX, aisa and consul-template together | Requests and limits, whether it runs on small clusters | Measure CPU and memory while running parallel streams | — |
 | S8 | Can APISIX `forward-auth` send the **model name** (it is in the body) to `/v1/decide`, and can the route then choose the backend from the returned `X-Aisa-Model` header? | Contract 1, including downgrade | Try `forward-auth` with body forwarding; if that fails, a `serverless-pre-function` that copies `model` to a header. Route to `ai-proxy-multi` by header. | **Yes, with an internal hop** (2026-09-28). [Details below](#s8-forward-auth-and-model-routing-on-apisix) |
-| S9 | Does consul-template render and reload a standalone `apisix.yaml` cleanly, without dropped requests during a reload? | Contract 3 | Render from a test Consul service, flip its health check, and run a request loop during re-renders | — |
+| S9 | Does consul-template render and reload a standalone `apisix.yaml` cleanly, without dropped requests during a reload? | Contract 3 | Render from a test Consul service, flip its health check, and run a request loop during re-renders | **Yes** (2026-09-28): no request failed in 20 reloads under load, and a change reaches the gateway in 1 to 2 s. The rendered file needs a guard ([#18](https://github.com/hlan-net/aisa/issues/18)). [Details](#s9-config-rendering-with-consul-template) |
 | S10 | Latency added by the forward-auth hop | Whether decision caching in the adapter is ever needed | Compare p50/p95 with and without forward-auth on non-streaming requests | — |
 
 Numbering follows the original design notes; S1, S3 and S4 became unnecessary once authentication and config rendering moved into aisa.
@@ -78,3 +78,32 @@ The Ollama host served other inference requests during the run, so the latencies
 5. **Client disconnect is not fixed by this.** With LiteLLM in between, a client that left after 19 tokens still produced an event with `"0"`/`"0"` and status 200.
 
 Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#2-usage-events-after-the-request): the field meanings above, lenient parsing of numbers and booleans, `X-Request-Id` as a decision input, events for denied requests, no credentials in events (#5), and "a successful response without token counts means usage unknown, not zero", whether the zeros arrive as numbers or as strings. A backend that reports no usage needs a translating proxy in front of it, and its prompt tokens are then estimates. How aisa accounts for unknown usage is [#12](https://github.com/hlan-net/aisa/issues/12).
+
+### S9: config rendering with consul-template
+
+**2026-09-28**, APISIX 3.18.0 in standalone mode, consul-template 0.43.0, dev stack with dev-mode Consul and Vault, the stub aisa and mock backends, on arm64. The template, configuration, script and full output are in [`adapters/apisix/spikes/s9-config-rendering/`](../../adapters/apisix/spikes/s9-config-rendering/).
+
+**Result: yes. consul-template renders the adapter's `apisix.yaml` from Consul and Vault, and APISIX reloads it without dropping a request.**
+
+What was verified:
+
+1. **One template renders the whole adapter**: the client-facing route, one internal route per model with the healthy backends that serve it, the provider key from Vault (KV v2) for the backends that have one, and a route that answers 503 with a readable error for a model that no healthy backend serves.
+2. **Reloads are clean.** A backend left and returned ten times under load: 20 reloads, 3792 requests, none failed. Streams that were in flight on a backend when it left the config ran to their end, with exact usage events.
+3. **A change reaches the gateway in 1 to 2 s**: consul-template's quiet period of 1 s, and APISIX looks at the file once a second. After that nothing is sent to a backend that left.
+4. **A rotated provider key arrives after `default_lease_duration`**: 9 s with the 10 s set in the spike. The default is 5 minutes, since a KV secret has no lease.
+5. **When Consul or Vault cannot be reached, the last config stays** and consul-template keeps running and retrying.
+6. **A broken file is partly caught.** APISIX keeps its routes when the file is invalid YAML, lacks the final `#END` or has no routes at all. **But a file with one invalid route is loaded without that route**, with an error in the log only: an invalid client-facing route meant 404 for every request.
+7. **The file must be shared as a directory.** consul-template renames a new file over the old one, and a mount of the file itself keeps showing the old one. APISIX's config path is a link into the shared directory.
+
+Also observed, about backends rather than rendering:
+
+- **A backend that dies takes requests with it until Consul notices.** With a health check every 2 s the config changed about 3 s after the container stopped. The requests sent to it in between failed, 18 of 155, and streams in flight on it ended incomplete.
+- **Those requests hung for more than 60 s.** `ai-proxy-multi` has one `timeout` for connecting and for reading. The 10 minutes that slow models need ([#14](https://github.com/hlan-net/aisa/issues/14)) are then also the time a request waits for a backend that is gone.
+
+Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#3-config-rendering-gateway-configuration), [`CONSUL.md`](../concepts/CONSUL.md) and [`VAULT.md`](../concepts/VAULT.md):
+
+- A backend names its provider key with the service meta `key`; backends without it get no key.
+- Values from Consul and Vault are rendered as quoted strings, and the rendered file is shared with the gateway as a directory.
+- The health check interval of a backend decides how long requests fail after it dies; 30 s in the example of `CONSUL.md` means up to half a minute of failures for a share of the requests.
+- The template must set `default_lease_duration`, or a rotated key takes 5 minutes to arrive.
+- Open: nothing checks the rendered file before the gateway loads it, and a catalog that comes back empty renders a config without backends. Both need a guard in the adapter ([#18](https://github.com/hlan-net/aisa/issues/18)).

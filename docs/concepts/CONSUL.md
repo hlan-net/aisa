@@ -18,6 +18,7 @@ resource "consul_service" "ollama_1" {
     provider = "openai-compatible"
     models   = "qwen3,phi4-reasoning,qwen2.5-coder"
     priority = "1"
+    # key    = "openai"   for a backend that needs an API key: the secret's name in Vault
   }
   check {
     name     = "ollama"
@@ -31,7 +32,8 @@ resource "consul_service" "ollama_1" {
 
 - All backends use one service name (`aisa-backend`), and **service meta** describes each one. The adapter template turns them into gateway routes (for APISIX, `ai-proxy-multi` instances grouped by model).
 - Cloud providers are registered the same way (an external node such as `api.openai.com`), so every backend is discoverable in one place.
-- A failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically.
+- A backend that needs an API key names it with the meta `key`: the secret `secret/aisa/providers/<key>` in Vault ([`VAULT.md`](./VAULT.md#provider-keys)).
+- A failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically. Until the check fails, requests sent to it fail, so the check's interval is the longest time that lasts (spike S9).
 
 ## Prices and budgets: Consul KV
 
