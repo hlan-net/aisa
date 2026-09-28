@@ -14,6 +14,7 @@ docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s2-s6-usage-events/
 | [`apisix.yaml`](apisix.yaml) | Two routes with the `log_format` proposed for the adapter: `/u/` to `mock-local`, `/n/` to `mock-nousage` |
 | [`compose.override.yaml`](compose.override.yaml) | Adds `mock-nousage`, a mock backend that never streams usage |
 | [`run.sh`](run.sh) | One request per scenario; checks its usage event against the mock's deterministic counts. `GAP` checks assert today's known-wrong behaviour, so a change shows up. Exits non-zero on any unexpected result |
+| [`hailo-litellm.yaml`](hailo-litellm.yaml) | LiteLLM configuration that puts an OpenAI endpoint with streaming and usage in front of hailo-ollama |
 | [`ollama.sh`](ollama.sh) | Compares Ollama's native counts (`prompt_eval_count`, `eval_count`) with its OpenAI endpoint and with the APISIX usage event, streamed and not. Set `GATEWAY_OLLAMA_URL` when the containers reach Ollama by another address, e.g. `http://172.17.0.1:11434` (Docker's default bridge gateway) for an Ollama on the Docker host that listens on all interfaces |
 
 ## The proposed `log_format`
@@ -104,3 +105,21 @@ Two more observations from the same session:
 - **Client disconnect.** A streamed request to `llama3.2:3b` through APISIX with `curl --max-time 40` received 149 content chunks and no usage chunk. Its event had `"prompt_tokens":"0","completion_tokens":"0","status":200`, like the `GAP` check against the mock.
 
 `backend` reads `mock-local` in these events because `ollama.sh` changes only the endpoint of that instance, not its name. The host served other inference requests at the same time, so the latencies are not a measure of the hardware.
+
+## Output against hailo-ollama (2026-09-28, APISIX 3.18.0, arm64)
+
+hailo-ollama 0.5.1 on a Hailo-10H accelerator, model `qwen2.5:1.5b`, prompt "Write a long story about a lighthouse keeper.", limit 32 tokens. `ollama.sh` does not run against it: its native endpoint needs `Content-Type: application/json` and its OpenAI endpoint does not stream, so the requests were sent with `curl`.
+
+| Path | Non-streamed | Streamed |
+|---|---|---|
+| native `/api/chat` | no prompt count / 33 | no prompt count / 32 (32 content chunks) |
+| direct `/v1/chat/completions` | 200, no `usage` | 400, "streaming not supported on this endpoint" |
+| APISIX usage event, APISIX → hailo-ollama | status 200, 0 / 0 (numbers) | status 400, 0 / 0 |
+| LiteLLM → hailo-ollama, response | 17 / 33 | 17 / 32 with `include_usage`, no usage chunk without |
+| APISIX usage event, APISIX → LiteLLM → hailo-ollama | 17 / 33 | 17 / 32, with and without `include_usage` |
+
+The prompt count 17 is LiteLLM's estimate; the backend reports none. With `qwen3:1.7b` and another prompt the events had 20 / 43 non-streamed and 20 / 42 streamed, against a native streamed `eval_count` of 42.
+
+- **Client disconnect** through APISIX and LiteLLM (`curl --max-time 3`, 19 content chunks received): the event had `"prompt_tokens":"0","completion_tokens":"0","status":200`. The backend stopped generating.
+- **One request at a time.** Two parallel requests of 48 tokens took 6.9 s and 13.8 s. A change of model took 8 to 12 s. The backend's `total_duration` contained neither wait.
+- **LiteLLM** was `ghcr.io/berriai/litellm:main-stable` (1.103.0) with [`hailo-litellm.yaml`](hailo-litellm.yaml), and route `/u/` pointed at it instead of the mock backend. Without `extra_headers` every request ended in a 500 from the backend ("No suitable mapper found to deserialize the request body").

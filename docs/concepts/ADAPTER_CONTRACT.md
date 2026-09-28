@@ -93,7 +93,7 @@ What aisa accepts, as found in spike S6:
 - **Numbers and booleans may arrive as strings.** A gateway log format substitutes variables as text in some cases (APISIX logs `"0"` and `"true"`), so aisa parses numeric and boolean strings. Missing values may be empty or `null`.
 - **Every request produces an event, including ones aisa denied** (401, 429) and backend errors. They count as requests; only events with token counts change quotas and budgets.
 - **Usage events carry only these fields, never request headers or bodies**, so no credential reaches the usage sink ([#5](https://github.com/hlan-net/aisa/issues/5)).
-- **A successful response without token counts means the gateway did not see the usage**, not that none was used. This happens when a backend does not stream usage or the client disconnects before the end of a stream (spike S2). Adapters must ask for streamed usage (`stream_options.include_usage` for OpenAI-compatible backends); how aisa accounts for the remaining cases is an open question ([#12](https://github.com/hlan-net/aisa/issues/12)).
+- **A successful response without token counts means the gateway did not see the usage**, not that none was used. The counts are then missing or zero, as numbers or as strings. This happens when a backend does not stream usage or the client disconnects before the end of a stream (spike S2). Adapters must ask for streamed usage (`stream_options.include_usage` for OpenAI-compatible backends); how aisa accounts for the remaining cases is an open question ([#12](https://github.com/hlan-net/aisa/issues/12)).
 
 ## 3. Config rendering (gateway configuration)
 
