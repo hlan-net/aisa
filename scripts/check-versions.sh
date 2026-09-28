@@ -13,7 +13,7 @@ fi
 echo "== Go toolchain"
 echo "go.mod:  $(awk '/^go /{print $2}' go.mod)"
 echo "local:   $(go env GOVERSION)"
-echo "latest:  $(curl -fsSL 'https://go.dev/VERSION?m=text' | head -n1)"
+echo "latest:  $(curl -fsSL --proto '=https' --tlsv1.2 'https://go.dev/VERSION?m=text' | head -n1)"
 
 echo
 echo "== Modules with updates (current [available])"

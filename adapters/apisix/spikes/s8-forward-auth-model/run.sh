@@ -19,8 +19,8 @@ STUB=http://127.0.0.1:8081
 # 000: not listening yet, 404: routes not loaded yet.
 for i in $(seq 1 60); do
     code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/a/v1/chat/completions" || true)
-    [ "$code" != "000" ] && [ "$code" != "404" ] && break
-    [ "$i" -eq 60 ] && { echo "gateway not ready (last status $code)" >&2; exit 1; }
+    [[ "$code" != "000" ]] && [[ "$code" != "404" ]] && break
+    [[ "$i" -eq 60 ]] && { echo "gateway not ready (last status $code)" >&2; exit 1; }
     sleep 1
 done
 
@@ -48,7 +48,7 @@ last_decide() { curl -fsS "$STUB/debug/requests?kind=decide" | jq -c '.[-1] | {m
 
 # check <description> <want> <got>
 check() {
-    if [ "$2" = "$3" ]; then
+    if [[ "$2" = "$3" ]]; then
         printf '  ok    %-58s %s\n' "$1" "$3"
     else
         printf '  FAIL  %-58s want %s, got %s\n' "$1" "$2" "$3"
@@ -68,7 +68,7 @@ for v in a b; do
     check "request succeeds" 200 "$STATUS"
     d=$(last_decide)
     check "decide saw the model" qwen3 "$(jq -r .model <<<"$d")"
-    check "model source" "$([ "$v" = a ] && echo body || echo header)" "$(jq -r .model_source <<<"$d")"
+    check "model source" "$([[ "$v" = a ]] && echo body || echo header)" "$(jq -r .model_source <<<"$d")"
     echo "        decide received: $d"
     # A client-supplied X-Aisa-Requested-Model must not win over the body.
     call "$v" dev-key-chat-ui "$hi" -H 'X-Aisa-Requested-Model: cloud-large'
@@ -92,10 +92,10 @@ for v in d e; do
     call "$v" dev-key-chat-ui "$hi" -H 'X-Aisa-Model: cloud-large'
     check "spoofed X-Aisa-Model overwritten by forward-auth" "mock-local qwen3" "$(served_by)"
     call "$v" dev-key-chat-ui "$llama"
-    check "model without a backend is rejected" "$([ "$v" = d ] && echo 404 || echo 400)" "$STATUS"
+    check "model without a backend is rejected" "$([[ "$v" = d ]] && echo 404 || echo 400)" "$STATUS"
     call "$v" dev-key-blocked "$hi"
     check "denied consumer still gets 429" 429 "$STATUS"
-    if [ "$v" = d ]; then
+    if [[ "$v" = d ]]; then
         # Rule 1: a client-supplied X-Aisa-* header must not reach the inner route (seen in its usage event).
         call d dev-key-chat-ui "$hi" -H 'X-Aisa-Budget-Remaining: 999' -H 'X-Aisa-Spoof: yes'
         sleep 2
@@ -162,7 +162,7 @@ check "fail closed, d with status_on_error: 503" 503 "$STATUS"
 
 echo
 # Exit non-zero unless exactly the expected checks failed, so a regression in b, d or e is visible.
-if [ "$(printf '%s\n' "${failed[@]}" | sort)" = "$(printf '%s\n' "${expected_failures[@]}" | sort)" ]; then
+if [[ "$(printf '%s\n' "${failed[@]}" | sort)" = "$(printf '%s\n' "${expected_failures[@]}" | sort)" ]]; then
     echo "all checks as expected ($failures expected failures: variants c and f1)"
 else
     echo "UNEXPECTED RESULT: failed checks differ from the expected ones (variants c and f1)" >&2

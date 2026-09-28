@@ -18,8 +18,8 @@ STUB=http://127.0.0.1:8081
 "${COMPOSE[@]}" up -d --build --wait >/dev/null
 for i in $(seq 1 60); do
     code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/u/v1/chat/completions" || true)
-    [ "$code" != "000" ] && [ "$code" != "404" ] && break
-    [ "$i" -eq 60 ] && { echo "gateway not ready (last status $code)" >&2; exit 1; }
+    [[ "$code" != "000" ]] && [[ "$code" != "404" ]] && break
+    [[ "$i" -eq 60 ]] && { echo "gateway not ready (last status $code)" >&2; exit 1; }
     sleep 1
 done
 
@@ -29,7 +29,7 @@ failures=0
 
 # check <description> <want> <got>
 check() {
-    if [ "$2" = "$3" ]; then
+    if [[ "$2" = "$3" ]]; then
         printf '  ok    %-62s %s\n' "$1" "$3"
     else
         printf '  FAIL  %-62s want %s, got %s\n' "$1" "$2" "$3"
@@ -49,7 +49,7 @@ send() {
     EVENT=null
     for _ in $(seq 1 20); do
         EVENT=$(curl -fsS "$STUB/debug/requests?kind=usage" | jq -c '.[-1].body // null')
-        [ "$EVENT" != null ] && break
+        [[ "$EVENT" != null ]] && break
         sleep 0.5
     done
 }
@@ -100,7 +100,7 @@ check "same backend, non-streaming: tokens" 3/16 "$(tokens)"
 send u dev-key-chat-ui "$prompt"',"stream":true}' -H 'X-Mock-Completion-Tokens: 100' --max-time 0.3
 received=$(grep -c '"content":"' "$body_file" || true)
 check "GAP client disconnects mid-stream: tokens logged as" 0/0 "$(tokens)"
-check "  ... although the client had received more than 10 tokens" true "$([ "$received" -gt 10 ] && echo true || echo false)"
+check "  ... although the client had received more than 10 tokens" true "$([[ "$received" -gt 10 ]] && echo true || echo false)"
 check "  ... status" 200 "$(field status)"
 
 echo
@@ -115,7 +115,7 @@ send u dev-key-blocked "$prompt}" -H 'X-Aisa-Consumer: forged'
 check "denied, client sends X-Aisa-Consumer: consumer" null "$(field consumer)"
 
 echo
-if [ "$failures" -eq 0 ]; then
+if [[ "$failures" -eq 0 ]]; then
     echo "all checks as expected"
 else
     echo "$failures unexpected results" >&2

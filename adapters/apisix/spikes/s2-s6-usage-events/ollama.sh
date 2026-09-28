@@ -30,7 +30,7 @@ chmod 644 "$routes"
 export APISIX_ROUTES=$routes
 COMPOSE=(docker compose -f "$repo/dev/compose.yaml" -f "$here/compose.override.yaml")
 "${COMPOSE[@]}" up -d --build --wait >/dev/null
-until [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:9080/u/v1/chat/completions)" != "404" ]; do sleep 1; done
+until [[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:9080/u/v1/chat/completions)" != "404" ]]; do sleep 1; done
 
 messages=$(jq -cn --arg p "$PROMPT" '[{role: "user", content: $p}]')
 opts=$(jq -cn --argjson n "$LIMIT" '{temperature: 0, seed: 1, num_predict: $n}')
@@ -68,7 +68,7 @@ via_gateway() { # via_gateway <label> <stream> <include_usage>
     local ev=null
     for _ in $(seq 1 20); do
         ev=$(curl -fsS 'http://127.0.0.1:8081/debug/requests?kind=usage' | jq -c '.[-1].body // null')
-        [ "$ev" != null ] && break
+        [[ "$ev" != null ]] && break
         sleep 0.5
     done
     row "APISIX usage event, $1" "$(jq -r .prompt_tokens <<<"$ev")" "$(jq -r .completion_tokens <<<"$ev")"

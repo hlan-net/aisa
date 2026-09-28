@@ -1,0 +1,85 @@
+name: SonarQube
+
+# Static analysis and coverage for pull requests and main.
+# Needs the SONAR_TOKEN secret. SonarQube Cloud needs nothing else; a self-hosted
+# SonarQube Server also needs the SONAR_HOST_URL secret. Without SONAR_TOKEN
+# (fork and Dependabot PRs get no secrets) the scan is skipped, not failed.
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+  pull_request:
+    branches: ["main"]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+
+permissions: {}
+
+jobs:
+  coverage:
+    # Runs the pull request's code, so it gets no secrets.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.mod
+
+      - name: Test with coverage
+        # Only packages with tests: a package without test files needs the covdata
+        # tool, which not every Go toolchain ships.
+        run: go test -race -coverprofile=coverage.out $(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...)
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 1
+
+  scan:
+    # Holds the Sonar credentials and never runs the repository's code.
+    needs: coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # An empty SONAR_HOST_URL breaks the scanner, so default to SonarQube Cloud.
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+
+    steps:
+      - name: No SONAR_TOKEN, skipping the scan
+        if: env.SONAR_TOKEN == ''
+        run: echo "::notice::SONAR_TOKEN is not available to this run; SonarQube scan skipped."
+
+      - name: Checkout
+        if: env.SONAR_TOKEN != ''
+        uses: actions/checkout@v7
+        with:
+          # Full history for blame data and new-code detection.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download coverage
+        if: env.SONAR_TOKEN != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage
+
+      - name: SonarQube scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
