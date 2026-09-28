@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -90,6 +91,46 @@ func TestReadyzGivesAProbeLimitedTime(t *testing.T) {
 	}}
 	if rec := get(t, newTestServer(slow), http.MethodGet, "/readyz"); rec.Code != http.StatusOK {
 		t.Errorf("status = %d: the probe's context has no deadline", rec.Code)
+	}
+}
+
+func TestReadyzRunsTheChecksAtTheSameTime(t *testing.T) {
+	// Each check waits for the other one to have started: run one after the other, the first
+	// would wait until its time is up.
+	var started sync.WaitGroup
+	started.Add(2)
+	both := make(chan struct{})
+	go func() { started.Wait(); close(both) }()
+	check := func(name string) Check {
+		return Check{Name: name, Probe: func(ctx context.Context) error {
+			started.Done()
+			select {
+			case <-both:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+	}
+	if rec := get(t, newTestServer(check("vault"), check("consul")), http.MethodGet, "/readyz"); rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200: the checks did not run at the same time", rec.Code)
+	}
+}
+
+func TestReadyzDoesNotWaitForACheckThatHangs(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	hangs := Check{Name: "redis", Probe: func(context.Context) error {
+		<-release // ignores its context
+		return nil
+	}}
+	began := time.Now()
+	rec := get(t, newTestServer(hangs), http.MethodGet, "/readyz")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+	if took := time.Since(began); took > probeTimeout+time.Second {
+		t.Errorf("/readyz took %v, want about %v", took, probeTimeout)
 	}
 }
 

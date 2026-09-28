@@ -6,6 +6,9 @@
 //	AISA_ADDR              address to listen on                    :8080
 //	AISA_LOG_LEVEL         debug, info, warn or error              info
 //	AISA_SHUTDOWN_TIMEOUT  time for requests in flight at the end  10s
+//
+// With -healthcheck it asks the aisa that runs on AISA_ADDR for /healthz and exits, for the
+// health check of a container.
 package main
 
 import (
@@ -13,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -35,7 +39,7 @@ func main() {
 func run(args []string) error {
 	flags := flag.NewFlagSet("aisa", flag.ContinueOnError)
 	showVersion := flags.Bool("version", false, "print the version and exit")
-	healthcheck := flags.String("healthcheck", "", "probe this URL and exit (for container health checks)")
+	healthcheck := flags.Bool("healthcheck", false, "probe /healthz of the running aisa and exit (for container health checks)")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
@@ -43,13 +47,13 @@ func run(args []string) error {
 		fmt.Println(version.Version)
 		return nil
 	}
-	if *healthcheck != "" {
-		return probe(*healthcheck)
-	}
 
 	cfg, err := config.FromEnv(os.Getenv)
 	if err != nil {
 		return fmt.Errorf("configuration: %w", err)
+	}
+	if *healthcheck {
+		return probe(healthURL(cfg.Addr))
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	log.Info("starting aisa", "version", version.Version)
@@ -63,6 +67,19 @@ func run(args []string) error {
 	}
 	log.Info("stopped")
 	return nil
+}
+
+// healthURL is the URL of /healthz of an aisa that listens on addr, seen from the same host.
+func healthURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// config.FromEnv has checked the address.
+		return "http://" + addr + "/healthz"
+	}
+	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/healthz"
 }
 
 // probe performs an HTTP GET and returns an error unless the answer is 2xx. The image has no

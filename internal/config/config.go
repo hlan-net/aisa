@@ -40,8 +40,18 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		cfg.Addr = v
 	}
 	if v := getenv("AISA_LOG_LEVEL"); v != "" {
-		if err := cfg.LogLevel.UnmarshalText([]byte(strings.ToUpper(v))); err != nil {
-			return cfg, fmt.Errorf("AISA_LOG_LEVEL: want debug, info, warn or error, got %q: %w", v, err)
+		// Not slog's own parser: it also takes offsets such as INFO+1.
+		switch strings.ToLower(v) {
+		case "debug":
+			cfg.LogLevel = slog.LevelDebug
+		case "info":
+			cfg.LogLevel = slog.LevelInfo
+		case "warn":
+			cfg.LogLevel = slog.LevelWarn
+		case "error":
+			cfg.LogLevel = slog.LevelError
+		default:
+			return cfg, fmt.Errorf("AISA_LOG_LEVEL: want debug, info, warn or error, got %q", v)
 		}
 	}
 	if v := getenv("AISA_SHUTDOWN_TIMEOUT"); v != "" {

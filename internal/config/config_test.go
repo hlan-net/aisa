@@ -35,10 +35,26 @@ func TestFromEnv(t *testing.T) {
 	}
 }
 
+func TestFromEnvLogLevels(t *testing.T) {
+	for v, want := range map[string]slog.Level{
+		"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError,
+		"WARN": slog.LevelWarn,
+	} {
+		cfg, err := FromEnv(env(map[string]string{"AISA_LOG_LEVEL": v}))
+		if err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+		if cfg.LogLevel != want {
+			t.Errorf("%s: level = %v, want %v", v, cfg.LogLevel, want)
+		}
+	}
+}
+
 func TestFromEnvRejects(t *testing.T) {
 	for name, vars := range map[string]map[string]string{
 		"address without a port": {"AISA_ADDR": "localhost"},
 		"unknown log level":      {"AISA_LOG_LEVEL": "loud"},
+		"log level with offset":  {"AISA_LOG_LEVEL": "info+1"},
 		"timeout not a duration": {"AISA_SHUTDOWN_TIMEOUT": "ten"},
 		"timeout of zero":        {"AISA_SHUTDOWN_TIMEOUT": "0s"},
 		"negative timeout":       {"AISA_SHUTDOWN_TIMEOUT": "-5s"},

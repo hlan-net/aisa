@@ -24,6 +24,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/aisa /usr/local/bin/aisa
 USER nonroot:nonroot
 EXPOSE 8080
+# Probes the address of AISA_ADDR, so it follows a changed port.
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
-    CMD ["/usr/local/bin/aisa", "-healthcheck", "http://127.0.0.1:8080/healthz"]
+    CMD ["/usr/local/bin/aisa", "-healthcheck"]
 ENTRYPOINT ["/usr/local/bin/aisa"]

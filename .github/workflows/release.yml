@@ -122,6 +122,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            VERSION=${{ needs.create-release.outputs.release-tag }}
           tags: |
             ghcr.io/${{ github.repository }}:${{ needs.create-release.outputs.release-tag }}
             ghcr.io/${{ github.repository }}:latest

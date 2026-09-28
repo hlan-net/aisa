@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -21,7 +22,8 @@ type Check struct {
 	Probe func(ctx context.Context) error
 }
 
-// probeTimeout is the time one check gets; /readyz is asked every few seconds.
+// probeTimeout is the time all checks get together: they run at the same time. /readyz is asked
+// every few seconds, and an answer must not take longer than the probe waits for it.
 const probeTimeout = 2 * time.Second
 
 // Server is aisa's HTTP server.
@@ -55,14 +57,21 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 // readyz answers 200 when every dependency can be used, else 503. The answer names the
 // dependencies that failed; why they failed is in the log only.
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
+	defer cancel()
+
+	errs := make([]error, len(s.checks))
+	var wg sync.WaitGroup
+	for i, c := range s.checks {
+		wg.Go(func() { errs[i] = probeWithin(ctx, c) })
+	}
+	wg.Wait()
+
 	status := http.StatusOK
 	checks := make(map[string]string, len(s.checks))
-	for _, c := range s.checks {
-		ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
-		err := c.Probe(ctx)
-		cancel()
-		if err != nil {
-			s.log.Warn("not ready", "check", c.Name, "error", err)
+	for i, c := range s.checks {
+		if errs[i] != nil {
+			s.log.Warn("not ready", "check", c.Name, "error", errs[i])
 			checks[c.Name] = "failed"
 			status = http.StatusServiceUnavailable
 			continue
@@ -74,6 +83,18 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		answer = "not ready"
 	}
 	writeJSON(w, status, map[string]any{"status": answer, "checks": checks})
+}
+
+// probeWithin runs a check and gives up when ctx is done, also when the check ignores it.
+func probeWithin(ctx context.Context, c Check) error {
+	done := make(chan error, 1)
+	go func() { done <- c.Probe(ctx) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("no answer in time: %w", ctx.Err())
+	}
 }
 
 // Run listens on addr and serves until ctx is done, then lets the requests in flight finish.

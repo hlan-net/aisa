@@ -79,9 +79,10 @@ func New(version string) *Metrics {
 			Buckets: []float64{0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600},
 		}, []string{"model", "backend"}),
 		TTFT: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name:    "aisa_ttft_seconds",
-			Help:    "Time to the first token of a response.",
-			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120},
+			Name: "aisa_ttft_seconds",
+			Help: "Time to the first token of a response.",
+			// A response that is not streamed has its first token at its end, so as for latency.
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600},
 		}, []string{"model", "backend"}),
 		Decisions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "aisa_decisions_total",
