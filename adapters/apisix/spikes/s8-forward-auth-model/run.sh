@@ -93,7 +93,9 @@ for v in d e; do
         call d dev-key-chat-ui "$hi" -H 'X-Aisa-Budget-Remaining: 999' -H 'X-Aisa-Spoof: yes'
         sleep 2
         leaked=$(curl -fsS "$STUB/debug/requests?kind=usage" |
-            jq -r '[.[-1].body.request.headers | keys[] | select(test("^x-aisa-(budget-remaining|spoof)$"))] | length')
+            jq -r '.[-1].body | if .route_id == "d-inner-qwen3" and .consumer == "chat-ui"
+                then [.budget_remaining, .spoof] | map(select(. != null and . != "")) | length
+                else "wrong event: \(.route_id)" end')
         check "client X-Aisa-* headers stripped before the inner route" 0 "$leaked"
     fi
 
@@ -121,7 +123,9 @@ sleep 2
 echo
 echo "== Usage events (http-logger on the routes that call ai-proxy-multi in d and e)"
 curl -fsS "$STUB/debug/requests?kind=usage" |
-    jq -r '.[] | .body | "  route=\(.route_id) status=\(.response.status) upstream=\(.upstream // "-") consumer=\(.request.headers["x-aisa-consumer"] // "-") model=\(.request.headers["x-aisa-model"] // "-")"' | sort | uniq -c
+    jq -r '.[] | .body | "  route=\(.route_id) status=\(.status) upstream=\(.upstream // "-") consumer=\(.consumer // "-") model=\(.model // "-")"' | sort | uniq -c
+check "no consumer key in the usage events" 0 \
+    "$(curl -fsS "$STUB/debug/requests?kind=usage" | grep -o 'dev-key-' | wc -l | tr -d ' ')"
 
 echo
 echo "== Latency: 50 sequential non-streaming requests per variant, median and p95 of total time (ms)"

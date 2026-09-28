@@ -25,7 +25,7 @@ docker compose -f dev/compose.yaml down -v              # afterwards
 | f1 | as a | as d, with `allow_degradation: true` | **unsafe**: with aisa unreachable, a client-supplied `X-Aisa-Model` reaches the paid backend |
 | f2 | as a | as f1, the pre-step strips client `X-Aisa-*` headers | safe: no header, no inner route, 404 |
 
-The pre-steps of b, d and f2 strip every client-supplied `X-Aisa-*` header, and d's `forward-auth` sets `status_on_error: 503`, as the adapter rules in `ADAPTER_CONTRACT.md` require. f1 keeps the unsafe configuration on purpose.
+The pre-steps of b, d and f2 strip every client-supplied `X-Aisa-*` header, d's `forward-auth` sets `status_on_error: 503`, and every `http-logger` has an explicit `log_format` without request headers, as the adapter rules in `ADAPTER_CONTRACT.md` require. f1 keeps the unsafe configuration on purpose.
 
 ## Output of the recorded run (2026-09-28, APISIX 3.18.0, amd64)
 
@@ -59,7 +59,7 @@ variant d
   ok    client X-Aisa-* headers stripped before the inner route    0
   ok    streaming: usage chunk arrives                             100
   ok    streaming: first byte before half of total (not buffered)  yes
-        first byte / total (s): 0.067297 0.603336
+        first byte / total (s): 0.065598 0.597398
 variant e
   ok    qwen3 → mock-local                                       mock-local qwen3
   ok    cloud-large → mock-cloud                                 mock-cloud cloud-large
@@ -69,7 +69,7 @@ variant e
   ok    denied consumer still gets 429                             429
   ok    streaming: usage chunk arrives                             100
   ok    streaming: first byte before half of total (not buffered)  yes
-        first byte / total (s): 0.064386 0.591760
+        first byte / total (s): 0.064834 0.591380
 variant d: the internal listener is loopback-only
   ok    apisix:9081 unreachable from the network (000 = refused)   000
 
@@ -82,12 +82,13 @@ variant d: the internal listener is loopback-only
       3   route=e status=200 upstream=mock-local:8080 consumer=chat-ui model=qwen3
       1   route=e status=400 upstream=- consumer=chat-ui model=llama3.2
       1   route=e status=429 upstream=- consumer=- model=-
+  ok    no consumer key in the usage events                        0
 
 == Latency: 50 sequential non-streaming requests per variant, median and p95 of total time (ms)
-  a  p50 54.4  p95 55.8
-  b  p50 54.0  p95 55.2
-  d  p50 54.3  p95 55.9
-  e  p50 53.6  p95 54.6
+  a  p50 54.2  p95 55.7
+  b  p50 53.9  p95 55.7
+  d  p50 54.5  p95 56.1
+  e  p50 53.7  p95 55.0
 
 == Part 3: fail open (allow_degradation) while aisa is unreachable
 variant f1

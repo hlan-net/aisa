@@ -172,6 +172,18 @@ routes:
         uri: http://stub-aisa:8080/v1/usage
         batch_max_size: 1
         inactive_timeout: 1
+        # Explicit fields only: the default format includes the client's Authorization (#5).
+        # budget_remaining and spoof are here only so run.sh can see whether client-supplied
+        # X-Aisa-* headers got through.
+        log_format:
+          route_id: $route_id
+          status: $status
+          upstream: $upstream_addr
+          consumer: $http_x_aisa_consumer
+          model: $http_x_aisa_model
+          requested_model: $http_x_aisa_requested_model
+          budget_remaining: $http_x_aisa_budget_remaining
+          spoof: $http_x_aisa_spoof
   - id: d-inner-cloud-large
     uri: /v1/chat/completions
     methods: [POST]
@@ -189,6 +201,18 @@ routes:
         uri: http://stub-aisa:8080/v1/usage
         batch_max_size: 1
         inactive_timeout: 1
+        # Explicit fields only: the default format includes the client's Authorization (#5).
+        # budget_remaining and spoof are here only so run.sh can see whether client-supplied
+        # X-Aisa-* headers got through.
+        log_format:
+          route_id: $route_id
+          status: $status
+          upstream: $upstream_addr
+          consumer: $http_x_aisa_consumer
+          model: $http_x_aisa_model
+          requested_model: $http_x_aisa_requested_model
+          budget_remaining: $http_x_aisa_budget_remaining
+          spoof: $http_x_aisa_spoof
 
   # --- e: one route, instance re-picked after ai-proxy-multi's own pick -------------------------
   - id: e
@@ -240,6 +264,18 @@ routes:
         uri: http://stub-aisa:8080/v1/usage
         batch_max_size: 1
         inactive_timeout: 1
+        # Explicit fields only: the default format includes the client's Authorization (#5).
+        # budget_remaining and spoof are here only so run.sh can see whether client-supplied
+        # X-Aisa-* headers got through.
+        log_format:
+          route_id: $route_id
+          status: $status
+          upstream: $upstream_addr
+          consumer: $http_x_aisa_consumer
+          model: $http_x_aisa_model
+          requested_model: $http_x_aisa_requested_model
+          budget_remaining: $http_x_aisa_budget_remaining
+          spoof: $http_x_aisa_spoof
   # --- f1/f2: fail open (allow_degradation) with and without stripping client X-Aisa-* headers ---
   - id: f1-outer
     uri: /f1/v1/chat/completions
