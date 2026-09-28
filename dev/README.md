@@ -65,7 +65,7 @@ The stub does not read Vault or Consul; its decisions come from environment vari
 | `STUB_REWRITES` | `consumer:from=to,…` | `batch-jobs:cloud-large=qwen3` (simulates a budget downgrade) |
 | `STUB_DENY` | `consumer,…` | `blocked` (gets 429) |
 
-`/v1/decide` returns `401` for an unknown key, `400` when no model is found, `429` for a denied consumer, and otherwise `200` with `X-Aisa-Consumer`, `X-Aisa-Model` and `X-Aisa-Budget-Remaining`. The model is read from the `X-Aisa-Requested-Model` header if present, else from the JSON body. `/v1/usage` accepts one JSON object or an array of them. Everything received is logged to stdout as JSON lines and kept (the last 1000 requests) at `/debug/requests?kind=decide|usage`. Credentials in request headers are redacted in the records.
+`/v1/decide` returns `401` for an unknown key, `400` when no model is found, `429` for a denied consumer, and otherwise `200` with `X-Aisa-Consumer`, `X-Aisa-Model` and `X-Aisa-Budget-Remaining`. The model is read from the `X-Aisa-Requested-Model` header if present, else from the JSON body. `/v1/usage` accepts one JSON object or an array of objects, and rejects anything else with 400. Everything received is logged to stdout as JSON lines and kept (the last 1000 requests) at `/debug/requests?kind=decide|usage`. Credentials are redacted in the records and logs, both in request headers and in JSON bodies.
 
 ## Mock backend
 
@@ -79,5 +79,5 @@ Streams send one chunk per token. A final usage chunk is sent according to `MOCK
 ## Notes
 
 - APISIX re-resolves service names every second (`dns_resolver_valid: 1`), so rebuilding a tool container does not leave it talking to a stale address.
-- The default `http-logger` format includes the client's request headers, **including `Authorization`**. The baseline route keeps the default only until spike S6 defines the usage event `log_format`.
+- The default `http-logger` format includes the client's request headers, **including `Authorization`** ([#5](https://github.com/hlan-net/aisa/issues/5)). The baseline route therefore sets an explicit `log_format` until spike S6 defines the usage event schema, and the stub redacts credential fields (`authorization`, `cookie`, API keys) from everything it logs or keeps.
 - The tools image ([`Dockerfile`](Dockerfile)) cross-compiles on the build platform, so building it for arm64 on an amd64 machine (or the other way round) needs no emulation.

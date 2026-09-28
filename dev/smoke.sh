@@ -75,5 +75,10 @@ expect "decide got the model from the body" "body" "$(jq -r '.[0].model_source' 
 expect "decide results" "200 200 401 429" "$(jq -r '[.[].status] | join(" ")' <<<"$decides")"
 usage=$(curl -fsS "$STUB/debug/requests?kind=usage")
 expect "usage events for every request" "4" "$(jq '[.[].events] | add' <<<"$usage")"
+expect "usage event names the consumer" "chat-ui" "$(jq -r '.[0].body.consumer' <<<"$usage")"
+expect "no consumer key in the stub's records" "0" \
+    "$(curl -fsS "$STUB/debug/requests" | grep -o 'dev-key-' | wc -l | tr -d ' ')"
+expect "no consumer key in the stub's logs" "0" \
+    "$("${COMPOSE[@]}" logs stub-aisa | grep -o 'dev-key-' | wc -l | tr -d ' ')"
 
 echo "all $pass checks passed"

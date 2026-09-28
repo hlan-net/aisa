@@ -183,3 +183,39 @@ func TestConfigFromEnv(t *testing.T) {
 		t.Error("want an error for a malformed rewrite")
 	}
 }
+
+func TestUsageRejectsNonObjects(t *testing.T) {
+	srv := newTestStub(t)
+	for _, body := range []string{`null`, `true`, `"event"`, `[{"a":1}, 2]`, `[]` + "x"} {
+		resp := do(t, srv, http.MethodPost, "/v1/usage", body, nil)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("body %s: status = %d, want 400", body, resp.StatusCode)
+		}
+	}
+	resp := do(t, srv, http.MethodPost, "/v1/usage", `[]`, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("empty batch: status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestUsageRedactsCredentials(t *testing.T) {
+	srv := newTestStub(t)
+	body := `{"request":{"headers":{"Authorization":"Bearer key-chat","host":"gw"}},"cookie":"c","n":12345678901234567890}`
+	do(t, srv, http.MethodPost, "/v1/usage", body, nil)
+
+	recs := records(t, srv, "usage")
+	if len(recs) != 1 {
+		t.Fatalf("recorded %d usage requests, want 1", len(recs))
+	}
+	got := string(recs[0].Body)
+	for _, secret := range []string{"key-chat", `"c"`} {
+		if strings.Contains(got, secret) {
+			t.Errorf("stored body contains %s: %s", secret, got)
+		}
+	}
+	for _, kept := range []string{`"host":"gw"`, `12345678901234567890`} {
+		if !strings.Contains(got, kept) {
+			t.Errorf("stored body lost %s: %s", kept, got)
+		}
+	}
+}

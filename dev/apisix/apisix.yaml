@@ -28,4 +28,12 @@ routes:
         uri: http://stub-aisa:8080/v1/usage
         batch_max_size: 1
         inactive_timeout: 1
+        # Explicit fields only: the default format includes the client's request headers,
+        # Authorization among them (issue #5). Spike S6 defines the real usage event format.
+        log_format:
+          route_id: $route_id
+          request_id: $request_id
+          status: $status
+          consumer: $http_x_aisa_consumer
+          model: $http_x_aisa_model
 #END
