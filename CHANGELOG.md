@@ -7,6 +7,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 ## [Unreleased]
 
 ### Added
+- **SonarQube scan** (`.github/workflows/sonar.yml`, `sonar-project.properties`): pull requests and `main` get static analysis and Go test coverage in SonarQube Cloud (or a self-hosted SonarQube Server via `SONAR_HOST_URL`). The scan is skipped when `SONAR_TOKEN` is not available, as on fork and Dependabot PRs.
 - **Spike S8** (`adapters/apisix/spikes/s8-forward-auth-model/`): APISIX can pass the model to `/v1/decide` and route by `X-Aisa-Model`, including downgrade, with a pre-step, `forward-auth` and an internal route per model. Outcome in `docs/process/SPIKES.md`.
 - **Dev stack** (`dev/`): Docker Compose with dev-mode Vault and Consul (seeded with example consumers, prices, budgets, quota profiles and backend registrations), Redis, APISIX 3.18 in standalone mode, two mock OpenAI-compatible backends and a stub aisa. The mock backend streams and returns deterministic token counts; the stub aisa answers `/v1/decide` from static dev keys and logs every decide call and usage event. `dev/smoke.sh` checks the whole path end to end, including that no consumer key reaches the usage sink (the baseline route logs explicit fields only, and the stub redacts credentials).
 - **Go module** `github.com/hlan-net/aisa` (Go 1.26). CI now runs vet and race tests on amd64 and arm64, golangci-lint, and the dev stack smoke test on both architectures.

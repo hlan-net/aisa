@@ -27,6 +27,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | — |
 | 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | — |
 | 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | — |
+| 6 | `claude/sonarqube-pr-scan-66r8m0` | SonarQube scan with Go coverage for PRs and `main` | Draft: needs the Sonar project and `SONAR_TOKEN` |
 
 ## v0.2.0: First version (token quotas)
 
