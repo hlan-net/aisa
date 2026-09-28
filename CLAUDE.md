@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 aisa — **AI Service [Access, Admin, Authority]** — is a Vault- and Consul-native governance layer for LLM traffic. It sits beside an existing AI gateway and adds identities, token quotas, money budgets and normalized usage metrics. It is **not** a gateway: it never proxies model traffic itself. Apache 2.0, public repository `hlan-net/aisa`.
 
-**Status: design phase.** There is no code yet. The design lives in `docs/`, and the next steps are the spikes in `docs/process/SPIKES.md`.
+**Status: design phase (v0.1.0).** The design lives in `docs/`. The only code so far is the dev stack in `dev/` (a mock backend and a stub aisa); the next steps are the spikes in `docs/process/SPIKES.md`.
 
 ## Where things are
 
@@ -15,6 +15,7 @@ aisa — **AI Service [Access, Admin, Authority]** — is a Vault- and Consul-na
 | `docs/concepts/` | The core design: `ARCHITECTURE.md`, `ADAPTER_CONTRACT.md` (the three aisa ↔ gateway contracts), `VAULT.md`, `CONSUL.md` |
 | `docs/features/` | User-facing capabilities: `quotas-and-budgets.md`, `usage-metrics.md` |
 | `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes) |
+| `dev/` | Docker Compose dev stack (Vault, Consul, Redis, APISIX standalone, mock backends, stub aisa) and `smoke.sh`; see `dev/README.md` |
 | `ROADMAP.md` | Mission, current state and versioned milestones with PR tables |
 | `CHANGELOG.md` | Keep a Changelog, semantic versioning |
 
@@ -22,14 +23,13 @@ Planned code layout (from `docs/concepts/ARCHITECTURE.md`): `cmd/aisa/`, `intern
 
 ## Build commands
 
-Once `go.mod` exists:
 
 ```bash
 go build ./...
 go vet ./...
 go test ./...
 go test -race ./...
-go test ./internal/budget -run TestMonthlyRollover   # a single test
+go test ./dev/stubaisa -run TestDecide   # a single test
 golangci-lint run
 ```
 
@@ -39,6 +39,16 @@ golangci-lint run
 ./scripts/install-git-hooks.sh   # installs pre-push hook (go vet + go test)
 ./scripts/check-versions.sh      # Go module and toolchain updates available
 ```
+
+### Dev stack
+
+```bash
+docker compose -f dev/compose.yaml up -d --build --wait
+./dev/smoke.sh                   # end-to-end check through APISIX (needs curl and jq)
+docker compose -f dev/compose.yaml down -v
+```
+
+CI runs the unit tests and the dev stack smoke test on both amd64 and arm64 runners.
 
 Skip the pre-push hook with `SKIP_PRE_PUSH_TESTS=1 git push`.
 

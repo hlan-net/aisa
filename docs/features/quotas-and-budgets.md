@@ -40,5 +40,5 @@ Gateway-native quota plugins (e.g. APISIX `ai-rate-limiting`) are **not** used. 
 - **Streaming:** token usage arrives at the end of the stream. The adapter must make sure the usage event contains it (for Ollama's OpenAI endpoint via `stream_options.include_usage`; spike S2).
 - **Idempotency:** usage events are deduplicated by `request_id`, because log sinks retry.
 - **Persistence:** Redis holds the hot counters, and monthly totals are copied to Consul KV every minute.
-- **Downgrade needs the adapter to honour `X-Aisa-Model`.** This is part of the adapter contract. For APISIX, the route selects the `ai-proxy-multi` instance by that header (spike S8).
+- **Downgrade needs the adapter to honour `X-Aisa-Model`.** This is part of the adapter contract: the gateway routes by that header and forwards the request with that model. For APISIX, an internal route per model matches the header and its `ai-proxy-multi` instances pin the model name (spike S8).
 - **No budget logic in gateway plugins.** If the extra hop to aisa ever becomes a latency problem, a gateway plugin can cache aisa's decisions as an *optimisation*. aisa stays the only place where the rules live.

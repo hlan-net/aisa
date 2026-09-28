@@ -1,0 +1,327 @@
+# Spike S8: can forward-auth pass the model to /v1/decide, and can the route pick the backend from
+# the returned X-Aisa-Model header? Each variant has its own URI prefix; run.sh exercises them all.
+#
+#   /a/  forward-auth POST with the whole request body                     (model: body)
+#   /b/  serverless-pre-function copies "model" to a header, forward-auth GET (model: header)
+#   /c/  route vars on X-Aisa-Model                                         (routing: route match)
+#   /d/  two hops: outer route authorises, inner routes on 127.0.0.1:9081 match X-Aisa-Model
+#   /e/  one route: serverless-post-function re-picks the ai-proxy-multi instance by X-Aisa-Model
+#   /f1/ as d, with forward-auth allow_degradation (fail open) when aisa is unreachable
+#   /f2/ as f1, but the pre-step also strips client-supplied X-Aisa-* headers
+#
+# Instances are named after the model they serve and pin it with options.model, so a downgrade
+# (X-Aisa-Model: qwen3 for a cloud-large request) also rewrites the model in the forwarded body.
+
+routes:
+  # --- a: body forwarding --------------------------------------------------------------------
+  - id: a
+    uri: /a/v1/chat/completions
+    methods: [POST]
+    plugins:
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type]
+      ai-proxy-multi:
+        instances:
+          - name: mock-local
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            override: {endpoint: http://mock-local:8080/v1/chat/completions}
+
+  # --- b: model copied to a header -----------------------------------------------------------
+  - id: b
+    uri: /b/v1/chat/completions
+    methods: [POST]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+              local model
+              local body = core.request.get_body()
+              if body then
+                local t = core.json.decode(body)
+                if type(t) == "table" and type(t.model) == "string" then
+                  model = t.model
+                end
+              end
+              -- nil removes a client-supplied value, so the header always reflects the body
+              core.request.set_header(ctx, "X-Aisa-Requested-Model", model)
+            end
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: GET
+        request_headers: [Authorization, X-Aisa-Requested-Model]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type]
+      ai-proxy-multi:
+        instances:
+          - name: mock-local
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            override: {endpoint: http://mock-local:8080/v1/chat/completions}
+
+  # --- c: route vars on the returned header (expected to fail: routes match before plugins run) --
+  - id: c-cloud
+    uri: /c/v1/chat/completions
+    methods: [POST]
+    priority: 10
+    vars: [["http_x_aisa_model", "==", "cloud-large"]]
+    plugins:
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+      ai-proxy-multi:
+        instances:
+          - name: cloud-large
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            options: {model: cloud-large}
+            override: {endpoint: http://mock-cloud:8080/v1/chat/completions}
+  - id: c-local
+    uri: /c/v1/chat/completions
+    methods: [POST]
+    priority: 10
+    vars: [["http_x_aisa_model", "==", "qwen3"]]
+    plugins:
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+      ai-proxy-multi:
+        instances:
+          - name: qwen3
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            options: {model: qwen3}
+            override: {endpoint: http://mock-local:8080/v1/chat/completions}
+
+  # --- d: two hops ---------------------------------------------------------------------------
+  - id: d-outer
+    uri: /d/v1/chat/completions
+    methods: [POST]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+              local model
+              local body = core.request.get_body()
+              if body then
+                local t = core.json.decode(body)
+                if type(t) == "table" and type(t.model) == "string" then
+                  model = t.model
+                end
+              end
+              core.request.set_header(ctx, "X-Aisa-Requested-Model", model)
+            end
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: GET
+        request_headers: [Authorization, X-Aisa-Requested-Model]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type]
+        # Adapter rule 4: aisa unreachable and failing closed is a 503, not the default 403.
+        status_on_error: 503
+      proxy-rewrite:
+        uri: /v1/chat/completions
+    upstream:
+      type: roundrobin
+      nodes:
+        "127.0.0.1:9081": 1
+  - id: d-inner-qwen3
+    uri: /v1/chat/completions
+    methods: [POST]
+    vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "==", "qwen3"]]
+    plugins:
+      ai-proxy-multi:
+        instances:
+          - name: qwen3
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            options: {model: qwen3}
+            override: {endpoint: http://mock-local:8080/v1/chat/completions}
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        # Explicit fields only: the default format includes the client's Authorization (#5).
+        # budget_remaining and spoof are here only so run.sh can see whether client-supplied
+        # X-Aisa-* headers got through.
+        log_format:
+          route_id: $route_id
+          status: $status
+          upstream: $upstream_addr
+          consumer: $http_x_aisa_consumer
+          model: $http_x_aisa_model
+          requested_model: $http_x_aisa_requested_model
+          budget_remaining: $http_x_aisa_budget_remaining
+          spoof: $http_x_aisa_spoof
+  - id: d-inner-cloud-large
+    uri: /v1/chat/completions
+    methods: [POST]
+    vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "==", "cloud-large"]]
+    plugins:
+      ai-proxy-multi:
+        instances:
+          - name: cloud-large
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            options: {model: cloud-large}
+            override: {endpoint: http://mock-cloud:8080/v1/chat/completions}
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        # Explicit fields only: the default format includes the client's Authorization (#5).
+        # budget_remaining and spoof are here only so run.sh can see whether client-supplied
+        # X-Aisa-* headers got through.
+        log_format:
+          route_id: $route_id
+          status: $status
+          upstream: $upstream_addr
+          consumer: $http_x_aisa_consumer
+          model: $http_x_aisa_model
+          requested_model: $http_x_aisa_requested_model
+          budget_remaining: $http_x_aisa_budget_remaining
+          spoof: $http_x_aisa_spoof
+
+  # --- e: one route, instance re-picked after ai-proxy-multi's own pick -------------------------
+  - id: e
+    uri: /e/v1/chat/completions
+    methods: [POST]
+    plugins:
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type]
+      ai-proxy-multi:
+        instances:
+          - name: qwen3
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            options: {model: qwen3}
+            override: {endpoint: http://mock-local:8080/v1/chat/completions}
+          - name: cloud-large
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            options: {model: cloud-large}
+            override: {endpoint: http://mock-cloud:8080/v1/chat/completions}
+      serverless-post-function:
+        # Access phase, priority -2000: after forward-auth (2002) and ai-proxy-multi's pick
+        # (1041), before ai-proxy-multi sends the request in before_proxy.
+        phase: access
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              local model = core.request.header(ctx, "X-Aisa-Model")
+              local instances = ctx.matched_route.value.plugins["ai-proxy-multi"].instances
+              for _, ins in ipairs(instances) do
+                if ins.options and ins.options.model == model then
+                  ctx.picked_ai_instance_name = ins.name
+                  ctx.picked_ai_instance = ins
+                  ctx.balancer_ip = ins.name
+                  return
+                end
+              end
+              return 400, {error = {type = "invalid_request_error", code = "model_not_routable",
+                message = "no backend serves model " .. tostring(model)}}
+            end
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        # Explicit fields only: the default format includes the client's Authorization (#5).
+        # budget_remaining and spoof are here only so run.sh can see whether client-supplied
+        # X-Aisa-* headers got through.
+        log_format:
+          route_id: $route_id
+          status: $status
+          upstream: $upstream_addr
+          consumer: $http_x_aisa_consumer
+          model: $http_x_aisa_model
+          requested_model: $http_x_aisa_requested_model
+          budget_remaining: $http_x_aisa_budget_remaining
+          spoof: $http_x_aisa_spoof
+  # --- f1/f2: fail open (allow_degradation) with and without stripping client X-Aisa-* headers ---
+  - id: f1-outer
+    uri: /f1/v1/chat/completions
+    methods: [POST]
+    plugins:
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        allow_degradation: true
+        timeout: 500
+      proxy-rewrite:
+        uri: /v1/chat/completions
+    upstream:
+      type: roundrobin
+      nodes:
+        "127.0.0.1:9081": 1
+  - id: f2-outer
+    uri: /f2/v1/chat/completions
+    methods: [POST]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+            end
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        allow_degradation: true
+        timeout: 500
+      proxy-rewrite:
+        uri: /v1/chat/completions
+    upstream:
+      type: roundrobin
+      nodes:
+        "127.0.0.1:9081": 1
+#END

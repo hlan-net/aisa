@@ -1,6 +1,6 @@
 # aisa — AI Service [Access, Admin, Authority]
 
-> **Status: design phase.** The documents describe the planned architecture. No code yet.
+> **Status: design phase.** The documents describe the planned architecture. The only code so far is a local dev stack for the spikes.
 
 Pick the A that fits your day:
 - **Access**: decides who may use which model, through a decision API that your gateway asks before every request.
@@ -59,10 +59,12 @@ Three contracts connect aisa to a gateway: a **decision API** (forward-auth patt
 
 ## Development
 
-There is no code yet; the first milestone is a local dev stack and the spikes ([ROADMAP.md](ROADMAP.md) v0.1.0).
+The first milestone is a local dev stack and the spikes ([ROADMAP.md](ROADMAP.md) v0.1.0). The dev stack is described in [dev/README.md](dev/README.md).
 
 ```bash
-./scripts/install-git-hooks.sh   # pre-push hook: go vet + go test (once go.mod exists)
+docker compose -f dev/compose.yaml up -d --build --wait   # Vault, Consul, Redis, APISIX, mock backends, stub aisa
+./dev/smoke.sh                                              # end-to-end check
+./scripts/install-git-hooks.sh   # pre-push hook: go vet + go test
 ./scripts/check-versions.sh      # Go toolchain and module updates
 ```
 

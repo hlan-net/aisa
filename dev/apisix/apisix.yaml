@@ -1,0 +1,53 @@
+# Baseline dev route: forward-auth to the stub aisa, proxy to the local mock backend and send
+# an access log entry to the stub's usage endpoint. The spikes change this file; the rendered
+# production config will come from a consul-template template under adapters/apisix/.
+routes:
+  - id: chat-completions
+    uri: /v1/chat/completions
+    methods: [POST]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            -- Adapter rule 1 (ADAPTER_CONTRACT.md): no client-supplied X-Aisa-* header reaches
+            -- the decision or the backend; only aisa's answer sets them.
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+            end
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization, X-Request-Id]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type]
+        # aisa unreachable is a 503 (ADAPTER_CONTRACT.md adapter rules), not forward-auth's default 403.
+        status_on_error: 503
+      ai-proxy-multi:
+        instances:
+          - name: mock-local
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        # Explicit fields only: the default format includes the client's request headers,
+        # Authorization among them (issue #5). Spike S6 defines the real usage event format.
+        log_format:
+          route_id: $route_id
+          request_id: $request_id
+          status: $status
+          consumer: $http_x_aisa_consumer
+          model: $http_x_aisa_model
+#END

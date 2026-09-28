@@ -1,0 +1,7 @@
+.git
+.local
+.tmp
+bin
+dist
+docs
+*.md

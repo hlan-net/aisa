@@ -1,0 +1,130 @@
+# Local dev stack for aisa: dev-mode Vault and Consul, Redis, APISIX in standalone mode, two
+# mock OpenAI-compatible backends and a stub aisa. See dev/README.md.
+#
+#   docker compose -f dev/compose.yaml up -d --build --wait
+#   ./dev/smoke.sh
+#
+# Everything here is dev-only: tokens and keys are placeholders, and all ports bind to localhost.
+
+name: aisa-dev
+
+x-tools-image: &tools-image
+  image: aisa-dev-tools:local
+  build:
+    context: ..
+    dockerfile: dev/Dockerfile
+
+services:
+  vault:
+    image: hashicorp/vault:2.1.1
+    command: ["server", "-dev", "-dev-root-token-id=dev-root", "-dev-listen-address=0.0.0.0:8200"]
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+    cap_add: [IPC_LOCK]
+    ports: ["127.0.0.1:8200:8200"]
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  consul:
+    image: hashicorp/consul:2.0.4
+    command: ["agent", "-dev", "-client=0.0.0.0", "-log-level=warn"]
+    ports: ["127.0.0.1:8500:8500"]
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  seed-vault:
+    image: hashicorp/vault:2.1.1
+    entrypoint: ["/seed/vault.sh"]
+    volumes: ["./seed:/seed:ro"]
+    depends_on:
+      vault: {condition: service_healthy}
+    healthcheck: &seeded
+      test: ["CMD", "test", "-f", "/tmp/seeded"]
+      interval: 1s
+      timeout: 1s
+      retries: 60
+
+  seed-consul:
+    image: hashicorp/consul:2.0.4
+    entrypoint: ["/seed/consul.sh"]
+    volumes: ["./seed:/seed:ro"]
+    depends_on:
+      consul: {condition: service_healthy}
+      mock-local: {condition: service_healthy}
+      mock-cloud: {condition: service_healthy}
+    healthcheck: *seeded
+
+  mock-local:
+    <<: *tools-image
+    entrypoint: ["/usr/local/bin/mockbackend"]
+    environment:
+      MOCK_NAME: mock-local
+      MOCK_MODELS: qwen3,llama3.2
+      MOCK_TTFT: 50ms
+      MOCK_TOKEN_DELAY: 5ms
+    ports: ["127.0.0.1:8082:8080"]
+    healthcheck: &tool-health
+      test: ["CMD", "/usr/local/bin/mockbackend", "-healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  mock-cloud:
+    <<: *tools-image
+    entrypoint: ["/usr/local/bin/mockbackend"]
+    environment:
+      MOCK_NAME: mock-cloud
+      MOCK_MODELS: cloud-large
+      MOCK_TTFT: 20ms
+      MOCK_TOKEN_DELAY: 2ms
+    ports: ["127.0.0.1:8083:8080"]
+    healthcheck: *tool-health
+
+  stub-aisa:
+    <<: *tools-image
+    entrypoint: ["/usr/local/bin/stubaisa"]
+    environment:
+      STUB_KEYS: dev-key-chat-ui=chat-ui,dev-key-batch-jobs=batch-jobs,dev-key-blocked=blocked
+      STUB_REWRITES: batch-jobs:cloud-large=qwen3
+      STUB_DENY: blocked
+    ports: ["127.0.0.1:8081:8080"]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/stubaisa", "-healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  apisix:
+    image: apache/apisix:3.18.0-debian
+    volumes:
+      # Spikes swap in their own files, e.g. APISIX_ROUTES=../adapters/apisix/spikes/<spike>/apisix.yaml
+      - ${APISIX_CONFIG:-./apisix/config.yaml}:/usr/local/apisix/conf/config.yaml:ro
+      - ${APISIX_ROUTES:-./apisix/apisix.yaml}:/usr/local/apisix/conf/apisix.yaml:ro
+    ports:
+      - "127.0.0.1:9080:9080"
+      - "127.0.0.1:9091:9091"
+    depends_on:
+      stub-aisa: {condition: service_healthy}
+      mock-local: {condition: service_healthy}
+      mock-cloud: {condition: service_healthy}
+    healthcheck:
+      # The image has no curl or wget; bash can open a TCP connection itself.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9080"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

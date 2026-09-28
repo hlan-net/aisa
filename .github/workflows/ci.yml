@@ -29,20 +29,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # The repository is in its design phase; the Go steps start running once go.mod lands.
-      # hashFiles() is only available in step conditions, not in a job-level `if`.
       - name: Set up Go
-        if: ${{ hashFiles('go.mod') != '' }}
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # There is no go.sum until the first dependency lands.
+          cache-dependency-path: go.mod
 
       - name: Vet
-        if: ${{ hashFiles('go.mod') != '' }}
         run: go vet ./...
 
       - name: Test
-        if: ${{ hashFiles('go.mod') != '' }}
         run: go test -race ./...
 
   lint:
@@ -52,11 +49,37 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        if: ${{ hashFiles('go.mod') != '' }}
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache-dependency-path: go.mod
 
       - name: golangci-lint
-        if: ${{ hashFiles('go.mod') != '' }}
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14
+
+  dev-stack:
+    # End-to-end check of the dev stack: APISIX, stub aisa, mock backends, Vault, Consul, Redis.
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Start the dev stack
+        run: docker compose -f dev/compose.yaml up -d --build --wait
+
+      - name: Smoke test
+        run: ./dev/smoke.sh
+
+      - name: Logs
+        if: failure()
+        run: docker compose -f dev/compose.yaml logs
+
+      - name: Stop the dev stack
+        if: always()
+        run: docker compose -f dev/compose.yaml down -v
