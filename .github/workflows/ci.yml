@@ -59,4 +59,4 @@ jobs:
 
       - name: golangci-lint
         if: ${{ hashFiles('go.mod') != '' }}
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
