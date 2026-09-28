@@ -64,6 +64,7 @@ The stub does not read Vault or Consul; its decisions come from environment vari
 | `STUB_KEYS` | `key=consumer,…` | `dev-key-chat-ui=chat-ui`, `dev-key-batch-jobs=batch-jobs`, `dev-key-blocked=blocked` |
 | `STUB_REWRITES` | `consumer:from=to,…` | `batch-jobs:cloud-large=qwen3` (simulates a budget downgrade) |
 | `STUB_DENY` | `consumer,…` | `blocked` (gets 429) |
+| `STUB_CAPACITY` | positive integer | unset: the last 1000 requests are kept |
 
 `/v1/decide` returns `401` for an unknown key, `400` when no model is found, `429` for a denied consumer, and otherwise `200` with `X-Aisa-Consumer`, `X-Aisa-Model` and `X-Aisa-Budget-Remaining`. The model is read from the `X-Aisa-Requested-Model` header if present, else from the JSON body. `/v1/usage` accepts one JSON object or an array of objects, and rejects anything else with 400. Everything received is logged to stdout as JSON lines and kept (the last 1000 requests) at `/debug/requests?kind=decide|usage`. Credentials (`Authorization`, `Proxy-Authorization`, `Cookie`, API-key headers and fields) are redacted in the records and logs, both in request headers and in JSON bodies; a body that is not JSON is recorded only by its size.
 

@@ -9,10 +9,10 @@ Most spikes test whether the **APISIX adapter** can meet the contract in [`ADAPT
 | S2 | Are token counts in the gateway's log data correct for **streaming** responses from Ollama's OpenAI endpoint? | Usage events feed cost and budgets | Compare the logged counts with Ollama's own `eval_count` for streamed and non-streamed requests, with and without `stream_options.include_usage` | **Partly** (2026-09-28): exact through APISIX when the backend streams usage, which a real Ollama does; lost when a backend does not or the client disconnects. [Details](#s2--s6-usage-events-from-apisix) |
 | S5 | Does the official `apache/apisix` Helm chart support standalone mode well, or are plain manifests simpler? | Adapter deployment shape | Install the chart with standalone values and check for an etcd dependency | — |
 | S6 | Can APISIX `http-logger` produce the usage event schema: token counts, model, TTFT and upstream from the AI plugin variables in `log_format`? | Contract 2 | Configure `log_format` with the `llm_*` variables and receive the events in the stub | **Yes** (2026-09-28), with type and latency caveats. [Details](#s2--s6-usage-events-from-apisix) |
-| S7 | Resource use on a small arm64 node (e.g. Raspberry Pi 4) of APISIX, aisa and consul-template together | Requests and limits, whether it runs on small clusters | Measure CPU and memory while running parallel streams | — |
+| S7 | Resource use on a small arm64 node (e.g. Raspberry Pi 4) of APISIX, aisa and consul-template together | Requests and limits, whether it runs on small clusters | Measure CPU and memory while running parallel streams | **Small enough** (2026-09-28, on a Raspberry Pi 5): about 85 MB idle and 115 MB under 100 streams with one nginx worker. Requests and limits are confirmed on a Raspberry Pi 4 with real aisa ([#16](https://github.com/hlan-net/aisa/issues/16)). [Details](#s7--s10-footprint-and-added-latency) |
 | S8 | Can APISIX `forward-auth` send the **model name** (it is in the body) to `/v1/decide`, and can the route then choose the backend from the returned `X-Aisa-Model` header? | Contract 1, including downgrade | Try `forward-auth` with body forwarding; if that fails, a `serverless-pre-function` that copies `model` to a header. Route to `ai-proxy-multi` by header. | **Yes, with an internal hop** (2026-09-28). [Details below](#s8-forward-auth-and-model-routing-on-apisix) |
 | S9 | Does consul-template render and reload a standalone `apisix.yaml` cleanly, without dropped requests during a reload? | Contract 3 | Render from a test Consul service, flip its health check, and run a request loop during re-renders | — |
-| S10 | Latency added by the forward-auth hop | Whether decision caching in the adapter is ever needed | Compare p50/p95 with and without forward-auth on non-streaming requests | — |
+| S10 | Latency added by the forward-auth hop | Whether decision caching in the adapter is ever needed | Compare p50/p95 with and without forward-auth on non-streaming requests | **0.3 to 2 ms at p50** (2026-09-28), with a stub that decides from memory: no cache needed for the hop itself. [Details](#s7--s10-footprint-and-added-latency) |
 
 Numbering follows the original design notes; S1, S3 and S4 became unnecessary once authentication and config rendering moved into aisa.
 
@@ -78,3 +78,41 @@ The Ollama host served other inference requests during the run, so the latencies
 5. **Client disconnect is not fixed by this.** With LiteLLM in between, a client that left after 19 tokens still produced an event with `"0"`/`"0"` and status 200.
 
 Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#2-usage-events-after-the-request): the field meanings above, lenient parsing of numbers and booleans, `X-Request-Id` as a decision input, events for denied requests, no credentials in events (#5), and "a successful response without token counts means usage unknown, not zero", whether the zeros arrive as numbers or as strings. A backend that reports no usage needs a translating proxy in front of it, and its prompt tokens are then estimates. How aisa accounts for unknown usage is [#12](https://github.com/hlan-net/aisa/issues/12).
+
+### S7 + S10: footprint and added latency
+
+**2026-09-28**, APISIX 3.18.0 in standalone mode, consul-template 0.43.0, dev stack with the stub aisa and mock backends, on a Raspberry Pi 5 (arm64, 4 cores) in Docker. The configuration, script and full output are in [`adapters/apisix/spikes/s7-s10-footprint/`](../../adapters/apisix/spikes/s7-s10-footprint/).
+
+The load was parallel streams of 256 tokens at 50 tokens a second through the adapter shape chosen in S8 (pre-step, `forward-auth`, internal hop, `ai-proxy-multi`, usage event), 30 s per step. Memory is peak proportional set size (PSS), CPU is average cores.
+
+| | APISIX, 1 worker | APISIX, 4 workers | stub aisa | consul-template |
+|---|---|---|---|---|
+| idle | 0.01 cores, 61 MB | 0.01 cores, 119 MB | 0.01 cores, 8 MB | 0.00 cores, 15 MB |
+| 10 streams | 0.06 cores, 72 MB | 0.14 cores, 143 MB | 0.01 cores, 9 MB | 0.00 cores, 15 MB |
+| 50 streams | 0.25 cores, 79 MB | 0.39 cores, 169 MB | 0.02 cores, 13 MB | 0.00 cores, 15 MB |
+| 100 streams | 0.48 cores, 85 MB | 0.61 cores, 178 MB | 0.03 cores, 13 MB | 0.00 cores, 15 MB |
+
+**S7 result: the three fit on a small node, if the number of nginx workers is set.** No request failed and every stream had its usage event, 598 of 598 at 100 streams with one worker.
+
+1. **The worker count decides the memory.** Each nginx worker has its own Lua VM: 61 MB with one worker, 119 MB with four, idle. nginx starts one worker per core of the *node* by default, whatever CPU limit the container has, so the adapter's deployment must set `nginx_config.worker_processes`.
+2. **One worker was enough** for 100 parallel streams, 5000 chunks a second, at half a core. Local models produce far fewer tokens a second than the mock.
+3. **Memory grows with load and is not given back**: after the load APISIX stayed at its peak. Limits must allow for the peak, not the idle size.
+4. **consul-template costs 15 MB and no measurable CPU** while it watches two backends. The stub aisa's 8 to 14 MB are a floor for aisa, not an estimate: the stub decides from a map in memory and has no Redis, Vault or Consul client.
+5. **Not measured on a Raspberry Pi 4, and that does not change the answer.** The memory numbers should carry over, since the images and the architecture are the same. The CPU numbers do not: they are from the faster cores of a Raspberry Pi 5, but the load was far above what a small cluster sees, so slower cores leave room. The numbers that a deployment needs are measured with real aisa on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)).
+
+**S10 result: the hops are cheap.** Non-streamed requests to a backend that answers at once, 600 per row over kept-alive connections, one client at a time:
+
+| Route | p50, 1 worker | p50, 4 workers | APISIX CPU per request |
+|---|---|---|---|
+| one hop, no decision | 1.4 ms | 2.8 ms | 1.2 to 1.6 ms |
+| two hops, no decision | 1.6 ms | 3.3 ms | 1.5 to 2.3 ms |
+| two hops and `forward-auth` | 1.9 ms | 4.6 ms | 1.8 to 2.8 ms |
+
+1. **`forward-auth` added 0.3 to 1.3 ms at p50, the internal hop 0.2 to 0.5 ms.** With ten clients at once the additions were 0.6 to 2.1 ms and 0.9 to 2.8 ms, on a machine that also ran the load generator. The differences between runs are as large as the additions, so these are orders of magnitude, not exact costs.
+2. **A decision cache in the adapter is not needed for the hop.** What remains is aisa's own time to decide, which the stub does not show: it must be measured when `/v1/decide` exists, and that number decides about caching.
+
+Consequences:
+
+- The APISIX adapter's Helm values set `worker_processes` explicitly, one worker by default. Starting values for its resources, to be confirmed on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)): requests of 100m CPU and 96Mi memory, a memory limit of 192Mi.
+- The APISIX template must not share an `upstream` between routes through a YAML anchor: APISIX adds fields to the upstream it has loaded, and the second route then fails validation and is left out, with an error in the log only. Anchors for plugin configurations work.
+- The upstream of the internal hop needs its own read timeout; the default of 60 s would end a slow stream there, as the 30 s of `ai-proxy-multi` does ([#14](https://github.com/hlan-net/aisa/issues/14)).

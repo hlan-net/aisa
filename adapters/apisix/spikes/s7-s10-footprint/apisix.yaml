@@ -1,0 +1,150 @@
+# Spikes S7 + S10: what does the chosen adapter shape cost in memory, CPU and latency?
+#
+#   /full/    the adapter as chosen in S8: pre-step, forward-auth, internal hop, ai-proxy-multi,
+#             usage event. S7 runs its parallel streams here.
+#   /noauth/  the same without forward-auth. The pre-step sets the headers aisa would have
+#             returned. For measuring only: it trusts the client's model and knows no consumer.
+#   /direct/  one hop, no decision: ai-proxy-multi and the usage event only.
+#
+# S10 compares the three: full - noauth is the forward-auth hop, noauth - direct the internal hop.
+# The inner routes send qwen3 to mock-stream (streams at a model's pace) and llama3.2 to
+# mock-fast (answers at once, so the gateway's own latency shows).
+
+routes:
+  - id: full
+    uri: /full/v1/chat/completions
+    methods: [POST]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+              local model
+              local body = core.request.get_body()
+              if body then
+                local t = core.json.decode(body)
+                if type(t) == "table" and type(t.model) == "string" then
+                  model = t.model
+                end
+              end
+              core.request.set_header(ctx, "X-Aisa-Requested-Model", model)
+            end
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: GET
+        request_headers: [Authorization, X-Aisa-Requested-Model]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type]
+        extra_headers:
+          X-Request-Id: $apisix_request_id
+        status_on_error: 503
+      proxy-rewrite:
+        uri: /v1/chat/completions
+    # Not shared with the other route through a YAML anchor: APISIX adds fields to the upstream
+    # it has loaded, and the second route to use the same object then fails validation.
+    upstream:
+      type: roundrobin
+      # The default 60 s read timeout would end a slow stream on the internal hop.
+      timeout: {connect: 5, send: 600, read: 600}
+      nodes:
+        "127.0.0.1:9081": 1
+
+  - id: noauth
+    uri: /noauth/v1/chat/completions
+    methods: [POST]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+              local model
+              local body = core.request.get_body()
+              if body then
+                local t = core.json.decode(body)
+                if type(t) == "table" and type(t.model) == "string" then
+                  model = t.model
+                end
+              end
+              -- Measuring only: what forward-auth would have set from aisa's answer.
+              core.request.set_header(ctx, "X-Aisa-Requested-Model", model)
+              core.request.set_header(ctx, "X-Aisa-Model", model)
+              core.request.set_header(ctx, "X-Aisa-Consumer", "chat-ui")
+            end
+      proxy-rewrite:
+        uri: /v1/chat/completions
+    upstream:
+      type: roundrobin
+      timeout: {connect: 5, send: 600, read: 600}
+      nodes:
+        "127.0.0.1:9081": 1
+
+  - id: inner-qwen3
+    uri: /v1/chat/completions
+    methods: [POST]
+    vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "==", "qwen3"]]
+    plugins:
+      ai-proxy-multi:
+        timeout: 600000
+        instances:
+          - name: mock-stream
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            options: {model: qwen3}
+            override: {endpoint: http://mock-stream:8080/v1/chat/completions}
+      http-logger: &usage_logger
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format:
+          ts: $time_iso8601
+          request_id: $apisix_request_id
+          consumer: $http_x_aisa_consumer
+          model: $llm_model
+          requested_model: $request_llm_model
+          backend: $balancer_ip
+          prompt_tokens: $llm_prompt_tokens
+          completion_tokens: $llm_completion_tokens
+          status: $status
+          latency_ms: $apisix_upstream_response_time
+          ttft_ms: $llm_time_to_first_token
+          stream: $llm_stream
+
+  - id: inner-llama3.2
+    uri: /v1/chat/completions
+    methods: [POST]
+    vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "==", "llama3.2"]]
+    plugins:
+      ai-proxy-multi: &fast
+        timeout: 600000
+        instances:
+          - name: mock-fast
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            options: {model: llama3.2}
+            override: {endpoint: http://mock-fast:8080/v1/chat/completions}
+      http-logger: *usage_logger
+
+  - id: direct
+    uri: /direct/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi: *fast
+      http-logger: *usage_logger
+#END
