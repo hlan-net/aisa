@@ -21,7 +21,7 @@ fail() { echo "FAIL $*" >&2; exit 1; }
 
 # expect <description> <expected> <actual>
 expect() {
-    if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: want '$2', got '$3'"; fi
+    if [[ "$2" = "$3" ]]; then ok "$1"; else fail "$1: want '$2', got '$3'"; fi
 }
 
 # chat <key> <json body> [extra curl args...]: prints "<status>\n<body>"
@@ -37,7 +37,7 @@ chat() {
 # Wait until the gateway answers; the healthcheck can pass before the route is loaded.
 for _ in $(seq 1 30); do
     code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/v1/chat/completions" || true)
-    [ "$code" != "000" ] && [ "$code" != "404" ] && break
+    [[ "$code" != "000" ]] && [[ "$code" != "404" ]] && break
     sleep 1
 done
 

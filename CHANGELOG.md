@@ -15,5 +15,6 @@ The format is based on Keep a Changelog and follows semantic versioning.
 - **Repository layout**: `CLAUDE.md` and `AGENTS.md` for coding agents (including maintainer preferences and a description of the reference environment), `ROADMAP.md`, this changelog, a pull request template, a pre-push hook and CI that activates once `go.mod` exists.
 
 ### Changed
+- **SonarQube findings**: third-party GitHub Actions (golangci-lint, the Docker release actions, the SonarQube scan) are pinned to full commit SHAs with the version in a comment, which Dependabot keeps current. The bash scripts `dev/smoke.sh` and the S8 spike's `run.sh` use `[[ ]]` for tests, and `scripts/check-versions.sh` only fetches over HTTPS.
 - **Decision API** (unstable `/v1`, not yet implemented): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
 - **CI actions**: `actions/setup-go` v6 → v7 and `golangci/golangci-lint-action` v8 → v9 (golangci-lint pinned to v2.14). The other actions were checked against their published tags and are current. Dependabot also watches the dev stack's Dockerfile and Compose images.
