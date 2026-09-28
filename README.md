@@ -38,20 +38,35 @@ aisa is not a gateway. Your gateway keeps proxying, streaming and translating be
             └───────────────────────────────────────┘
 ```
 
-Three contracts connect aisa to a gateway: a **decision API** (forward-auth pattern), **usage events** (access log sink) and **config rendering** (consul-template). See [docs/interfaces.md](docs/interfaces.md).
+Three contracts connect aisa to a gateway: a **decision API** (forward-auth pattern), **usage events** (access log sink) and **config rendering** (consul-template). See [docs/concepts/ADAPTER_CONTRACT.md](docs/concepts/ADAPTER_CONTRACT.md).
 
 ## Documents
 
 | Document | Contents |
 |---|---|
-| [interfaces.md](docs/interfaces.md) | aisa ↔ gateway contracts and the adapter checklist |
-| [architecture.md](docs/architecture.md) | Components, traffic path, failure modes, example deployment |
-| [vault.md](docs/vault.md) | Identities and provider keys from Vault |
-| [consul.md](docs/consul.md) | Backends, prices and budgets in Consul |
-| [budgets.md](docs/budgets.md) | Quotas and money budgets |
-| [observability.md](docs/observability.md) | Metrics, dashboard and alerts |
-| [spikes.md](docs/spikes.md) | Unknowns to verify before implementation |
-| [roadmap.md](docs/roadmap.md) | Phases, adapters and upstream contributions |
+| [ROADMAP.md](ROADMAP.md) | Mission, current state and versioned milestones |
+| [CHANGELOG.md](CHANGELOG.md) | Notable changes per release |
+| **Concepts** | |
+| [ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md) | Components, traffic path, failure modes, reference deployment |
+| [ADAPTER_CONTRACT.md](docs/concepts/ADAPTER_CONTRACT.md) | The three aisa ↔ gateway contracts, the `aisa_*` metrics and the adapter checklist |
+| [VAULT.md](docs/concepts/VAULT.md) | Identities and provider keys from Vault |
+| [CONSUL.md](docs/concepts/CONSUL.md) | Backends, prices and budgets in Consul |
+| **Features** | |
+| [quotas-and-budgets.md](docs/features/quotas-and-budgets.md) | Token quotas and monthly money budgets |
+| [usage-metrics.md](docs/features/usage-metrics.md) | Metrics, dashboard and alerts |
+| **Process** | |
+| [SPIKES.md](docs/process/SPIKES.md) | Unknowns to verify before implementation |
+
+## Development
+
+There is no code yet; the first milestone is a local dev stack and the spikes ([ROADMAP.md](ROADMAP.md) v0.1.0).
+
+```bash
+./scripts/install-git-hooks.sh   # pre-push hook: go vet + go test (once go.mod exists)
+./scripts/check-versions.sh      # Go toolchain and module updates
+```
+
+Pull requests go into `main` from a feature branch; see [.github/pull_request_template.md](.github/pull_request_template.md). Coding agents start from [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md).
 
 ## License
 

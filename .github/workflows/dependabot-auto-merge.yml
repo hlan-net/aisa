@@ -1,0 +1,45 @@
+name: Dependabot auto-merge
+
+# Daily sweep that merges dependabot PRs whose checks are all green, so routine
+# dependency updates don't sit waiting for a human. Major version bumps are
+# skipped — those need a human look.
+#
+# Merges one PR per run on purpose: dependabot rebases its remaining PRs after
+# each merge, which restarts their checks. The next scheduled run (or a manual
+# dispatch) picks up the next green PR.
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge first green non-major dependabot PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr list --repo "$REPO" --author "app/dependabot" --state open \
+            --json number,title --jq '.[] | "\(.number)\t\(.title)"' |
+          while IFS=$'\t' read -r num title; do
+            from=$(sed -nE 's/.* from v?([0-9]+)(\.[0-9A-Za-z.-]+)? to .*/\1/p' <<<"$title")
+            to=$(sed -nE 's/.* to v?([0-9]+)(\.[0-9A-Za-z.-]+)?$/\1/p' <<<"$title")
+            if [ -n "$from" ] && [ -n "$to" ] && [ "$from" != "$to" ]; then
+              echo "#$num SKIP (major bump): $title"
+              continue
+            fi
+            if gh pr checks "$num" --repo "$REPO" >/dev/null 2>&1; then
+              echo "#$num MERGE: $title"
+              gh pr merge "$num" --repo "$REPO" --merge
+              break
+            else
+              echo "#$num skip (checks not green yet): $title"
+            fi
+          done

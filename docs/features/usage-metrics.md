@@ -1,8 +1,12 @@
-# Observability
+# Usage Metrics
+
+## Concept
+
+aisa keeps the books: every request is accounted per consumer, model and backend, as tokens and as cost. It exports normalized metrics, so dashboards and alerts are the **same for every gateway adapter**.
 
 ## Primary metrics: aisa (`aisa_*`)
 
-aisa exports normalized metrics built from usage events and decisions, so dashboards and alerts are the **same for every gateway adapter**. Full list in [interfaces.md](interfaces.md#4-metrics-output-of-aisa):
+Full list in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#4-metrics-output-of-aisa):
 
 - `aisa_requests_total`, `aisa_tokens_total{direction}`, `aisa_cost_total`
 - `aisa_budget_limit`, `aisa_budget_spent`

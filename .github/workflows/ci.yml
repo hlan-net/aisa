@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+  pull_request:
+    branches: ["main"]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "LICENSE"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        # arm64 is a first-class target, so the tests run natively on both.
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The repository is in its design phase; the Go steps start running once go.mod lands.
+      # hashFiles() is only available in step conditions, not in a job-level `if`.
+      - name: Set up Go
+        if: ${{ hashFiles('go.mod') != '' }}
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        if: ${{ hashFiles('go.mod') != '' }}
+        run: go vet ./...
+
+      - name: Test
+        if: ${{ hashFiles('go.mod') != '' }}
+        run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        if: ${{ hashFiles('go.mod') != '' }}
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        if: ${{ hashFiles('go.mod') != '' }}
+        uses: golangci/golangci-lint-action@v8

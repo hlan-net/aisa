@@ -1,6 +1,8 @@
-# Interfaces: aisa and gateway adapters
+# Concept: Adapter contract
 
 aisa is split into a **gateway-agnostic core** and **thin adapters** for specific AI gateways. APISIX is the first adapter and the reference implementation, not a dependency of the core. The same core should work in front of or beside LiteLLM, Envoy AI Gateway / Agent Router, API7 AISIX, Kong or a plain reverse proxy.
+
+Related: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`VAULT.md`](./VAULT.md), [`CONSUL.md`](./CONSUL.md), [`../process/SPIKES.md`](../process/SPIKES.md).
 
 The core owns everything aisa adds: identities, budgets, pricing, backends and normalized usage metrics. The gateway only proxies traffic and translates between providers.
 
@@ -88,7 +90,7 @@ aisa exports its own normalized metrics, so the dashboards and alerts work with 
 
 Gateway-native metrics (e.g. `apisix_llm_*`) are still scraped, but they only serve as a cross-check and for gateway internals.
 
-## Adapter contract checklist
+## Adapter checklist
 
 An adapter is complete when it provides:
 1. a way to call `/v1/decide` before proxying, including the model name, and to apply the returned headers

@@ -1,6 +1,8 @@
-# Consul integration
+# Concept: Consul integration
 
-Consul holds three things for aisa: **where the model backends are**, **what models cost** and **what each consumer may spend**. aisa reads them directly. Gateways get backends only through rendered config ([interfaces.md](interfaces.md#3-config-rendering-gateway-configuration)).
+Consul holds three things for aisa: **where the model backends are**, **what models cost** and **what each consumer may spend**. aisa reads them directly. Gateways get backends only through rendered config ([`ADAPTER_CONTRACT.md`](./ADAPTER_CONTRACT.md#3-config-rendering-gateway-configuration)).
+
+Related: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`VAULT.md`](./VAULT.md), [`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md).
 
 ## Backends: Consul catalog
 

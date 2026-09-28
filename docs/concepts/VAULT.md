@@ -1,4 +1,6 @@
-# Vault integration
+# Concept: Vault integration
+
+Related: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`CONSUL.md`](./CONSUL.md), [`../../ROADMAP.md`](../../ROADMAP.md).
 
 ## Goals
 
@@ -44,4 +46,4 @@ Where the provider supports it, dynamic credentials are better than static keys,
 
 ## APISIX's own Vault support
 
-APISIX's `$secret://vault/...` supports only KV v1 and a static token ([docs](https://apisix.apache.org/docs/apisix/terminology/secret/)). With config rendering, aisa does not need it. Adding KV v2 and Kubernetes auth to APISIX is still a worthwhile, independent upstream contribution ([roadmap.md](roadmap.md)).
+APISIX's `$secret://vault/...` supports only KV v1 and a static token ([docs](https://apisix.apache.org/docs/apisix/terminology/secret/)). With config rendering, aisa does not need it. Adding KV v2 and Kubernetes auth to APISIX is still a worthwhile, independent upstream contribution ([`ROADMAP.md`](../../ROADMAP.md)).

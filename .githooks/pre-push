@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+if [ -n "$SKIP_PRE_PUSH_TESTS" ]; then
+    echo "Skipping pre-push tests because SKIP_PRE_PUSH_TESTS is set."
+    exit 0
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+if [ ! -f go.mod ]; then
+    echo "No go.mod yet; nothing to test."
+    exit 0
+fi
+
+echo "Running pre-push checks: go vet ./... && go test ./..."
+go vet ./...
+go test ./...

@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      release-tag: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Prefer the matching section from CHANGELOG.md; fall back to the commit log.
+          # Write to RELEASE_NOTES.md so the real CHANGELOG.md is never clobbered.
+          NOTES_FILE=RELEASE_NOTES.md
+          VER="${VERSION#v}"
+
+          if [ -f CHANGELOG.md ]; then
+            awk -v ver="$VER" '
+              $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+              flag && /^## \[/ { flag=0 }
+              flag { print }
+            ' CHANGELOG.md > "$NOTES_FILE"
+          fi
+
+          # Strip leading and trailing blank lines, keeping blank lines between content.
+          if [ -s "$NOTES_FILE" ]; then
+            awk '
+              /[^[:space:]]/ { for (; pending > 0; pending--) print ""; print; started = 1; next }
+              started { pending++ }
+            ' "$NOTES_FILE" > "$NOTES_FILE.trimmed"
+            mv "$NOTES_FILE.trimmed" "$NOTES_FILE"
+          fi
+
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "No CHANGELOG.md section for $VER; falling back to commit log." >&2
+            {
+              echo "## Changes"
+              echo ""
+              PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+              if [ -n "$PREV_TAG" ]; then
+                git log --pretty=format:"- %s" "$PREV_TAG"..HEAD
+              else
+                git log --pretty=format:"- %s"
+              fi
+            } > "$NOTES_FILE"
+          fi
+
+          echo "Release notes:"; cat "$NOTES_FILE"
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "aisa $TAG" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" --title "aisa $TAG" --notes-file RELEASE_NOTES.md
+          fi
+
+  image:
+    name: Build and push multi-arch image
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # Starts running once the repository has a Dockerfile.
+      # hashFiles() is only available in step conditions, not in a job-level `if`.
+      - name: Set up QEMU
+        if: ${{ hashFiles('Dockerfile') != '' }}
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Buildx
+        if: ${{ hashFiles('Dockerfile') != '' }}
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        if: ${{ hashFiles('Dockerfile') != '' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        if: ${{ hashFiles('Dockerfile') != '' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ needs.create-release.outputs.release-tag }}
+            ghcr.io/${{ github.repository }}:latest

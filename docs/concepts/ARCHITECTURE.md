@@ -1,6 +1,8 @@
-# Architecture
+# Concept: Architecture
 
-aisa is split into a gateway-agnostic **core** and a replaceable **AI gateway** connected through an adapter; see [interfaces.md](interfaces.md). This document describes the reference deployment: the core with the APISIX adapter on Kubernetes, with Vault and Consul already in place.
+aisa is split into a gateway-agnostic **core** and a replaceable **AI gateway** connected through an adapter. This document describes the reference deployment: the core with the APISIX adapter on Kubernetes, with Vault and Consul already in place.
+
+Related: [`ADAPTER_CONTRACT.md`](./ADAPTER_CONTRACT.md), [`VAULT.md`](./VAULT.md), [`CONSUL.md`](./CONSUL.md), [`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md), [`../features/usage-metrics.md`](../features/usage-metrics.md).
 
 ## Traffic path
 
@@ -31,7 +33,7 @@ backends                                                                │ /met
 | consul-template | Sidecar next to the gateway. Renders the gateway config from the Consul catalog (backends) and Vault (provider keys, KV v2) and triggers the reload. |
 | ServiceMonitors | aisa's `/metrics` (primary) and the gateway's own metrics (cross-check). |
 
-## Repository layout (planned)
+## Code layout (planned)
 
 ```
 aisa/
@@ -44,8 +46,7 @@ aisa/
 │       └── README.md
 ├── deploy/helm/              # chart for aisa (+ Redis)
 ├── terraform/                # module: Vault mount/policies/roles, Consul ACLs/KV/registrations
-├── dashboards/               # Grafana JSON + alert rules
-└── docs/
+└── dashboards/               # Grafana JSON + alert rules
 ```
 
 ## Exposure
