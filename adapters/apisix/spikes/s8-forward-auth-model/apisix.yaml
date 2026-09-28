@@ -43,6 +43,12 @@ routes:
           - |
             return function(conf, ctx)
               local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
               local model
               local body = core.request.get_body()
               if body then
@@ -119,6 +125,12 @@ routes:
           - |
             return function(conf, ctx)
               local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
               local model
               local body = core.request.get_body()
               if body then
@@ -135,6 +147,8 @@ routes:
         request_headers: [Authorization, X-Aisa-Requested-Model]
         upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
         client_headers: [Content-Type]
+        # Adapter rule 4: aisa unreachable and failing closed is a 503, not the default 403.
+        status_on_error: 503
       proxy-rewrite:
         uri: /v1/chat/completions
     upstream:
@@ -254,8 +268,11 @@ routes:
           - |
             return function(conf, ctx)
               local core = require("apisix.core")
-              for _, h in ipairs({"X-Aisa-Model", "X-Aisa-Consumer", "X-Aisa-Budget-Remaining"}) do
-                core.request.set_header(ctx, h, nil)
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
               end
             end
       forward-auth:

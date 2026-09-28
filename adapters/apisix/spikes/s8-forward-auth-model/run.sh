@@ -16,7 +16,13 @@ STUB=http://127.0.0.1:8081
 
 "${COMPOSE[@]}" up -d --build --wait >/dev/null
 # The route file is loaded asynchronously after the port opens.
-until [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/a/v1/chat/completions")" != "404" ]; do sleep 1; done
+# 000: not listening yet, 404: routes not loaded yet.
+for i in $(seq 1 60); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/a/v1/chat/completions" || true)
+    [ "$code" != "000" ] && [ "$code" != "404" ] && break
+    [ "$i" -eq 60 ] && { echo "gateway not ready (last status $code)" >&2; exit 1; }
+    sleep 1
+done
 
 body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
@@ -82,6 +88,14 @@ for v in d e; do
     check "model without a backend is rejected" "$([ "$v" = d ] && echo 404 || echo 400)" "$STATUS"
     call "$v" dev-key-blocked "$hi"
     check "denied consumer still gets 429" 429 "$STATUS"
+    if [ "$v" = d ]; then
+        # Rule 1: a client-supplied X-Aisa-* header must not reach the inner route (seen in its usage event).
+        call d dev-key-chat-ui "$hi" -H 'X-Aisa-Budget-Remaining: 999' -H 'X-Aisa-Spoof: yes'
+        sleep 2
+        leaked=$(curl -fsS "$STUB/debug/requests?kind=usage" |
+            jq -r '[.[-1].body.request.headers | keys[] | select(test("^x-aisa-(budget-remaining|spoof)$"))] | length')
+        check "client X-Aisa-* headers stripped before the inner route" 0 "$leaked"
+    fi
 
     # Streaming: 100 tokens × 5 ms from mock-local; the first byte must arrive long before the end.
     t=$(curl -sS -o "$body_file" -w '%{time_starttransfer} %{time_total}' -N \
@@ -129,7 +143,9 @@ for v in f1 f2; do
     echo "        status $STATUS, served by: $(served_by)"
 done
 call b no-such-key "$hi"
-check "fail closed (no allow_degradation): status" 403 "$STATUS"
+check "fail closed, forward-auth default: status" 403 "$STATUS"
+call d no-such-key "$hi"
+check "fail closed, d with status_on_error: 503" 503 "$STATUS"
 "${COMPOSE[@]}" unpause stub-aisa >/dev/null 2>&1
 
 

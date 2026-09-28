@@ -12,6 +12,8 @@ routes:
         request_headers: [Authorization, X-Request-Id]
         upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
         client_headers: [Content-Type]
+        # aisa unreachable is a 503 (ADAPTER_CONTRACT.md adapter rules), not forward-auth's default 403.
+        status_on_error: 503
       ai-proxy-multi:
         instances:
           - name: mock-local
