@@ -19,14 +19,14 @@ on:
       - "**/*.md"
       - "LICENSE"
 
-permissions:
-  contents: read
-  pull-requests: read
+permissions: {}
 
 jobs:
   coverage:
     # Runs the pull request's code, so it gets no secrets.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -53,6 +53,9 @@ jobs:
     # Holds the Sonar credentials and never runs the repository's code.
     needs: coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
