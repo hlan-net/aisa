@@ -6,6 +6,20 @@ routes:
     uri: /v1/chat/completions
     methods: [POST]
     plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            -- Adapter rule 1 (ADAPTER_CONTRACT.md): no client-supplied X-Aisa-* header reaches
+            -- the decision or the backend; only aisa's answer sets them.
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+            end
       forward-auth:
         uri: http://stub-aisa:8080/v1/decide
         request_method: POST

@@ -11,7 +11,7 @@ docker compose -f dev/compose.yaml down -v              # afterwards
 |---|---|
 | [`config.yaml`](config.yaml) | The dev config plus an internal listener on `127.0.0.1:9081` |
 | [`apisix.yaml`](apisix.yaml) | One route (or route set) per variant, `/a/` … `/f2/` |
-| [`run.sh`](run.sh) | Sends requests through each variant and checks what the stub aisa and the mock backends saw |
+| [`run.sh`](run.sh) | Sends requests through each variant and checks what the stub aisa and the mock backends saw; exits non-zero unless exactly the checks of c and f1 fail |
 
 ## Variants
 
@@ -59,7 +59,7 @@ variant d
   ok    client X-Aisa-* headers stripped before the inner route    0
   ok    streaming: usage chunk arrives                             100
   ok    streaming: first byte before half of total (not buffered)  yes
-        first byte / total (s): 0.065598 0.597398
+        first byte / total (s): 0.067335 0.592557
 variant e
   ok    qwen3 → mock-local                                       mock-local qwen3
   ok    cloud-large → mock-cloud                                 mock-cloud cloud-large
@@ -69,7 +69,7 @@ variant e
   ok    denied consumer still gets 429                             429
   ok    streaming: usage chunk arrives                             100
   ok    streaming: first byte before half of total (not buffered)  yes
-        first byte / total (s): 0.064834 0.591380
+        first byte / total (s): 0.064412 0.589995
 variant d: the internal listener is loopback-only
   ok    apisix:9081 unreachable from the network (000 = refused)   000
 
@@ -85,10 +85,10 @@ variant d: the internal listener is loopback-only
   ok    no consumer key in the usage events                        0
 
 == Latency: 50 sequential non-streaming requests per variant, median and p95 of total time (ms)
-  a  p50 54.2  p95 55.7
-  b  p50 53.9  p95 55.7
-  d  p50 54.5  p95 56.1
-  e  p50 53.7  p95 55.0
+  a  p50 54.6  p95 56.8
+  b  p50 54.0  p95 55.9
+  d  p50 54.6  p95 56.6
+  e  p50 53.9  p95 58.8
 
 == Part 3: fail open (allow_degradation) while aisa is unreachable
 variant f1
@@ -100,5 +100,5 @@ variant f2
   ok    fail closed, forward-auth default: status                  403
   ok    fail closed, d with status_on_error: 503                   503
 
-2 checks failed (variant c and f1 are expected to fail)
+all checks as expected (2 expected failures: variants c and f1)
 ```

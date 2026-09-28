@@ -27,6 +27,12 @@ done
 body_file=$(mktemp)
 trap 'rm -f "$body_file"' EXIT
 failures=0
+failed=()
+# The unsafe or impossible variants: these checks document a failure and must fail.
+expected_failures=(
+    "route matching sees forward-auth's header"
+    "unknown key + client X-Aisa-Model: cloud-large is not served"
+)
 
 # call <variant> <key> <json> [curl args...] → sets STATUS, BODY
 call() {
@@ -47,6 +53,7 @@ check() {
     else
         printf '  FAIL  %-58s want %s, got %s\n' "$1" "$2" "$3"
         failures=$((failures + 1))
+        failed+=("$1")
     fi
 }
 
@@ -154,4 +161,11 @@ check "fail closed, d with status_on_error: 503" 503 "$STATUS"
 
 
 echo
-if [ "$failures" -eq 0 ]; then echo "all checks as expected"; else echo "$failures checks failed (variant c and f1 are expected to fail)"; fi
+# Exit non-zero unless exactly the expected checks failed, so a regression in b, d or e is visible.
+if [ "$(printf '%s\n' "${failed[@]}" | sort)" = "$(printf '%s\n' "${expected_failures[@]}" | sort)" ]; then
+    echo "all checks as expected ($failures expected failures: variants c and f1)"
+else
+    echo "UNEXPECTED RESULT: failed checks differ from the expected ones (variants c and f1)" >&2
+    printf '  failed:   %s\n' "${failed[@]}" >&2
+    exit 1
+fi
