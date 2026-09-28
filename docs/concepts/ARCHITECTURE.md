@@ -51,6 +51,26 @@ aisa/
 └── dashboards/               # Grafana JSON + alert rules
 ```
 
+## Packaging and deployment
+
+aisa is released as two artifacts, both on GitHub Container Registry:
+
+| Artifact | Where | Built by |
+|---|---|---|
+| Container image | `ghcr.io/hlan-net/aisa`, multi-arch (linux/amd64 and linux/arm64) | `.github/workflows/release.yml` on `v*` tags (`<version>` and `latest`) |
+| Helm chart | `oci://ghcr.io/hlan-net/charts/aisa`, pushed with `helm push` | The same release workflow; the chart's `version` and `appVersion` follow the release tag |
+
+A cluster installs aisa from the OCI chart with its own values, from a separate deployment repository or a GitOps tool:
+
+```bash
+helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> \
+  --namespace aisa --create-namespace -f values.yaml
+```
+
+- **Own namespace.** aisa, the gateway and Redis run together in a dedicated namespace (`aisa` by default), not in `kube-system`. Vault's Kubernetes auth binds roles to a namespace and service account, so aisa's Vault access stays separate from other workloads, and NetworkPolicies, resource quotas and upgrades apply to aisa alone.
+- **Shared service.** Applications in other namespaces use the gateway's Service as an OpenAI-compatible endpoint (e.g. `http://<gateway-service>.aisa.svc.cluster.local/v1`); clients outside the cluster come in through an internal ingress (see [Exposure](#exposure)). A namespace is not an identity: each application authenticates with its own consumer credential ([`VAULT.md`](./VAULT.md)).
+- **Gateway.** The gateway is installed separately, with its upstream chart or plain manifests (spike S5) and the files in `adapters/<gateway>/`; aisa's chart does not bundle it.
+
 ## Exposure
 
 Keep the gateway endpoint internal: behind an IP allowlist or on an internal-only ingress. A leaked consumer key on a public endpoint means unmetered use of paid providers until the key is revoked. aisa's decision and ingest endpoints are cluster-internal only (ClusterIP plus a NetworkPolicy that allows only the gateway pods).
