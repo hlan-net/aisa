@@ -161,30 +161,91 @@ func (s *server) usage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// http-logger style sinks send either one object or a batch as an array.
-	var events []json.RawMessage
-	trimmed := bytes.TrimSpace(body)
-	switch {
-	case len(trimmed) > 0 && trimmed[0] == '[':
-		if err := json.Unmarshal(trimmed, &events); err != nil {
-			s.store(rec)
-			devutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON array: " + err.Error()})
-			return
-		}
-	case json.Valid(trimmed):
-		events = []json.RawMessage{trimmed}
-	default:
+	events, err := parseEvents(body)
+	if err != nil {
 		s.store(rec)
-		devutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "body is not JSON"})
+		devutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
 	rec.Events = len(events)
 	s.store(rec)
 	for _, ev := range events {
-		s.log.Info("usage event", "event", ev)
+		s.log.Info("usage event", "event", redactJSON(ev))
 	}
 	devutil.WriteJSON(w, http.StatusOK, map[string]int{"accepted": len(events)})
+}
+
+// parseEvents accepts one JSON object or an array of objects, as http-logger style sinks send
+// them, and rejects anything else.
+func parseEvents(body []byte) ([]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var events []json.RawMessage
+		if err := json.Unmarshal(trimmed, &events); err != nil {
+			return nil, fmt.Errorf("invalid JSON array: %w", err)
+		}
+		for i, ev := range events {
+			if !isObject(ev) {
+				return nil, fmt.Errorf("event %d is not a JSON object", i)
+			}
+		}
+		return events, nil
+	}
+	if !isObject(trimmed) {
+		return nil, fmt.Errorf("body is not a JSON object or an array of objects")
+	}
+	return []json.RawMessage{trimmed}, nil
+}
+
+func isObject(raw []byte) bool {
+	raw = bytes.TrimSpace(raw)
+	return len(raw) > 0 && raw[0] == '{' && json.Valid(raw)
+}
+
+// sensitiveKeys are JSON keys whose values are credentials. Gateways' default log formats can
+// include the client's request headers, so received bodies are redacted before they are logged
+// or kept for /debug/requests.
+var sensitiveKeys = map[string]bool{
+	"authorization":       true,
+	"proxy-authorization": true,
+	"x-api-key":           true,
+	"api-key":             true,
+	"api_key":             true,
+	"cookie":              true,
+}
+
+// redactJSON replaces the values of sensitive keys at any depth. Invalid JSON is returned as is.
+func redactJSON(raw []byte) json.RawMessage {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return raw
+	}
+	out, err := json.Marshal(redactValue(v))
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func redactValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if sensitiveKeys[strings.ToLower(k)] {
+				t[k] = "<redacted>"
+			} else {
+				t[k] = redactValue(val)
+			}
+		}
+	case []any:
+		for i := range t {
+			t[i] = redactValue(t[i])
+		}
+	}
+	return v
 }
 
 func (s *server) newRecord(r *http.Request, kind string) (Record, []byte, error) {
@@ -201,7 +262,7 @@ func (s *server) newRecord(r *http.Request, kind string) (Record, []byte, error)
 	}
 	if len(body) > 0 {
 		if json.Valid(body) {
-			rec.Body = json.RawMessage(body)
+			rec.Body = redactJSON(body)
 		} else {
 			rec.RawBody = string(body)
 		}
