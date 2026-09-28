@@ -25,18 +25,32 @@ A gateway integrates through three contracts. The fourth is the output aisa itse
 This follows the forward-auth / external authorization pattern that most gateways already support: APISIX `forward-auth`, Envoy `ext_authz`, Traefik `ForwardAuth`, Kong, and LiteLLM custom auth.
 
 ```
-POST /v1/decide
-  in:  Authorization header, requested model, route, optional body summary
+POST /v1/decide            (GET is accepted too, for gateways that cannot send a body)
+  in:  Authorization         the client's credential, unchanged
+       X-Aisa-Requested-Model  the model from the request body, set by the adapter
+       (or the JSON request body, when the header is absent)
+       X-Forwarded-Uri / -Method / -Host   the original request, where the gateway sends them
   out: 200 + headers   X-Aisa-Consumer: batch-jobs
                        X-Aisa-Model: qwen3              (possibly rewritten, e.g. budget downgrade)
                        X-Aisa-Budget-Remaining: 4.20
+       400 no model in the header or the body
        401 unknown or invalid credential
-       429 quota or budget exhausted (OpenAI-style JSON error body)
+       429 quota or budget exhausted
+       (errors carry an OpenAI-style JSON error body, which the adapter passes to the client)
 ```
 
 - aisa authenticates the client (consumer key or JWT, both backed by Vault), so the gateway needs no per-consumer configuration.
-- The decision needs the **model name**, which is in the request body. Gateways that forward the body (Envoy `with_request_body`) send it directly. Gateways that only forward headers need a small pre-step that copies `model` to a header (spike S8).
-- **Fail policy** is configurable per consumer: `closed` (reject if aisa is down) for paid providers, `open` for local models.
+- The decision needs the **model name**, which is in the request body. Gateways that forward the body (Envoy `with_request_body`, APISIX `forward-auth` with `POST`) can send it directly. The preferred form is the `X-Aisa-Requested-Model` header, set by a small pre-step that copies `model` from the body, so aisa never receives the prompt (spike S8). The header takes precedence over the body.
+- **Fail policy** is configurable per consumer: `closed` (reject if aisa is down) for paid providers, `open` for local models. When aisa is unreachable the gateway cannot tell which consumer a request belongs to, so this is an open design question; until it is settled, adapters fail closed with 503.
+
+### Adapter rules for the decision
+
+Spike S8 showed that these must hold for the decision to be safe and for downgrade to work:
+
+1. **Strip client-supplied `X-Aisa-*` headers** before the decision. Some forward-auth implementations clear them only on a successful answer, so a client could otherwise choose the model itself when aisa is unreachable and the adapter fails open.
+2. **Set `X-Aisa-Requested-Model` from the body**, overwriting any client value, or forward the body.
+3. **Route by `X-Aisa-Model` and forward the request with that model**, not the one the client asked for. A downgrade changes both the backend and the model name in the forwarded body.
+4. **Pass aisa's 401, 429 and 400 answers to the client unchanged**, and answer 503 when aisa is unreachable and the fail policy is closed.
 
 ## 2. Usage events (after the request)
 
@@ -69,7 +83,7 @@ Backends (Consul catalog), provider keys (Vault) and model routing live in aisa'
 
 | Adapter | Template output | Reload |
 |---|---|---|
-| APISIX | `apisix.yaml` (standalone mode): routes, `ai-proxy-multi` instances, forward-auth, http-logger | APISIX reloads standalone config on file change |
+| APISIX | `apisix.yaml` (standalone mode): the client-facing route (pre-step, forward-auth), one internal route per model with its `ai-proxy-multi` instances, http-logger | APISIX reloads standalone config on file change |
 | LiteLLM (planned second adapter) | `config.yaml` `model_list` | restart or config API |
 | Envoy AI Gateway / Agent Router (possible) | `AIServiceBackend` / `AIGatewayRoute` resources | apply to the cluster |
 
@@ -93,7 +107,7 @@ Gateway-native metrics (e.g. `apisix_llm_*`) are still scraped, but they only se
 ## Adapter checklist
 
 An adapter is complete when it provides:
-1. a way to call `/v1/decide` before proxying, including the model name, and to apply the returned headers
+1. a way to call `/v1/decide` before proxying, including the model name, and to apply the returned headers following the [adapter rules](#adapter-rules-for-the-decision)
 2. a usage log sink that maps to the event schema, including streaming token counts
 3. a consul-template template for the gateway config
 4. an example deployment and an integration test against a mock backend

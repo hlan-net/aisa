@@ -112,8 +112,9 @@ services:
   apisix:
     image: apache/apisix:3.18.0-debian
     volumes:
-      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
-      - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+      # Spikes swap in their own files, e.g. APISIX_ROUTES=../adapters/apisix/spikes/<spike>/apisix.yaml
+      - ${APISIX_CONFIG:-./apisix/config.yaml}:/usr/local/apisix/conf/config.yaml:ro
+      - ${APISIX_ROUTES:-./apisix/apisix.yaml}:/usr/local/apisix/conf/apisix.yaml:ro
     ports:
       - "127.0.0.1:9080:9080"
       - "127.0.0.1:9091:9091"

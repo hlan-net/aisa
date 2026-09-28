@@ -23,7 +23,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | PR | Branch | Scope | Status |
 |----|--------|-------|--------|
 | 1 | `feature/dev-environment` | Docker Compose dev stack, mock backend, stub aisa that logs what it receives | In review |
-| 2 | `spike/forward-auth-model` | S8: model name to `/v1/decide`, routing by `X-Aisa-Model` | — |
+| 2 | `spike/forward-auth-model` | S8: model name to `/v1/decide`, routing by `X-Aisa-Model` | In review: works with an internal hop |
 | 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | — |
 | 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | — |
 | 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | — |
@@ -64,7 +64,9 @@ Prove the contract with a second gateway. **LiteLLM** is the most likely: its op
 Improvements that belong in the gateways rather than in aisa:
 1. APISIX Vault secret manager: KV v2 support
 2. APISIX Vault secret manager: Kubernetes auth
-3. Anything the spikes uncover, e.g. token usage in log variables for streaming responses
+3. `ai-proxy-multi`: select the instance by model or by a request header, which would remove the internal hop the adapter needs today (spike S8)
+4. `forward-auth`: clear the `upstream_headers` also when `allow_degradation` lets a request through (spike S8)
+5. Anything the spikes uncover, e.g. token usage in log variables for streaming responses
 
 ## Principles
 
