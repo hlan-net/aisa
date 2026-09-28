@@ -11,7 +11,7 @@ docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s2-s6-usage-events/
 
 | File | Contents |
 |---|---|
-| [`apisix.yaml`](apisix.yaml) | Two routes with the `log_format` proposed for the adapter: `/u/` to `mock-local`, `/n/` to `mock-nousage` |
+| [`apisix.yaml`](apisix.yaml) | Two routes with the `log_format` proposed for the adapter: `/u/` to `mock-local`, `/n/` to `mock-nousage`. A pre-step strips client-supplied `X-Aisa-*` headers (adapter rule 1) |
 | [`compose.override.yaml`](compose.override.yaml) | Adds `mock-nousage`, a mock backend that never streams usage |
 | [`run.sh`](run.sh) | One request per scenario; checks its usage event against the mock's deterministic counts. `GAP` checks assert today's known-wrong behaviour, so a change shows up. Exits non-zero on any unexpected result |
 | [`hailo-litellm.yaml`](hailo-litellm.yaml) | LiteLLM configuration that puts an OpenAI endpoint with streaming and usage in front of hailo-ollama |
@@ -23,10 +23,10 @@ docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s2-s6-usage-events/
 |---|---|---|
 | `ts` | `$time_iso8601` | when the request was logged |
 | `request_id` | `$apisix_request_id` | `forward-auth` sends the same value to `/v1/decide` via `extra_headers: {X-Request-Id: $apisix_request_id}` |
-| `consumer` | `$http_x_aisa_consumer` | set by `forward-auth` from aisa's answer |
+| `consumer` | `$http_x_aisa_consumer` | set by `forward-auth` from aisa's answer; empty when aisa denies, because the pre-step removed any value the client sent |
 | `model` / `requested_model` | `$llm_model` / `$request_llm_model` | |
 | `backend` | `$balancer_ip` | `ai-proxy-multi` stores the chosen instance's name there |
-| `prompt_tokens` / `completion_tokens` | `$llm_prompt_tokens` / `$llm_completion_tokens` | numbers, or `"0"` when no usage was seen |
+| `prompt_tokens` / `completion_tokens` | `$llm_prompt_tokens` / `$llm_completion_tokens` | numbers when usage was seen; `"0"`, or `0` from a backend that reports no usage (hailo-ollama), when not |
 | `status` | `$status` | |
 | `latency_ms` | `$apisix_upstream_response_time` | milliseconds at the backend; `$request_time` is in seconds and log formats cannot convert |
 | `ttft_ms` | `$llm_time_to_first_token` | |
@@ -65,6 +65,7 @@ docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s2-s6-usage-events/
 == Events for requests that never reach a backend, or fail there
   ok    backend answers 404: status / tokens                           404 0/0
   ok    aisa denies (429): status / tokens / backend                   429 0/0 null
+  ok    denied, client sends X-Aisa-Consumer: consumer                 null
 
 all checks as expected
 ```

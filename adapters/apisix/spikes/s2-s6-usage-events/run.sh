@@ -111,6 +111,9 @@ check "backend answers 404: status / tokens" "404 0/0" "$(field status) $(tokens
 send u dev-key-blocked "$prompt}"
 check "aisa denies (429): status / tokens / backend" "429 0/0 null" "$(field status) $(tokens) $(field backend)"
 
+send u dev-key-blocked "$prompt}" -H 'X-Aisa-Consumer: forged'
+check "denied, client sends X-Aisa-Consumer: consumer" null "$(field consumer)"
+
 echo
 if [ "$failures" -eq 0 ]; then
     echo "all checks as expected"

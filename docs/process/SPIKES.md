@@ -51,7 +51,7 @@ Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.
 2. **The backend's name is available** as `$balancer_ip`, where `ai-proxy-multi` stores the chosen instance's name. aisa can look up provider and prices from it, so `provider` need not come from the gateway.
 3. **Types are not stable.** Token counts are JSON numbers when usage was seen and the strings `"0"` when not; `stream` is `"true"`/`"false"`. aisa's ingest must accept numeric and boolean strings.
 4. **Latency in milliseconds** comes from `$apisix_upstream_response_time` (time at the backend, including the whole stream). `$request_time` is in seconds, and a log format cannot convert units. `$llm_time_to_first_token` is in milliseconds.
-5. **Every request is logged**, including aisa's 401/429 (no tokens, no backend) and backend errors (their status, zero tokens).
+5. **Every request is logged**, including aisa's 401/429 (no tokens, no backend) and backend errors (their status, zero tokens). A denied request keeps any `X-Aisa-Consumer` the client sent, and that value would be logged as its consumer, so the adapter's pre-step must strip client-supplied `X-Aisa-*` headers (rule 1 from S8) on every route that logs usage.
 
 **S2 result: partly, and it found a gap.** Against the mock backends, whose counts are known exactly:
 

@@ -5,14 +5,29 @@
 #   /n/  forward-auth + ai-proxy-multi → mock-nousage  (never streams usage, like a server that
 #                                                        ignores stream_options.include_usage)
 #
-# Both use the log_format proposed for the APISIX adapter. forward-auth passes the request id to
-# /v1/decide so a decision and its usage event can be matched.
+# Both use the log_format proposed for the APISIX adapter. A pre-step strips client-supplied X-Aisa-*
+# headers, so a denied request cannot log a consumer of its own choosing. forward-auth passes the
+# request id to /v1/decide so a decision and its usage event can be matched.
 
 routes:
   - id: usage
     uri: /u/v1/chat/completions
     methods: [POST]
     plugins:
+      serverless-pre-function: &strip_aisa_headers
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision, the
+              -- upstream or the usage event (consumer comes from $http_x_aisa_consumer).
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+            end
       forward-auth:
         uri: http://stub-aisa:8080/v1/decide
         request_method: POST
@@ -51,6 +66,7 @@ routes:
     uri: /n/v1/chat/completions
     methods: [POST]
     plugins:
+      serverless-pre-function: *strip_aisa_headers
       forward-auth:
         uri: http://stub-aisa:8080/v1/decide
         request_method: POST
