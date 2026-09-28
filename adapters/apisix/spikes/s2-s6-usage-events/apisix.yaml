@@ -1,0 +1,73 @@
+# Spike S2 + S6: can APISIX http-logger produce the usage event schema (ADAPTER_CONTRACT.md,
+# contract 2), and are the token counts right for streamed responses?
+#
+#   /u/  forward-auth + ai-proxy-multi → mock-local    (streams usage when asked, like OpenAI)
+#   /n/  forward-auth + ai-proxy-multi → mock-nousage  (never streams usage, like a server that
+#                                                        ignores stream_options.include_usage)
+#
+# Both use the log_format proposed for the APISIX adapter. forward-auth passes the request id to
+# /v1/decide so a decision and its usage event can be matched.
+
+routes:
+  - id: usage
+    uri: /u/v1/chat/completions
+    methods: [POST]
+    plugins:
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        extra_headers:
+          X-Request-Id: $apisix_request_id
+        status_on_error: 503
+      ai-proxy-multi:
+        instances:
+          - name: mock-local
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            override: {endpoint: http://mock-local:8080/v1/chat/completions}
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format: &usage_event
+          ts: $time_iso8601
+          request_id: $apisix_request_id
+          consumer: $http_x_aisa_consumer
+          model: $llm_model
+          requested_model: $request_llm_model
+          backend: $balancer_ip
+          prompt_tokens: $llm_prompt_tokens
+          completion_tokens: $llm_completion_tokens
+          status: $status
+          latency_ms: $apisix_upstream_response_time
+          ttft_ms: $llm_time_to_first_token
+          stream: $llm_stream
+
+  - id: usage-nousage
+    uri: /n/v1/chat/completions
+    methods: [POST]
+    plugins:
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        extra_headers:
+          X-Request-Id: $apisix_request_id
+        status_on_error: 503
+      ai-proxy-multi:
+        instances:
+          - name: mock-nousage
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            override: {endpoint: http://mock-nousage:8080/v1/chat/completions}
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format: *usage_event
+#END

@@ -11,7 +11,7 @@ aisa gives every application an identity, a quota and a budget, and keeps the bo
 
 - Architecture and the three aisa ↔ gateway contracts are written down ([docs/concepts/](docs/concepts/))
 - Quotas, money budgets and usage metrics are specified ([docs/features/](docs/features/))
-- Open questions are listed as spikes ([docs/process/SPIKES.md](docs/process/SPIKES.md))
+- Open questions are listed as spikes ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S8 and S6 are answered, S2 in part
 - Local dev stack with a mock backend and a stub aisa ([dev/](dev/))
 
 ---
@@ -22,9 +22,9 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 
 | PR | Branch | Scope | Status |
 |----|--------|-------|--------|
-| 1 | `feature/dev-environment` | Docker Compose dev stack, mock backend, stub aisa that logs what it receives | In review |
-| 2 | `spike/forward-auth-model` | S8: model name to `/v1/decide`, routing by `X-Aisa-Model` | In review: works with an internal hop |
-| 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | — |
+| 1 | `feature/dev-environment` | Docker Compose dev stack, mock backend, stub aisa that logs what it receives | Done ([#7](https://github.com/hlan-net/aisa/pull/7)) |
+| 2 | `spike/forward-auth-model` | S8: model name to `/v1/decide`, routing by `X-Aisa-Model` | Done ([#8](https://github.com/hlan-net/aisa/pull/8)): works with an internal hop |
+| 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | In review: S6 yes; S2 exact only when usage is streamed ([#12](https://github.com/hlan-net/aisa/issues/12)); real Ollama pending |
 | 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | — |
 | 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | — |
 
@@ -64,9 +64,10 @@ Prove the contract with a second gateway. **LiteLLM** is the most likely: its op
 Improvements that belong in the gateways rather than in aisa:
 1. APISIX Vault secret manager: KV v2 support
 2. APISIX Vault secret manager: Kubernetes auth
-3. `ai-proxy-multi`: select the instance by model or by a request header, which would remove the internal hop the adapter needs today (spike S8)
-4. `forward-auth`: clear the `upstream_headers` also when `allow_degradation` lets a request through (spike S8)
-5. Anything the spikes uncover, e.g. token usage in log variables for streaming responses
+3. `ai-proxy`: count streamed tokens when the backend sends no usage, and log partial usage (and 499) when the client disconnects (spikes S2/S6, [#12](https://github.com/hlan-net/aisa/issues/12))
+4. `ai-proxy-multi`: select the instance by model or by a request header, which would remove the internal hop the adapter needs today (spike S8)
+5. `forward-auth`: clear the `upstream_headers` also when `allow_degradation` lets a request through (spike S8)
+6. Anything the spikes uncover, e.g. token usage in log variables for streaming responses
 
 ## Principles
 
