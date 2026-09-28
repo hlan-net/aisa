@@ -12,7 +12,7 @@ aisa gives every application an identity, a quota and a budget, and keeps the bo
 - Architecture and the three aisa ↔ gateway contracts are written down ([docs/concepts/](docs/concepts/))
 - Quotas, money budgets and usage metrics are specified ([docs/features/](docs/features/))
 - Open questions are listed as spikes ([docs/process/SPIKES.md](docs/process/SPIKES.md))
-- No code yet
+- Local dev stack with a mock backend and a stub aisa ([dev/](dev/))
 
 ---
 
@@ -22,7 +22,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 
 | PR | Branch | Scope | Status |
 |----|--------|-------|--------|
-| 1 | `feature/dev-environment` | Docker Compose dev stack, mock backend, stub aisa that logs what it receives | — |
+| 1 | `feature/dev-environment` | Docker Compose dev stack, mock backend, stub aisa that logs what it receives | In review |
 | 2 | `spike/forward-auth-model` | S8: model name to `/v1/decide`, routing by `X-Aisa-Model` | — |
 | 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | — |
 | 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | — |

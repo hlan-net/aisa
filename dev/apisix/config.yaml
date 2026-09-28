@@ -1,0 +1,22 @@
+# APISIX in standalone mode: routes come from apisix.yaml, no etcd and no Admin API.
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+apisix:
+  node_listen: 9080
+  enable_admin: false
+  # Docker networks often have no IPv6; listening on [::] would then fail at startup.
+  enable_ipv6: false
+  # Re-resolve service names quickly: containers get new addresses when they are recreated.
+  dns_resolver_valid: 1
+
+nginx_config:
+  error_log_level: warn
+
+plugin_attr:
+  prometheus:
+    export_addr:
+      ip: 0.0.0.0
+      port: 9091

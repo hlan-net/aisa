@@ -17,3 +17,16 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+
+  # Dev stack: tools image and the pinned service images.
+  - package-ecosystem: "docker"
+    directory: "/dev"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "docker-compose"
+    directory: "/dev"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

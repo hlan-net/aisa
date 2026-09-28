@@ -1,12 +1,10 @@
 # AGENTS.md
 
-aisa — AI Service [Access, Admin, Authority] — is a Vault- and Consul-native governance layer for LLM traffic that sits beside an existing AI gateway (APISIX is the reference adapter). It is not a gateway and never proxies model traffic. Go, Apache 2.0. **Design phase: no code yet**; start from `docs/concepts/ARCHITECTURE.md`, `docs/concepts/ADAPTER_CONTRACT.md` and `docs/process/SPIKES.md`.
+aisa — AI Service [Access, Admin, Authority] — is a Vault- and Consul-native governance layer for LLM traffic that sits beside an existing AI gateway (APISIX is the reference adapter). It is not a gateway and never proxies model traffic. Go, Apache 2.0. **Design phase (v0.1.0)**: the only code is the dev stack in `dev/` (mock backend, stub aisa); start from `docs/concepts/ARCHITECTURE.md`, `docs/concepts/ADAPTER_CONTRACT.md` and `docs/process/SPIKES.md`.
 
 `CLAUDE.md` covers the same ground in more detail; keep the two reconciled when changing one.
 
 ## Build / test
-
-Once `go.mod` exists:
 
 ```bash
 go build ./...
@@ -14,6 +12,8 @@ go vet ./...
 go test -race ./...
 golangci-lint run
 ```
+
+Dev stack: `docker compose -f dev/compose.yaml up -d --build --wait && ./dev/smoke.sh` (see `dev/README.md`).
 
 Pre-push hook: `./scripts/install-git-hooks.sh`; bypass with `SKIP_PRE_PUSH_TESTS=1 git push`.
 

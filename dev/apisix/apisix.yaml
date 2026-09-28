@@ -1,0 +1,29 @@
+# Baseline dev route: forward-auth to the stub aisa, proxy to the local mock backend and send
+# an access log entry to the stub's usage endpoint. The spikes change this file; the rendered
+# production config will come from a consul-template template under adapters/apisix/.
+routes:
+  - id: chat-completions
+    uri: /v1/chat/completions
+    methods: [POST]
+    plugins:
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization, X-Request-Id]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type]
+      ai-proxy-multi:
+        instances:
+          - name: mock-local
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+#END
