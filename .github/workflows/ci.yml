@@ -33,7 +33,7 @@ jobs:
       # hashFiles() is only available in step conditions, not in a job-level `if`.
       - name: Set up Go
         if: ${{ hashFiles('go.mod') != '' }}
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -53,7 +53,7 @@ jobs:
 
       - name: Set up Go
         if: ${{ hashFiles('go.mod') != '' }}
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
