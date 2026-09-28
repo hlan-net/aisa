@@ -1,0 +1,19 @@
+# Spike S2/S6: extra mock backends with different streamed-usage behaviour.
+#   docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s2-s6-usage-events/compose.override.yaml ...
+services:
+  mock-nousage:
+    image: aisa-dev-tools:local
+    entrypoint: ["/usr/local/bin/mockbackend"]
+    environment:
+      MOCK_NAME: mock-nousage
+      MOCK_STREAM_USAGE: never
+      MOCK_TTFT: 50ms
+      MOCK_TOKEN_DELAY: 5ms
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/mockbackend", "-healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  apisix:
+    depends_on:
+      mock-nousage: {condition: service_healthy}

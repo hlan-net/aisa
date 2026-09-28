@@ -60,6 +60,12 @@ func newServer(cfg Config, log *slog.Logger) http.Handler {
 	})
 	mux.HandleFunc("GET /v1/models", s.models)
 	mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
+	// A minimal part of Ollama's native API, so scripts written for a real Ollama can run
+	// against the mock.
+	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
+		devutil.WriteJSON(w, http.StatusOK, map[string]string{"version": "mock"})
+	})
+	mux.HandleFunc("POST /api/chat", s.ollamaChat)
 	return mux
 }
 
@@ -312,4 +318,40 @@ func sleep(r *http.Request, d time.Duration) bool {
 	case <-r.Context().Done():
 		return false
 	}
+}
+
+// ollamaChat answers Ollama's native POST /api/chat, non-streaming only, with the same token
+// counts as the OpenAI endpoint: prompt_eval_count and eval_count.
+func (s *server) ollamaChat(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Mock-Backend", s.cfg.Name)
+	var req struct {
+		Model    string        `json:"model"`
+		Messages []chatMessage `json:"messages"`
+		Stream   *bool         `json:"stream"`
+		Options  struct {
+			NumPredict int `json:"num_predict"`
+		} `json:"options"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
+		devutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid request body: %v", err)})
+		return
+	}
+	if req.Stream == nil || *req.Stream {
+		devutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "the mock supports only \"stream\": false"})
+		return
+	}
+	n, _, err := s.completionTokens(r, chatRequest{MaxTokens: req.Options.NumPredict})
+	if err != nil {
+		devutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	sleep(r, s.cfg.TTFT)
+	devutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"model":             req.Model,
+		"created_at":        s.cfg.Now().UTC().Format(time.RFC3339Nano),
+		"message":           map[string]string{"role": "assistant", "content": completionText(n)},
+		"done":              true,
+		"prompt_eval_count": promptTokens(req.Messages),
+		"eval_count":        n,
+	})
 }

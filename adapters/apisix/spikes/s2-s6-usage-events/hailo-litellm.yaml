@@ -1,0 +1,22 @@
+# Spike S2: LiteLLM in front of hailo-ollama, a backend whose OpenAI endpoint neither streams nor
+# reports usage. LiteLLM takes OpenAI-style requests and calls the backend's native /api/chat.
+#
+#   docker run --rm -p 127.0.0.1:4000:4000 -v "$PWD/hailo-litellm.yaml:/app/config.yaml:ro" \
+#     ghcr.io/berriai/litellm:main-stable --config /app/config.yaml --port 4000
+#
+# hailo-ollama accepts only Content-Type: application/json. LiteLLM sends
+# application/octet-stream to an Ollama backend unless the header is set here.
+model_list:
+  - model_name: qwen2.5:1.5b
+    litellm_params:
+      model: ollama_chat/qwen2.5:1.5b
+      api_base: http://npu-box.internal:8000
+      extra_headers: {Content-Type: application/json}
+  - model_name: qwen3:1.7b
+    litellm_params:
+      model: ollama_chat/qwen3:1.7b
+      api_base: http://npu-box.internal:8000
+      extra_headers: {Content-Type: application/json}
+litellm_settings:
+  telemetry: false
+  drop_params: true

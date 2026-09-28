@@ -6,9 +6,9 @@ Most spikes test whether the **APISIX adapter** can meet the contract in [`ADAPT
 
 | # | Question | Why it matters | How to test | Outcome |
 |---|---|---|---|---|
-| S2 | Are token counts in the gateway's log data correct for **streaming** responses from Ollama's OpenAI endpoint? | Usage events feed cost and budgets | Compare the logged counts with Ollama's own `eval_count` for streamed and non-streamed requests, with and without `stream_options.include_usage` | — |
+| S2 | Are token counts in the gateway's log data correct for **streaming** responses from Ollama's OpenAI endpoint? | Usage events feed cost and budgets | Compare the logged counts with Ollama's own `eval_count` for streamed and non-streamed requests, with and without `stream_options.include_usage` | **Partly** (2026-09-28): exact through APISIX when the backend streams usage, which a real Ollama does; lost when a backend does not or the client disconnects. [Details](#s2--s6-usage-events-from-apisix) |
 | S5 | Does the official `apache/apisix` Helm chart support standalone mode well, or are plain manifests simpler? | Adapter deployment shape | Install the chart with standalone values and check for an etcd dependency | — |
-| S6 | Can APISIX `http-logger` produce the usage event schema: token counts, model, TTFT and upstream from the AI plugin variables in `log_format`? | Contract 2 | Configure `log_format` with the `llm_*` variables and receive the events in the stub | — |
+| S6 | Can APISIX `http-logger` produce the usage event schema: token counts, model, TTFT and upstream from the AI plugin variables in `log_format`? | Contract 2 | Configure `log_format` with the `llm_*` variables and receive the events in the stub | **Yes** (2026-09-28), with type and latency caveats. [Details](#s2--s6-usage-events-from-apisix) |
 | S7 | Resource use on a small arm64 node (e.g. Raspberry Pi 4) of APISIX, aisa and consul-template together | Requests and limits, whether it runs on small clusters | Measure CPU and memory while running parallel streams | — |
 | S8 | Can APISIX `forward-auth` send the **model name** (it is in the body) to `/v1/decide`, and can the route then choose the backend from the returned `X-Aisa-Model` header? | Contract 1, including downgrade | Try `forward-auth` with body forwarding; if that fails, a `serverless-pre-function` that copies `model` to a header. Route to `ai-proxy-multi` by header. | **Yes, with an internal hop** (2026-09-28). [Details below](#s8-forward-auth-and-model-routing-on-apisix) |
 | S9 | Does consul-template render and reload a standalone `apisix.yaml` cleanly, without dropped requests during a reload? | Contract 3 | Render from a test Consul service, flip its health check, and run a request loop during re-renders | — |
@@ -40,3 +40,41 @@ Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.
 - The APISIX template renders the client-facing route plus one internal route per model. A model-aware instance selector in `ai-proxy-multi` would remove the hop and is listed as an upstream contribution in [`ROADMAP.md`](../../ROADMAP.md).
 - The fail policy cannot be per consumer as written: when aisa is unreachable, the gateway does not know who the consumer is. This is filed as a design issue; until it is settled the adapter fails closed.
 - Also observed: `ai-proxy-multi` has a 30 s default `timeout`, too short for slow local models; the template must set it. The default `http-logger` format includes the client's `Authorization` header, so the usage log format (S6) must be explicit.
+
+### S2 + S6: usage events from APISIX
+
+**2026-09-28**, APISIX 3.18.0 in standalone mode, dev stack with the stub aisa and mock backends. The configuration, scripts and full output are in [`adapters/apisix/spikes/s2-s6-usage-events/`](../../adapters/apisix/spikes/s2-s6-usage-events/).
+
+**S6 result: yes.** An explicit `http-logger` `log_format` produces every field of the usage event schema from APISIX variables, and nothing else, so no credential reaches the sink. The mapping is in the spike's README. Details that shape the contract:
+
+1. **Correlation works.** `forward-auth` can send `$apisix_request_id` to `/v1/decide` as `X-Request-Id` (`extra_headers`), and the usage event logs the same value.
+2. **The backend's name is available** as `$balancer_ip`, where `ai-proxy-multi` stores the chosen instance's name. aisa can look up provider and prices from it, so `provider` need not come from the gateway.
+3. **Types are not stable.** Token counts are JSON numbers when usage was seen and the strings `"0"` when not; `stream` is `"true"`/`"false"`. aisa's ingest must accept numeric and boolean strings.
+4. **Latency in milliseconds** comes from `$apisix_upstream_response_time` (time at the backend, including the whole stream). `$request_time` is in seconds, and a log format cannot convert units. `$llm_time_to_first_token` is in milliseconds.
+5. **Every request is logged**, including aisa's 401/429 (no tokens, no backend) and backend errors (their status, zero tokens). A denied request keeps any `X-Aisa-Consumer` the client sent, and that value would be logged as its consumer, so the adapter's pre-step must strip client-supplied `X-Aisa-*` headers (rule 1 from S8) on every route that logs usage.
+
+**S2 result: partly, and it found a gap.** Against the mock backends, whose counts are known exactly:
+
+1. **Exact when the backend streams usage.** APISIX adds `stream_options.include_usage` to streamed OpenAI-style requests itself, so counts are right even when the client did not ask for usage. A side effect: such clients now receive a final usage chunk they did not request (valid OpenAI streaming, but new to them).
+2. **Lost when the backend does not stream usage.** The event reports `"0"`/`"0"` with status 200 although 16 tokens were streamed. The same backend's non-streamed responses are exact.
+3. **Lost when the client disconnects mid-stream.** `"0"`/`"0"` with status 200, after more than 10 tokens had reached the client.
+4. The planned `AisaUsageEventsLost` alert compares aisa with the gateway's own metrics, which miss the same usage, so it cannot catch 2 or 3.
+
+**Against a real Ollama** (2026-09-28, Ollama 0.31.1 with CPU inference on a Raspberry Pi 5, arm64; `ollama.sh` with `llama3.2:3b`, `deepseek-r1:1.5b` and `qwen3`):
+
+1. **Ollama honours `include_usage`, and the counts are exact.** For all three models the usage event from APISIX equals Ollama's native `prompt_eval_count` and `eval_count`, non-streamed and streamed, whether the answer ended by itself or at `max_tokens`. Ollama's OpenAI endpoint reports the same numbers as its native API.
+2. **Without `include_usage` Ollama streams no usage.** Asked directly, a streamed request without it returns no counts. Through APISIX the counts are still exact, because APISIX adds the option (result 1 above). An adapter for a gateway that does not must add it.
+3. **Client disconnect: the gap is real.** A client that left after 149 streamed tokens produced an event with `"0"`/`"0"` and status 200. Ollama stopped generating when the connection closed.
+4. **The 30 s default `timeout` of `ai-proxy-multi` is too short** (as suspected in S8). Non-streamed requests to `deepseek-r1:1.5b` and `qwen3` ended in 504 after 30 s, with an event of status 504 and no tokens, and Ollama stopped generating. With `timeout: 600000`, the plugin's maximum, the same requests succeeded. The timeout limits the wait for data, not the whole response: with the default, a stream of 68 s (250 tokens) completed with exact counts. The APISIX template must set the timeout, and a non-streamed answer that takes longer than 10 minutes cannot be served ([#14](https://github.com/hlan-net/aisa/issues/14)).
+
+The Ollama host served other inference requests during the run, so the latencies above show what happened, not what the hardware can do; S7 and S10 measure performance.
+
+**Against hailo-ollama, a backend without usage** (2026-09-28, hailo-ollama 0.5.1 on a Hailo-10H accelerator, arm64; `qwen2.5:1.5b` and `qwen3:1.7b`). It offers a part of Ollama's API, and it is the "backend sends no usage" case of the mock on real hardware:
+
+1. **Its OpenAI endpoint reports no usage and does not stream.** A non-streamed answer has no `usage` field, and through APISIX its event has status 200 with `prompt_tokens: 0` and `completion_tokens: 0`, as numbers this time, not the strings `"0"`. A streamed request is answered with 400.
+2. **Its native `/api/chat` streams and reports `eval_count`, but no `prompt_eval_count`.** Streamed, `eval_count` equals the number of content chunks; non-streamed it is one higher for the same answer (33 and 32, 65 and 64). Prompt tokens are not available from this backend at all.
+3. **It serves one request and one model at a time.** A second request waits for the first, a change of model took 8 to 12 s, and `total_duration` contains neither wait, so latency must be measured at the gateway. A client disconnect stops the generation.
+4. **LiteLLM in front of it closes most of the gap.** LiteLLM 1.103.0 (`ollama_chat/` provider) takes the OpenAI-style request from APISIX and calls `/api/chat`. Non-streamed and streamed requests then work, and the usage events have completion tokens equal to the backend's `eval_count` for both models. **Prompt tokens are LiteLLM's own estimate** (17 for a prompt of 8 words); nothing in this setup can check them. It needed one setting: hailo-ollama rejects every `Content-Type` except `application/json` with a 500, and LiteLLM sends `application/octet-stream` to an Ollama backend unless `extra_headers` sets it.
+5. **Client disconnect is not fixed by this.** With LiteLLM in between, a client that left after 19 tokens still produced an event with `"0"`/`"0"` and status 200.
+
+Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#2-usage-events-after-the-request): the field meanings above, lenient parsing of numbers and booleans, `X-Request-Id` as a decision input, events for denied requests, no credentials in events (#5), and "a successful response without token counts means usage unknown, not zero", whether the zeros arrive as numbers or as strings. A backend that reports no usage needs a translating proxy in front of it, and its prompt tokens are then estimates. How aisa accounts for unknown usage is [#12](https://github.com/hlan-net/aisa/issues/12).
