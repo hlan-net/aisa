@@ -22,6 +22,7 @@ routes:
           X-Request-Id: $apisix_request_id
         status_on_error: 503
       ai-proxy-multi:
+        timeout: 600000   # ms, the plugin's maximum; the default 30 s cuts off slow local models (504)
         instances:
           - name: mock-local
             provider: openai-compatible
@@ -59,6 +60,7 @@ routes:
           X-Request-Id: $apisix_request_id
         status_on_error: 503
       ai-proxy-multi:
+        timeout: 600000   # ms, the plugin's maximum; the default 30 s cuts off slow local models (504)
         instances:
           - name: mock-nousage
             provider: openai-compatible

@@ -24,7 +24,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 |----|--------|-------|--------|
 | 1 | `feature/dev-environment` | Docker Compose dev stack, mock backend, stub aisa that logs what it receives | Done ([#7](https://github.com/hlan-net/aisa/pull/7)) |
 | 2 | `spike/forward-auth-model` | S8: model name to `/v1/decide`, routing by `X-Aisa-Model` | Done ([#8](https://github.com/hlan-net/aisa/pull/8)): works with an internal hop |
-| 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | In review: S6 yes; S2 exact only when usage is streamed ([#12](https://github.com/hlan-net/aisa/issues/12)); real Ollama pending |
+| 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | In review: S6 yes; S2 exact only when usage is streamed ([#12](https://github.com/hlan-net/aisa/issues/12)), confirmed against a real Ollama |
 | 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | — |
 | 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | — |
 

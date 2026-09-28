@@ -6,7 +6,7 @@ Most spikes test whether the **APISIX adapter** can meet the contract in [`ADAPT
 
 | # | Question | Why it matters | How to test | Outcome |
 |---|---|---|---|---|
-| S2 | Are token counts in the gateway's log data correct for **streaming** responses from Ollama's OpenAI endpoint? | Usage events feed cost and budgets | Compare the logged counts with Ollama's own `eval_count` for streamed and non-streamed requests, with and without `stream_options.include_usage` | **Partly** (2026-09-28): exact through APISIX when the backend streams usage; lost when it does not or the client disconnects. Real Ollama still to measure. [Details](#s2--s6-usage-events-from-apisix) |
+| S2 | Are token counts in the gateway's log data correct for **streaming** responses from Ollama's OpenAI endpoint? | Usage events feed cost and budgets | Compare the logged counts with Ollama's own `eval_count` for streamed and non-streamed requests, with and without `stream_options.include_usage` | **Partly** (2026-09-28): exact through APISIX when the backend streams usage, which a real Ollama does; lost when a backend does not or the client disconnects. [Details](#s2--s6-usage-events-from-apisix) |
 | S5 | Does the official `apache/apisix` Helm chart support standalone mode well, or are plain manifests simpler? | Adapter deployment shape | Install the chart with standalone values and check for an etcd dependency | — |
 | S6 | Can APISIX `http-logger` produce the usage event schema: token counts, model, TTFT and upstream from the AI plugin variables in `log_format`? | Contract 2 | Configure `log_format` with the `llm_*` variables and receive the events in the stub | **Yes** (2026-09-28), with type and latency caveats. [Details](#s2--s6-usage-events-from-apisix) |
 | S7 | Resource use on a small arm64 node (e.g. Raspberry Pi 4) of APISIX, aisa and consul-template together | Requests and limits, whether it runs on small clusters | Measure CPU and memory while running parallel streams | — |
@@ -60,6 +60,13 @@ Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.
 3. **Lost when the client disconnects mid-stream.** `"0"`/`"0"` with status 200, after more than 10 tokens had reached the client.
 4. The planned `AisaUsageEventsLost` alert compares aisa with the gateway's own metrics, which miss the same usage, so it cannot catch 2 or 3.
 
-**Still open:** whether a real Ollama honours `include_usage` and how its counts compare with `eval_count`. `ollama.sh` measures exactly that on the maintainer's hardware.
+**Against a real Ollama** (2026-09-28, Ollama 0.31.1 with CPU inference on a Raspberry Pi 5, arm64; `ollama.sh` with `llama3.2:3b`, `deepseek-r1:1.5b` and `qwen3`):
+
+1. **Ollama honours `include_usage`, and the counts are exact.** For all three models the usage event from APISIX equals Ollama's native `prompt_eval_count` and `eval_count`, non-streamed and streamed, whether the answer ended by itself or at `max_tokens`. Ollama's OpenAI endpoint reports the same numbers as its native API.
+2. **Without `include_usage` Ollama streams no usage.** Asked directly, a streamed request without it returns no counts. Through APISIX the counts are still exact, because APISIX adds the option (result 1 above). An adapter for a gateway that does not must add it.
+3. **Client disconnect: the gap is real.** A client that left after 149 streamed tokens produced an event with `"0"`/`"0"` and status 200. Ollama stopped generating when the connection closed.
+4. **The 30 s default `timeout` of `ai-proxy-multi` is too short** (as suspected in S8). Non-streamed requests to `deepseek-r1:1.5b` and `qwen3` ended in 504 after 30 s, with an event of status 504 and no tokens, and Ollama stopped generating. With `timeout: 600000`, the plugin's maximum, the same requests succeeded. The timeout limits the wait for data, not the whole response: with the default, a stream of 68 s (250 tokens) completed with exact counts. The APISIX template must set the timeout, and a non-streamed answer that takes longer than 10 minutes cannot be served ([#14](https://github.com/hlan-net/aisa/issues/14)).
+
+The Ollama host served other inference requests during the run, so the latencies above show what happened, not what the hardware can do; S7 and S10 measure performance.
 
 Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#2-usage-events-after-the-request): the field meanings above, lenient parsing of numbers and booleans, `X-Request-Id` as a decision input, events for denied requests, no credentials in events (#5), and "a successful response without token counts means usage unknown, not zero". How aisa accounts for unknown usage is [#12](https://github.com/hlan-net/aisa/issues/12).
