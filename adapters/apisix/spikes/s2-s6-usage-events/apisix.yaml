@@ -1,0 +1,91 @@
+# Spike S2 + S6: can APISIX http-logger produce the usage event schema (ADAPTER_CONTRACT.md,
+# contract 2), and are the token counts right for streamed responses?
+#
+#   /u/  forward-auth + ai-proxy-multi → mock-local    (streams usage when asked, like OpenAI)
+#   /n/  forward-auth + ai-proxy-multi → mock-nousage  (never streams usage, like a server that
+#                                                        ignores stream_options.include_usage)
+#
+# Both use the log_format proposed for the APISIX adapter. A pre-step strips client-supplied X-Aisa-*
+# headers, so a denied request cannot log a consumer of its own choosing. forward-auth passes the
+# request id to /v1/decide so a decision and its usage event can be matched.
+
+routes:
+  - id: usage
+    uri: /u/v1/chat/completions
+    methods: [POST]
+    plugins:
+      serverless-pre-function: &strip_aisa_headers
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision, the
+              -- upstream or the usage event (consumer comes from $http_x_aisa_consumer).
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+            end
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        extra_headers:
+          X-Request-Id: $apisix_request_id
+        status_on_error: 503
+      ai-proxy-multi:
+        timeout: 600000   # ms, the plugin's maximum; the default 30 s cuts off slow local models (504)
+        instances:
+          - name: mock-local
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            override: {endpoint: http://mock-local:8080/v1/chat/completions}
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format: &usage_event
+          ts: $time_iso8601
+          request_id: $apisix_request_id
+          consumer: $http_x_aisa_consumer
+          model: $llm_model
+          requested_model: $request_llm_model
+          backend: $balancer_ip
+          prompt_tokens: $llm_prompt_tokens
+          completion_tokens: $llm_completion_tokens
+          status: $status
+          latency_ms: $apisix_upstream_response_time
+          ttft_ms: $llm_time_to_first_token
+          stream: $llm_stream
+
+  - id: usage-nousage
+    uri: /n/v1/chat/completions
+    methods: [POST]
+    plugins:
+      serverless-pre-function: *strip_aisa_headers
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: POST
+        request_headers: [Authorization]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        extra_headers:
+          X-Request-Id: $apisix_request_id
+        status_on_error: 503
+      ai-proxy-multi:
+        timeout: 600000   # ms, the plugin's maximum; the default 30 s cuts off slow local models (504)
+        instances:
+          - name: mock-nousage
+            provider: openai-compatible
+            weight: 1
+            auth: {header: {Authorization: Bearer dev-provider-key}}
+            override: {endpoint: http://mock-nousage:8080/v1/chat/completions}
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format: *usage_event
+#END

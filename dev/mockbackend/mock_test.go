@@ -278,3 +278,38 @@ func TestModels(t *testing.T) {
 		t.Errorf("models = %+v", out.Data)
 	}
 }
+
+func TestOllamaChat(t *testing.T) {
+	srv := newTestServer(t, Config{DefaultCompletionTokens: 10})
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/chat",
+		strings.NewReader(`{"model":"qwen3","stream":false,"options":{"num_predict":4},"messages":[{"role":"user","content":"a b c"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out struct {
+		PromptEvalCount int  `json:"prompt_eval_count"`
+		EvalCount       int  `json:"eval_count"`
+		Done            bool `json:"done"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.PromptEvalCount != 3 || out.EvalCount != 4 || !out.Done {
+		t.Errorf("got %+v, want prompt 3, eval 4, done", out)
+	}
+
+	resp2, err := srv.Client().Post(srv.URL+"/api/chat", "application/json",
+		strings.NewReader(`{"model":"qwen3","messages":[{"role":"user","content":"a"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("streaming (the Ollama default): status = %d, want 400", resp2.StatusCode)
+	}
+}

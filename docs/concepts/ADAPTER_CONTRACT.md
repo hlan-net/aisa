@@ -27,6 +27,7 @@ This follows the forward-auth / external authorization pattern that most gateway
 ```
 POST /v1/decide            (GET is accepted too, for gateways that cannot send a body)
   in:  Authorization         the client's credential, unchanged
+       X-Request-Id          the gateway's id for the request, repeated in its usage event
        X-Aisa-Requested-Model  the model from the request body, set by the adapter
        (or the JSON request body, when the header is absent)
        X-Forwarded-Uri / -Method / -Host   the original request, where the gateway sends them
@@ -62,6 +63,7 @@ The gateway reports each finished request through an access log sink. aisa accep
   "request_id": "…",
   "consumer": "batch-jobs",
   "model": "qwen3",
+  "requested_model": "cloud-large",
   "backend": "ollama-1",
   "provider": "openai-compatible",
   "prompt_tokens": 812,
@@ -75,7 +77,23 @@ The gateway reports each finished request through an access log sink. aisa accep
 
 Each adapter maps its own log format to this schema: the APISIX `http-logger` with a custom `log_format` (spike S6), LiteLLM callbacks, or Envoy access logs. aisa computes cost from the prices and updates the budget counters, so **cost and budgets never depend on gateway-specific metrics**.
 
-Both contracts carry a `request_id` so a decision and its usage event can be matched. aisa also uses it to deduplicate retried log deliveries.
+Both contracts carry a `request_id` so a decision and its usage event can be matched: the adapter sends the same value to `/v1/decide` as `X-Request-Id`. aisa also uses it to deduplicate retried log deliveries.
+
+| Field | Meaning |
+|---|---|
+| `ts` | when the gateway logged the request (its end), ISO 8601 |
+| `consumer` | `X-Aisa-Consumer` from the decision; empty when aisa denied the request or was not asked |
+| `model`, `requested_model` | the model the backend served (`X-Aisa-Model`) and the one the client asked for; they differ after a downgrade |
+| `backend` | the backend instance's name as registered in Consul, so aisa can look up its provider and prices. `provider` is optional for the same reason |
+| `latency_ms` | time spent at the backend, including the whole stream; empty when no backend was called |
+| `ttft_ms` | time to the first token (for non-streamed responses, to the complete response) |
+
+What aisa accepts, as found in spike S6:
+
+- **Numbers and booleans may arrive as strings.** A gateway log format substitutes variables as text in some cases (APISIX logs `"0"` and `"true"`), so aisa parses numeric and boolean strings. Missing values may be empty or `null`.
+- **Every request produces an event, including ones aisa denied** (401, 429) and backend errors. They count as requests; only events with token counts change quotas and budgets.
+- **Usage events carry only these fields, never request headers or bodies**, so no credential reaches the usage sink ([#5](https://github.com/hlan-net/aisa/issues/5)).
+- **A successful response without token counts means the gateway did not see the usage**, not that none was used. The counts are then missing or zero, as numbers or as strings. This happens when a backend does not stream usage or the client disconnects before the end of a stream (spike S2). Adapters must ask for streamed usage (`stream_options.include_usage` for OpenAI-compatible backends); how aisa accounts for the remaining cases is an open question ([#12](https://github.com/hlan-net/aisa/issues/12)).
 
 ## 3. Config rendering (gateway configuration)
 
@@ -108,7 +126,7 @@ Gateway-native metrics (e.g. `apisix_llm_*`) are still scraped, but they only se
 
 An adapter is complete when it provides:
 1. a way to call `/v1/decide` before proxying, including the model name, and to apply the returned headers following the [adapter rules](#adapter-rules-for-the-decision)
-2. a usage log sink that maps to the event schema, including streaming token counts
+2. a usage log sink that maps to the event schema, including streaming token counts, and carries no credentials
 3. a consul-template template for the gateway config
 4. an example deployment and an integration test against a mock backend
 

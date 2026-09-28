@@ -69,7 +69,7 @@ The stub does not read Vault or Consul; its decisions come from environment vari
 
 ## Mock backend
 
-`GET /v1/models` and `POST /v1/chat/completions`, streaming or not. Token counts are deterministic:
+`GET /v1/models` and `POST /v1/chat/completions`, streaming or not, plus a minimal part of Ollama's native API (`GET /api/version`, non-streaming `POST /api/chat` with `prompt_eval_count` and `eval_count`) so scripts written for a real Ollama run against it. Token counts are deterministic:
 
 - `prompt_tokens` = the number of whitespace-separated words in all message contents (text parts only)
 - `completion_tokens` = `MOCK_DEFAULT_COMPLETION_TOKENS` (default 16), lowered by `max_completion_tokens` or `max_tokens` (then `finish_reason` is `length`), or set exactly with the `X-Mock-Completion-Tokens` request header
