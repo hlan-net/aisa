@@ -24,7 +24,7 @@ body_file=$(mktemp)
 trap 'rm -f "$routes" "$body_file"' EXIT
 
 # The spike's routes, with route /u/ pointed at Ollama instead of the mock backend.
-sed "s#http://mock-local:8080/v1/chat/completions#${GATEWAY_OLLAMA_URL%/}/v1/chat/completions#" \
+sed "s#[a-z]*://mock-local:8080/v1/chat/completions#${GATEWAY_OLLAMA_URL%/}/v1/chat/completions#" \
     "$here/apisix.yaml" >"$routes"
 chmod 644 "$routes"
 export APISIX_ROUTES=$routes
