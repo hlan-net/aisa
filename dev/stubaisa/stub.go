@@ -38,7 +38,9 @@ type Record struct {
 	Path    string            `json:"path"`
 	Headers map[string]string `json:"headers"`
 	Body    json.RawMessage   `json:"body,omitempty"`
-	RawBody string            `json:"raw_body,omitempty"` // set when the body is not valid JSON
+	// RawBody describes a body that is not valid JSON. The content is not kept, since it cannot be
+	// redacted reliably.
+	RawBody string `json:"raw_body,omitempty"`
 	// Decide only.
 	Status      int    `json:"status,omitempty"`
 	Consumer    string `json:"consumer,omitempty"`
@@ -264,7 +266,7 @@ func (s *server) newRecord(r *http.Request, kind string) (Record, []byte, error)
 		if json.Valid(body) {
 			rec.Body = redactJSON(body)
 		} else {
-			rec.RawBody = string(body)
+			rec.RawBody = fmt.Sprintf("<%d bytes, not JSON>", len(body))
 		}
 	}
 	return rec, body, nil
@@ -275,9 +277,13 @@ func flattenHeaders(h http.Header) map[string]string {
 	out := make(map[string]string, len(h))
 	for k, v := range h {
 		val := strings.Join(v, ", ")
-		if k == "Authorization" {
+		switch {
+		case strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Proxy-Authorization"):
+			// Keep the scheme: whether a client sent Bearer or Basic is useful when debugging.
 			scheme, _, _ := strings.Cut(val, " ")
 			val = fmt.Sprintf("%s <redacted, %d bytes>", scheme, len(val))
+		case sensitiveKeys[strings.ToLower(k)]:
+			val = fmt.Sprintf("<redacted, %d bytes>", len(val))
 		}
 		out[k] = val
 	}

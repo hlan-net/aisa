@@ -139,7 +139,7 @@ func TestUsage(t *testing.T) {
 	if len(recs) != 3 {
 		t.Fatalf("recorded %d usage requests, want 3", len(recs))
 	}
-	if recs[0].Events != 1 || recs[1].Events != 2 || recs[2].RawBody != "nope" {
+	if recs[0].Events != 1 || recs[1].Events != 2 || recs[2].RawBody != "<4 bytes, not JSON>" {
 		t.Errorf("records = %+v", recs)
 	}
 }
@@ -217,5 +217,35 @@ func TestUsageRedactsCredentials(t *testing.T) {
 		if !strings.Contains(got, kept) {
 			t.Errorf("stored body lost %s: %s", kept, got)
 		}
+	}
+}
+
+func TestHeadersRedacted(t *testing.T) {
+	srv := newTestStub(t)
+	do(t, srv, http.MethodPost, "/v1/usage", `{"a":1}`, map[string]string{
+		"Authorization":       "Bearer key-chat",
+		"Proxy-Authorization": "Basic secret-proxy",
+		"Cookie":              "session=secret-cookie",
+		"X-Api-Key":           "secret-api-key",
+		"Api-Key":             "secret-api-key-2",
+		"X-Request-Id":        "req-1",
+	})
+	do(t, srv, http.MethodPost, "/v1/usage", `not json key-chat`, nil)
+
+	recs := records(t, srv, "usage")
+	b, err := json.Marshal(recs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"key-chat", "secret-proxy", "secret-cookie", "secret-api-key"} {
+		if strings.Contains(string(b), secret) {
+			t.Errorf("records contain %q: %s", secret, b)
+		}
+	}
+	if got := recs[0].Headers["X-Request-Id"]; got != "req-1" {
+		t.Errorf("X-Request-Id = %q, want it kept", got)
+	}
+	if got := recs[0].Headers["Authorization"]; !strings.HasPrefix(got, "Bearer <redacted") {
+		t.Errorf("Authorization = %q, want the scheme kept", got)
 	}
 }
