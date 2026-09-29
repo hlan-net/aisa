@@ -325,21 +325,30 @@ func (c *Client) do(ctx context.Context, method, path, token string, body []byte
 	return nil
 }
 
+// errorBody is the body of an error answer from Vault. The pointers tell a missing field from an
+// empty one.
+type errorBody struct {
+	Errors *[]string       `json:"errors"`
+	Data   *deletedVersion `json:"data"`
+}
+
+// deletedVersion is the data of a KV v2 read of a deleted or destroyed version.
+type deletedVersion struct {
+	Metadata *versionMetadata `json:"metadata"`
+}
+
+type versionMetadata struct {
+	DeletionTime string `json:"deletion_time"`
+	Destroyed    bool   `json:"destroyed"`
+}
+
 // errorAnswer reads the body of an error from Vault: its errors, and whether it is Vault's way of
 // saying "no data here". That is an empty errors list, or the metadata of a deleted or destroyed
 // version.
 // With errors, a 404 is about the mount. Any other answer, a JSON one from a proxy included, is
 // not from Vault.
 func errorAnswer(data []byte) (errs []string, noData bool) {
-	var e struct {
-		Errors *[]string `json:"errors"`
-		Data   *struct {
-			Metadata *struct {
-				DeletionTime string `json:"deletion_time"`
-				Destroyed    bool   `json:"destroyed"`
-			} `json:"metadata"`
-		} `json:"data"`
-	}
+	var e errorBody
 	if json.Unmarshal(data, &e) != nil {
 		return nil, false
 	}

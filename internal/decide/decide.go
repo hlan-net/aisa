@@ -199,10 +199,7 @@ func modelOf(r io.Reader) (string, error) {
 			return "", err
 		}
 		if c == '}' {
-			if long || len(strings.TrimSpace(model)) > maxModel {
-				return "", errModelTooLong
-			}
-			return model, nil
+			return checkedModel(model, long)
 		}
 		if !first {
 			if c != ',' {
@@ -239,6 +236,15 @@ func modelOf(r io.Reader) (string, error) {
 			return "", err
 		}
 	}
+}
+
+// checkedModel is the model found, or errModelTooLong when it is longer than maxModel. long says
+// that it was too long for the scanner to keep.
+func checkedModel(model string, long bool) (string, error) {
+	if long || len(strings.TrimSpace(model)) > maxModel {
+		return "", errModelTooLong
+	}
+	return model, nil
 }
 
 // maxString is the longest key or model that is kept, as it is written in the body: long enough

@@ -327,13 +327,7 @@ func (s *Store) load(ctx context.Context) error {
 	listed, failed := 0, 0
 	var lastErr error
 	for _, name := range names {
-		if strings.HasSuffix(name, "/") {
-			continue // a subdirectory, not a consumer
-		}
-		if name == metrics.ConsumerUnknown {
-			// Its usage would be counted together with rejected credentials and requests served
-			// while aisa was unreachable.
-			s.log.Error("a consumer may not be named "+metrics.ConsumerUnknown+"; it cannot authenticate", "consumer", name)
+		if !s.isConsumer(name) {
 			continue
 		}
 		listed++
@@ -395,6 +389,20 @@ func (s *Store) index(byName map[string]entry) map[string]entry {
 		delete(byHash, h)
 	}
 	return byHash
+}
+
+// isConsumer reports whether a listed name is a consumer: not a subdirectory, and not the
+// reserved name "unknown", whose usage would be counted together with rejected credentials and
+// requests served while aisa was unreachable.
+func (s *Store) isConsumer(name string) bool {
+	if strings.HasSuffix(name, "/") {
+		return false
+	}
+	if name == metrics.ConsumerUnknown {
+		s.log.Error("a consumer may not be named "+metrics.ConsumerUnknown+"; it cannot authenticate", "consumer", name)
+		return false
+	}
+	return true
 }
 
 // readConsumer reads one consumer and its valid key hashes. A consumer without a valid hash is
