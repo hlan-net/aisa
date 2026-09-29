@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-29
+
+The first release: the design, the answered spikes, the dev stack and the start of aisa itself. The image `ghcr.io/hlan-net/aisa:v0.1.0` authenticates consumers with the decision API; quotas and budgets are not enforced yet.
+
 ### Added
 - **Decision API** (`POST`/`GET /v1/decide`): aisa authenticates the consumer key against the SHA-256 hashes in Vault (`secret/aisa/consumers/*`) and answers with `X-Aisa-Consumer` and `X-Aisa-Model`, or 401 (unknown key), 400 (no model) and 503 (consumers too old to verify against). Consumers are cached, reloaded every minute and on unknown keys, and kept for 15 min while Vault is down; keys can be rotated with two hashes. It logs in to Vault with Kubernetes auth, or `VAULT_TOKEN` in development. `/readyz` reports whether the consumers are loaded, and `aisa_decisions_total` counts the answers. Quotas and budgets do not deny or rewrite anything yet. The dev stack runs the real aisa next to the stub.
 - **State of the consumers in the metrics**: `aisa_consumers`, `aisa_consumer_keys`, `aisa_consumers_unreadable`, `aisa_consumer_loads_total{result}` and `aisa_consumers_loaded_timestamp_seconds`. `aisa_decisions_total` has the result `unavailable` for the 503 of a fail-closed aisa.
@@ -36,5 +40,8 @@ The format is based on Keep a Changelog and follows semantic versioning.
 - **Packaging and deployment** (`docs/concepts/ARCHITECTURE.md`): aisa is released as a multi-arch image and a Helm chart (OCI), both on GHCR, and installed into its own `aisa` namespace; applications in other namespaces use the gateway's Service as a shared OpenAI-compatible endpoint with their own consumer credentials.
 - **SonarQube findings**: third-party GitHub Actions (golangci-lint, the Docker release actions, the SonarQube scan) are pinned to full commit SHAs with the version in a comment, which Dependabot keeps current. The bash scripts (`dev/smoke.sh` and the S2 + S6 and S8 spike scripts) use `[[ ]]` for tests, and `scripts/check-versions.sh` only fetches over HTTPS.
 - **Usage event contract** (unstable `/v1`, not yet implemented): field meanings, `requested_model`, `X-Request-Id` as a decision input, lenient parsing of numbers and booleans sent as strings, events for denied requests, no credentials in events, and "no token counts on a successful response means usage unknown".
-- **Decision API** (unstable `/v1`, not yet implemented): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
+- **Decision API** (unstable `/v1`): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
 - **CI actions**: `actions/setup-go` v6 → v7 and `golangci/golangci-lint-action` v8 → v9 (golangci-lint pinned to v2.14). The other actions were checked against their published tags and are current. Dependabot also watches the dev stack's Dockerfile and Compose images.
+
+[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/hlan-net/aisa/releases/tag/v0.1.0
