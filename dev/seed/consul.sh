@@ -16,6 +16,8 @@ consul kv put aisa/budgets/batch-jobs '{"monthly": 10.00, "soft_ratio": 0.8, "on
 
 consul kv put aisa/quotas/interactive '{"tokens_per_hour": 1000000}'
 consul kv put aisa/quotas/batch       '{"tokens_per_hour": 200000}'
+# Small enough for smoke.sh to exhaust.
+consul kv put aisa/quotas/tiny        '{"tokens_per_hour": 100}'
 
 consul services register /seed/backends.hcl
 

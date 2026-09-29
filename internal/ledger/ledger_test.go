@@ -2,9 +2,11 @@ package ledger
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,7 +22,7 @@ func TestHandlerServeHTTP(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	body := []byte(`{
 		"request_id": "r1",
@@ -67,7 +69,7 @@ func TestHandlerDedup(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	body := []byte(`{
 		"request_id": "r-dup",
@@ -116,7 +118,7 @@ func TestHandlerInvalidEventsSkipped(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	body := []byte(`[
 		{
@@ -169,7 +171,7 @@ func TestHandlerRejects(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	// GET method not allowed
 	reqGet := httptest.NewRequest(http.MethodGet, "/v1/usage", nil)
@@ -206,7 +208,7 @@ func TestHandlerRejects(t *testing.T) {
 // recorded (#27).
 func TestHandlerValueErrorRejectsOnlyItsEvent(t *testing.T) {
 	m := metrics.New("test")
-	h := New(m, NewDedup(100, 5*time.Minute), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	body := `[
 		{"request_id":"a","consumer":"chat-ui","model":"qwen3","backend":"ollama-1","status":200,"prompt_tokens":7},
@@ -239,7 +241,7 @@ func TestHandlerBodyTooLarge(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	// Create body exceeding maxBody (16 MiB)
 	largeBody := io.MultiReader(
@@ -265,7 +267,7 @@ func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connectio
 
 func TestHandlerUnreadableBody(t *testing.T) {
 	m := metrics.New("test")
-	h := New(m, NewDedup(100, 5*time.Minute), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/usage", io.MultiReader(strings.NewReader(`[{"request_id":"a",`), failingReader{}))
 	rec := httptest.NewRecorder()
@@ -286,7 +288,7 @@ func TestHandlerUnreadableBody(t *testing.T) {
 // sink may put a credential in any field.
 func TestHandlerLogsRejectedEventsOncePerRequest(t *testing.T) {
 	var buf bytes.Buffer
-	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), slog.New(slog.NewTextHandler(&buf, nil)))
+	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(&buf, nil)))
 
 	var body strings.Builder
 	body.WriteString("[")
@@ -308,5 +310,69 @@ func TestHandlerLogsRejectedEventsOncePerRequest(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "sk-secret") {
 		t.Errorf("the log quotes a field value:\n%s", buf.String())
+	}
+}
+
+// fakeCharger notes the charges.
+type fakeCharger struct {
+	charges map[string]int64 // "consumer@minute" → tokens
+	calls   int
+}
+
+func (f *fakeCharger) Charge(_ context.Context, consumer string, tokens int64, at time.Time) error {
+	f.calls++
+	f.charges[consumer+"@"+at.UTC().Format("15:04:05")] += tokens
+	return nil
+}
+
+func TestHandlerCharges(t *testing.T) {
+	m := metrics.New("test")
+	c := &fakeCharger{charges: map[string]int64{}}
+	h := New(m, NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h.now = func() time.Time { return time.Date(2026, 9, 29, 12, 30, 20, 0, time.UTC) }
+
+	body := `[
+		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-09-29T12:00:10Z"},
+		{"request_id": "b", "consumer": "chat-ui", "status": 200, "prompt_tokens": "1", "completion_tokens": 2, "ts": "2026-09-29T14:00:50.5+02:00"},
+		{"request_id": "c", "consumer": "chat-ui", "status": 200, "prompt_tokens": 100, "ts": "2026-09-29T12:01:00Z"},
+		{"request_id": "d", "consumer": "chat-ui", "status": 200, "prompt_tokens": 7, "ts": "not a time"},
+		{"request_id": "g", "consumer": "chat-ui", "status": 200, "prompt_tokens": 1, "ts": "2026-09-29T15:00:00Z"},
+		{"request_id": "h", "consumer": "chat-ui", "status": 200, "prompt_tokens": 1, "ts": "2027-01-01T00:00:00Z"},
+		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-09-29T12:00:10Z"},
+		{"request_id": "e", "consumer": "", "status": 200, "prompt_tokens": 1000},
+		{"request_id": "f", "consumer": "batch-jobs", "status": 429},
+		{"request_id": "", "consumer": "chat-ui", "status": 200, "prompt_tokens": 1000}
+	]`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+
+	// One charge per consumer and minute; not the duplicate, the event without a consumer, the
+	// one without tokens or the invalid one. A ts that cannot be read or is in the future is now.
+	want := map[string]int64{"chat-ui@12:00:00": 18, "chat-ui@12:01:00": 100, "chat-ui@12:30:00": 9}
+	// Equal minutes in other time zones are one charge.
+	if len(c.charges) != len(want) || c.calls != len(want) {
+		t.Errorf("charges = %v in %d calls, want %v", c.charges, c.calls, want)
+	}
+	for k, v := range want {
+		if c.charges[k] != v {
+			t.Errorf("charges[%s] = %d, want %d (all: %v)", k, c.charges[k], v, c.charges)
+		}
+	}
+}
+
+func TestHandlerChargesSaturate(t *testing.T) {
+	c := &fakeCharger{charges: map[string]int64{}}
+	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	body := `[
+		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 9223372036854775807, "completion_tokens": 1, "ts": "2026-09-29T12:00:10Z"},
+		{"request_id": "b", "consumer": "chat-ui", "status": 200, "prompt_tokens": 9223372036854775807, "ts": "2026-09-29T12:00:20Z"}
+	]`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
+	if got := c.charges["chat-ui@12:00:00"]; got != math.MaxInt64 {
+		t.Errorf("charged %d, want the saturated %d", got, int64(math.MaxInt64))
 	}
 }

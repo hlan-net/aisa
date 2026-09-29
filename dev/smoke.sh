@@ -13,6 +13,8 @@ VAULT="${VAULT:-http://127.0.0.1:8200}"
 CONSUL="${CONSUL:-http://127.0.0.1:8500}"
 AISA="${AISA:-http://127.0.0.1:8084}"
 COMPOSE=(docker compose -f "$(dirname "$0")/compose.yaml")
+JSON='Content-Type: application/json'
+QWEN='{"model":"qwen3"}'
 
 pass=0
 body_file=$(mktemp)
@@ -30,7 +32,7 @@ chat() {
     local key=$1 body=$2
     shift 2
     curl -sS -o "$body_file" -w '%{http_code}\n' "$@" \
-        -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer $key" -H "$JSON" \
         -d "$body" "$GATEWAY/v1/chat/completions"
     cat "$body_file"
 }
@@ -60,12 +62,12 @@ for _ in $(seq 1 30); do
     [[ "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")" == 200 ]] && break
     sleep 1
 done
-expect "aisa: ready (consumers loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
+expect "aisa: ready (consumers and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
 # decide <key> <json body> [extra curl args...]: prints "<status> <X-Aisa-Consumer> <X-Aisa-Model>"
 decide() {
     local key=$1 body=$2
     shift 2
-    curl -sS -o /dev/null -D - "$@" -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+    curl -sS -o /dev/null -D - "$@" -H "Authorization: Bearer $key" -H "$JSON" \
         -d "$body" "$AISA/v1/decide" |
         awk -F': ' 'NR == 1 { status = $0; sub(/^HTTP\/[0-9.]+ /, "", status); sub(/ .*/, "", status) }
                     tolower($1) == "x-aisa-consumer" { c = $2 } tolower($1) == "x-aisa-model" { m = $2 }
@@ -73,17 +75,17 @@ decide() {
 }
 allowed() { curl -fsS "$AISA/metrics" | awk '$1 == "aisa_decisions_total{consumer=\"chat-ui\",result=\"allow\"}" { n = $2 } END { print n + 0 }'; }
 allowed_before=$(allowed)
-expect "aisa: known key, model from the body" "200 chat-ui qwen3" "$(decide dev-key-chat-ui '{"model":"qwen3"}')"
+expect "aisa: known key, model from the body" "200 chat-ui qwen3" "$(decide dev-key-chat-ui "$QWEN")"
 expect "aisa: model from X-Aisa-Requested-Model" "200 batch-jobs llama3.2" \
     "$(decide dev-key-batch-jobs '{}' -H 'X-Aisa-Requested-Model: llama3.2')"
-expect "aisa: unknown key" "401  " "$(decide dev-key-nobody '{"model":"qwen3"}')"
+expect "aisa: unknown key" "401  " "$(decide dev-key-nobody "$QWEN")"
 expect "aisa: no model" "400  " "$(decide dev-key-chat-ui '{"messages":[]}')"
 expect "aisa: decisions counted" "$((allowed_before + 1))" "$(allowed)"
 
 echo "== aisa: /v1/usage event ingestion and metrics"
 send_usage() {
     local body=$1
-    curl -sS -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' \
+    curl -sS -o /dev/null -w '%{http_code}\n' -H "$JSON" \
         -d "$body" "$AISA/v1/usage"
 }
 tokens_metric() {
@@ -117,6 +119,31 @@ req4="${smoke_run_id}-4"
 expect "aisa: an unparseable value rejects only its event" "200" \
     "$(send_usage "[{\"request_id\":\"$req4\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":200,\"prompt_tokens\":3},{\"request_id\":\"${req4}-bad\",\"status\":200,\"prompt_tokens\":\"abc\"}]")"
 expect "aisa: the batch's valid tokens incremented" "$((prompt_before + 20))" "$(tokens_metric chat-ui qwen3 prompt)"
+
+echo "== aisa: token quotas"
+# A new consumer for each run, so a window left by an earlier run does not matter.
+quota_consumer="quota-${smoke_run_id}"
+quota_key="dev-key-${quota_consumer}"
+curl -fsS -o /dev/null -H 'X-Vault-Token: dev-root' -H "$JSON" \
+    -d "{\"data\":{\"key_sha256\":\"$(printf %s "$quota_key" | sha256sum | cut -d' ' -f1)\",\"quota_profile\":\"tiny\"}}" \
+    "$VAULT/v1/secret/data/aisa/consumers/$quota_consumer"
+# aisa reloads its consumers for an unknown key at most every 5 s (AISA_CONSUMER_MISS_REFRESH),
+# and the unknown key above has just used that reload.
+for _ in $(seq 1 15); do
+    [[ "$(decide "$quota_key" "$QWEN")" == 401* ]] || break
+    sleep 1
+done
+expect "aisa: quota: tokens left" "200 $quota_consumer qwen3" "$(decide "$quota_key" "$QWEN")"
+expect "aisa: quota: usage of 120 tokens accepted" "200" \
+    "$(send_usage "{\"request_id\":\"${smoke_run_id}-quota\",\"consumer\":\"$quota_consumer\",\"model\":\"qwen3\",\"status\":200,\"prompt_tokens\":60,\"completion_tokens\":60}")"
+expect "aisa: quota: exhausted after 120 of 100 tokens" "429  " "$(decide "$quota_key" "$QWEN")"
+retry_after=$(curl -sS -o /dev/null -D - -H "Authorization: Bearer $quota_key" -d "$QWEN" "$AISA/v1/decide" |
+    awk -F': ' 'tolower($1) == "retry-after" { gsub(/\r/, "", $2); print $2 }')
+if [[ "$retry_after" =~ ^[0-9]+$ ]] && ((retry_after >= 1 && retry_after <= 3600)); then
+    ok "aisa: quota: Retry-After $retry_after s"
+else
+    fail "aisa: quota: Retry-After: want 1 to 3600, got '$retry_after'"
+fi
 
 echo "== gateway → decide → backend"
 out=$(chat dev-key-chat-ui '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}')

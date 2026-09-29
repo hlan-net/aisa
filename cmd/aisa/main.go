@@ -19,6 +19,14 @@
 //	AISA_CONSUMER_MAX_STALE     age of the consumers after which aisa fails closed 15m
 //	AISA_LEDGER_DEDUP_CAPACITY  request IDs kept for dedup                        100000
 //	AISA_LEDGER_DEDUP_TTL       how long request IDs are kept for dedup           15m
+//	CONSUL_HTTP_ADDR            Consul's address; with AISA_REDIS_ADDR, turns token quotas on
+//	CONSUL_CACERT               CA certificate of Consul, PEM                     system CAs
+//	CONSUL_HTTP_TOKEN           a fixed Consul ACL token, for development
+//	CONSUL_HTTP_TOKEN_FILE      file with the Consul ACL token, read for each request
+//	AISA_CONSUL_PREFIX          prefix of aisa's keys in Consul KV                aisa
+//	AISA_REDIS_ADDR             Redis host:port for the quota counters
+//	AISA_REDIS_USERNAME         Redis ACL user
+//	AISA_REDIS_PASSWORD         Redis password
 //
 // With -healthcheck it asks the aisa that runs on AISA_ADDR for /healthz and exits, for the
 // health check of a container.
@@ -36,11 +44,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/hlan-net/aisa/internal/config"
+	"github.com/hlan-net/aisa/internal/consul"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/decide"
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/quotas"
 	"github.com/hlan-net/aisa/internal/server"
 	"github.com/hlan-net/aisa/internal/vault"
 	"github.com/hlan-net/aisa/internal/version"
@@ -98,16 +110,65 @@ func run(args []string) error {
 		})
 	go store.Run(ctx)
 
-	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout,
-		server.Check{Name: "consumers", Probe: store.Ready})
+	checks := []server.Check{{Name: "consumers", Probe: store.Ready}}
+	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
+	var (
+		quota   decide.QuotaChecker
+		charger ledger.Charger
+	)
+	if cfg.QuotasEnabled() {
+		q, profiles, closeQuotas, err := newQuotas(cfg, m, log.With("component", "quotas"))
+		if err != nil {
+			return err
+		}
+		defer closeQuotas()
+		go profiles.Run(ctx)
+		quota, charger = q, q
+		checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
+	} else {
+		log.Warn("token quotas are off: set CONSUL_HTTP_ADDR and AISA_REDIS_ADDR to turn them on")
+	}
+
+	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
-		decide.New(store, m, log.With("component", "decide")),
-		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), log.With("component", "ledger")))
+		decide.New(store, quota, m, log.With("component", "decide")),
+		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger")))
 	if err := srv.Run(ctx, cfg.Addr); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
 	log.Info("stopped")
 	return nil
+}
+
+// newQuotas returns the token quotas with their profiles from Consul and counters in Redis,
+// and a function that closes the connections to Redis.
+func newQuotas(cfg config.Config, m *metrics.Metrics, log *slog.Logger) (*quotas.Quota, *quotas.Profiles, func(), error) {
+	cc, err := consul.New(consul.Options{
+		Addr: cfg.Consul.Addr, CACert: cfg.Consul.CACert, Token: cfg.Consul.Token, TokenFile: cfg.Consul.TokenFile,
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("consul: %w", err)
+	}
+	profiles := quotas.NewProfiles(
+		quotas.ConsulSource{Client: cc, Prefix: cfg.Consul.Prefix + "/quotas/"},
+		log,
+		quotas.ProfileOptions{OnLoad: func(s quotas.LoadStats) { observeProfiles(m, s) }})
+	rdb := redis.NewClient(&redis.Options{
+		Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password,
+	})
+	q := quotas.New(profiles, quotas.NewWindow(rdb, "aisa:"), m, log, quotas.Options{})
+	return q, profiles, func() { _ = rdb.Close() }, nil
+}
+
+// observeProfiles puts the result of a load of the quota profiles into the metrics.
+func observeProfiles(m *metrics.Metrics, s quotas.LoadStats) {
+	if s.Err != nil {
+		m.QuotaProfileLoads.WithLabelValues(metrics.LoadError).Inc()
+		return
+	}
+	m.QuotaProfileLoads.WithLabelValues(metrics.LoadOK).Inc()
+	m.QuotaProfiles.Set(float64(s.Valid))
+	m.QuotaProfilesInvalid.Set(float64(s.Invalid))
 }
 
 // routes registers the contract endpoints.

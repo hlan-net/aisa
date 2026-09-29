@@ -34,6 +34,12 @@ const (
 	EventRejected  = "rejected"
 )
 
+// Values of the op label of aisa_quota_errors_total.
+const (
+	QuotaOpCheck  = "check"  // reading a consumer's usage for a decision
+	QuotaOpCharge = "charge" // adding the tokens of a usage event
+)
+
 // Values of the reason label of aisa_usage_requests_rejected_total: why a whole usage request
 // was rejected, with none of its events read.
 const (
@@ -87,6 +93,15 @@ type Metrics struct {
 	ConsumerLoads *prometheus.CounterVec
 	// ConsumersLoaded is when the consumers were last loaded, in seconds since the epoch.
 	ConsumersLoaded prometheus.Gauge
+
+	// QuotaProfiles and QuotaProfilesInvalid count the quota profiles read from Consul that
+	// could and could not be parsed.
+	QuotaProfiles        prometheus.Gauge
+	QuotaProfilesInvalid prometheus.Gauge
+	// QuotaProfileLoads counts the loads of the quota profiles by result, LoadOK or LoadError.
+	QuotaProfileLoads *prometheus.CounterVec
+	// QuotaErrors counts failed calls to the quota counters in Redis, by op.
+	QuotaErrors *prometheus.CounterVec
 }
 
 // Values of the result label of aisa_consumer_loads_total.
@@ -164,6 +179,22 @@ func New(version string) *Metrics {
 			Name: "aisa_consumers_loaded_timestamp_seconds",
 			Help: "When the consumers were last loaded from Vault.",
 		}),
+		QuotaProfiles: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_quota_profiles",
+			Help: "Quota profiles in memory.",
+		}),
+		QuotaProfilesInvalid: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_quota_profiles_invalid",
+			Help: "Quota profiles in Consul that aisa could not parse at the last load.",
+		}),
+		QuotaProfileLoads: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_quota_profile_loads_total",
+			Help: "Loads of the quota profiles from Consul.",
+		}, []string{"result"}),
+		QuotaErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_quota_errors_total",
+			Help: "Failed reads and writes of the quota counters in Redis.",
+		}, []string{"op"}),
 	}
 
 	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -179,6 +210,7 @@ func New(version string) *Metrics {
 		m.Requests, m.Tokens, m.Cost, m.BudgetLimit, m.BudgetSpent, m.Latency, m.TTFT, m.Decisions,
 		m.UsageEvents, m.UsageRequestsRejected,
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
+		m.QuotaProfiles, m.QuotaProfilesInvalid, m.QuotaProfileLoads, m.QuotaErrors,
 	)
 	// The reasons are fixed: start each at 0, so the first rejection is an increase that an
 	// alert on increase() or rate() can see.

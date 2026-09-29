@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +10,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/quotas"
 )
 
 // maxBody bounds the request body aisa reads for usage events (16 MiB).
@@ -19,20 +22,40 @@ const maxBody = 16 << 20
 // maxLabel bounds the length of string labels (request_id, consumer, model, backend) to prevent oversized metric labels.
 const maxLabel = 256
 
+// Charger counts the tokens of a consumer towards its quota; quotas.Quota implements it. It
+// logs and counts its own errors.
+type Charger interface {
+	Charge(ctx context.Context, consumer string, tokens int64, at time.Time) error
+}
+
 // Handler ingests usage events from gateways at POST /v1/usage.
 type Handler struct {
 	metrics *metrics.Metrics
 	dedup   *Dedup
+	charger Charger
 	log     *slog.Logger
+	now     func() time.Time
 }
 
-// New returns a usage handler.
-func New(m *metrics.Metrics, dedup *Dedup, log *slog.Logger) *Handler {
+// New returns a usage handler. With a nil charger, tokens are not counted towards quotas.
+func New(m *metrics.Metrics, dedup *Dedup, charger Charger, log *slog.Logger) *Handler {
 	return &Handler{
 		metrics: m,
 		dedup:   dedup,
+		charger: charger,
 		log:     log,
+		now:     time.Now,
 	}
+}
+
+// chargeTimeout bounds the charges of one batch together, so a Redis that is down cannot keep
+// a request busy for one timeout per consumer and minute.
+const chargeTimeout = 5 * time.Second
+
+// charge is the tokens of one consumer in one minute of a batch, charged together.
+type charge struct {
+	consumer string
+	minute   time.Time
 }
 
 // ServeHTTP answers POST /v1/usage.
@@ -67,6 +90,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	accepted, rejected := 0, 0
+	charges := map[charge]int64{}
 	var firstErr error
 	firstIndex := -1
 	for i, p := range events {
@@ -92,8 +116,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		h.metrics.UsageEvents.WithLabelValues(metrics.EventAccepted).Inc()
 		h.recordEvent(ev)
+		if tokens := quotas.AddTokens(int64(ev.PromptTokens), int64(ev.CompletionTokens)); tokens > 0 && ev.Consumer != "" {
+			key := charge{ev.Consumer, h.eventTime(ev).UTC().Truncate(time.Minute)}
+			charges[key] = quotas.AddTokens(charges[key], tokens)
+		}
 		accepted++
 	}
+	h.chargeAll(r.Context(), charges)
 
 	if rejected > 0 {
 		// One line per request, not per event: a sink with a systematic mistake sends every event
@@ -102,6 +131,39 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"rejected", rejected, "events", len(events), "first_index", firstIndex, "first_error", firstErr)
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"accepted": accepted, "rejected": rejected})
+}
+
+// eventTime is when the gateway logged the event, or now when its ts is missing, unreadable
+// or in the future. Future times are taken as now here, before the charges are grouped, so they
+// cannot split one consumer's charges into many minutes.
+func (h *Handler) eventTime(ev Event) time.Time {
+	now := h.now()
+	if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(ev.Timestamp)); err == nil && !t.After(now) {
+		return t
+	}
+	return now
+}
+
+// chargeAll counts the tokens of a batch towards the quotas. It is not cancelled when the log
+// sink goes away: the events are accepted, so their tokens count.
+func (h *Handler) chargeAll(ctx context.Context, charges map[charge]int64) {
+	if h.charger == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chargeTimeout)
+	defer cancel()
+	done := 0
+	for c, tokens := range charges {
+		if ctx.Err() != nil {
+			h.log.Warn("quota charges of a batch timed out; the rest are not counted",
+				"charged", done, "skipped", len(charges)-done)
+			return
+		}
+		// The charger logs and counts its errors; the events stay accepted, since a retry
+		// would be dropped as a duplicate anyway.
+		_ = h.charger.Charge(ctx, c.consumer, tokens, c.minute)
+		done++
+	}
 }
 
 // rejectRequest answers a usage request that is rejected as a whole, and counts it: none of its
