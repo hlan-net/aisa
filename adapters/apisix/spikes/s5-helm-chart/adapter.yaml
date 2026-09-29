@@ -1,0 +1,77 @@
+# Spike S5: the APISIX adapter as plain manifests. One pod holds APISIX and consul-template;
+# they share a directory in memory, into which consul-template renders apisix.yaml.
+#
+# run.sh creates the ConfigMaps apisix-config (config.yaml) and apisix-render (the template and
+# consul-template.hcl) from the files of the spikes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix
+  labels: {app: apisix}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: apisix}
+  template:
+    metadata:
+      labels: {app: apisix}
+    spec:
+      # Nothing in the pod talks to the Kubernetes API. With Vault's Kubernetes auth,
+      # consul-template gets a token of its own, projected for Vault.
+      automountServiceAccountToken: false
+      initContainers:
+        # APISIX does not start without an apisix.yaml, so the first render comes before it.
+        - name: render-once
+          image: hashicorp/consul-template:0.43.0
+          args: ["-config=/spike/consul-template.hcl", "-once"]
+          volumeMounts: &render-mounts
+            - {name: render, mountPath: /spike, readOnly: true}
+            - {name: rendered, mountPath: /rendered}
+          resources: &render-resources
+            requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+            limits: {memory: 64Mi, ephemeral-storage: 64Mi}
+      containers:
+        - name: apisix
+          image: apache/apisix:3.18.0-debian
+          # consul-template replaces the file by renaming a new one over it. A mount of the file
+          # itself would keep showing the old one, so the directory is mounted and the config
+          # path is a link into it. The official chart does the same with its ConfigMap.
+          command:
+            - sh
+            - -c
+            - ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start
+          ports:
+            - {name: http, containerPort: 9080}
+            - {name: metrics, containerPort: 9091}
+          volumeMounts:
+            - {name: config, mountPath: /usr/local/apisix/conf/config.yaml, subPath: config.yaml, readOnly: true}
+            - {name: rendered, mountPath: /rendered, readOnly: true}
+          readinessProbe:
+            tcpSocket: {port: 9080}
+            periodSeconds: 2
+          # The starting values of spike S7, to be confirmed (#16).
+          resources:
+            requests: {cpu: 100m, memory: 96Mi, ephemeral-storage: 64Mi}
+            limits: {memory: 192Mi, ephemeral-storage: 512Mi}
+        - name: consul-template
+          image: hashicorp/consul-template:0.43.0
+          args: ["-config=/spike/consul-template.hcl"]
+          volumeMounts: *render-mounts
+          resources: *render-resources
+      volumes:
+        - name: config
+          configMap: {name: apisix-config}
+        - name: render
+          configMap: {name: apisix-render}
+        # In memory: the rendered file holds provider keys, which must not reach a disk.
+        - name: rendered
+          emptyDir: {medium: Memory, sizeLimit: 8Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix-gateway
+spec:
+  selector: {app: apisix}
+  ports:
+    - {name: http, port: 80, targetPort: 9080}

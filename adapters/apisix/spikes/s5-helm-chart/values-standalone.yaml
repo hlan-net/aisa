@@ -1,0 +1,42 @@
+# Spike S5: the official chart apisix/apisix 2.17.0 in standalone mode, as far as it goes.
+#
+#   helm repo add apisix https://charts.apiseven.com
+#   helm install apisix apisix/apisix --version 2.17.0 -n aisa-spike -f values-standalone.yaml
+#
+# The routes are a static ConfigMap here: the chart reads apisix.yaml from a ConfigMap at a fixed
+# path and leaves no way to put a file there that a sidecar renders (see README.md).
+
+apisix:
+  deployment:
+    mode: standalone
+    role: data_plane
+    standalone:
+      config: |
+        routes:
+          - id: chat
+            uri: /v1/chat/completions
+            methods: [POST]
+            plugins:
+              ai-proxy-multi:
+                timeout: 600000
+                instances:
+                  - name: ollama-1
+                    provider: openai-compatible
+                    weight: 1
+                    auth: {header: {X-Aisa-No-Key: "1"}}
+                    override: {endpoint: "http://gpu-box.internal:11434/v1/chat/completions"}
+  admin:
+    enabled: false
+  nginx:
+    # One worker per core of the node otherwise, whatever the pod's CPU limit is (spike S7).
+    workerProcesses: 1
+
+# The internal listener of the two-hop route (spike S8).
+service:
+  http:
+    additionalContainerPorts:
+      - ip: 127.0.0.1
+        port: 9081
+
+etcd:
+  enabled: false
