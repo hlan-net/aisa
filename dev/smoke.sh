@@ -115,6 +115,11 @@ expect "aisa: partial batch accepted with invalid event skipped" "200" \
     "$(send_usage "[{\"request_id\":\"$req3\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":\"200\",\"prompt_tokens\":\"2\"},{\"request_id\":\"\",\"status\":200}]")"
 expect "aisa: partial batch valid tokens incremented" "$((prompt_before + 17))" "$(tokens_metric chat-ui qwen3 prompt)"
 
+req4="${smoke_run_id}-4"
+expect "aisa: an unparseable value rejects only its event" "200" \
+    "$(send_usage "[{\"request_id\":\"$req4\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":200,\"prompt_tokens\":3},{\"request_id\":\"${req4}-bad\",\"status\":200,\"prompt_tokens\":\"abc\"}]")"
+expect "aisa: the batch's valid tokens incremented" "$((prompt_before + 20))" "$(tokens_metric chat-ui qwen3 prompt)"
+
 echo "== aisa: token quotas"
 # A new consumer for each run, so a window left by an earlier run does not matter.
 quota_consumer="quota-${smoke_run_id}"

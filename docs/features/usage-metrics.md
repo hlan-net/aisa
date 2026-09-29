@@ -11,6 +11,7 @@ Full list in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#4-metrics-o
 - `aisa_requests_total`, `aisa_tokens_total{direction}`, `aisa_cost_total`
 - `aisa_budget_limit`, `aisa_budget_spent`
 - `aisa_latency_seconds`, `aisa_ttft_seconds`
+- `aisa_usage_events_total{result}` (`accepted`, `duplicate`, `rejected`) and `aisa_usage_requests_rejected_total{reason}` for usage requests rejected as a whole (`malformed`, `too_large`, `unreadable`)
 - `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `unavailable` (aisa cannot verify credentials, under the consumer `unknown`, or cannot know a consumer's token quota, and answers 503), `deny_quota`, `deny_budget`, `downgrade`
 
 Cost is computed in aisa from the Consul prices, so no Prometheus rules with hardcoded prices are needed.
@@ -65,4 +66,6 @@ Shipped as a `PrometheusRule`:
 | `AisaQuotaProfileInvalid` | `aisa_quota_profiles_invalid > 0`: the consumers of a broken profile get 503 |
 | `AisaQuotaCountersFailing` | `aisa_quota_errors_total` increases for 5 min: Redis is unreachable and token quotas are not enforced |
 | `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h |
+| `AisaUsageEventsRejected` | `aisa_usage_events_total{result="rejected"}` increases for 15 min: the adapter sends events aisa cannot use. They are answered 200, so the log sink does not retry them and they are lost |
+| `AisaUsageRequestsRejected` | `aisa_usage_requests_rejected_total` increases: the adapter sends usage aisa cannot read, and the log sink drops it after its retries |
 | `AisaSlowFirstToken` | p95 time to first token > 20 s for 15 min (model too large for the backend, or the backend is swapping) |

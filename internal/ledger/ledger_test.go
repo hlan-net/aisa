@@ -3,6 +3,7 @@ package ledger
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"math"
@@ -179,13 +180,60 @@ func TestHandlerRejects(t *testing.T) {
 	if recGet.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status = %d, want 405", recGet.Code)
 	}
+	if allow := recGet.Header().Get("Allow"); allow != http.MethodPost {
+		t.Errorf("GET Allow = %q, want POST", allow)
+	}
 
-	// Malformed JSON
-	reqBad := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader("bad-json"))
-	recBad := httptest.NewRecorder()
-	h.ServeHTTP(recBad, reqBad)
-	if recBad.Code != http.StatusBadRequest {
-		t.Errorf("bad JSON status = %d, want 400", recBad.Code)
+	// Malformed JSON, and an array whose structure is broken after a valid event
+	for _, body := range []string{"bad-json", `[{"request_id":"a","status":200}, invalid]`} {
+		reqBad := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body))
+		recBad := httptest.NewRecorder()
+		h.ServeHTTP(recBad, reqBad)
+		if recBad.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", body, recBad.Code)
+		}
+	}
+
+	for reason, want := range map[string]float64{metrics.UsageRequestMalformed: 2} {
+		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != want {
+			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want %v", reason, got, want)
+		}
+	}
+	if n := testutil.CollectAndCount(m.UsageEvents); n != 0 {
+		t.Errorf("aisa_usage_events_total has %d series, want 0: no event was read", n)
+	}
+}
+
+// An event with a value that cannot be parsed is rejected alone; the rest of its batch is
+// recorded (#27).
+func TestHandlerValueErrorRejectsOnlyItsEvent(t *testing.T) {
+	m := metrics.New("test")
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	body := `[
+		{"request_id":"a","consumer":"chat-ui","model":"qwen3","backend":"ollama-1","status":200,"prompt_tokens":7},
+		{"request_id":"b","status":200,"prompt_tokens":"abc"},
+		{"request_id":"c","status":200,"latency_ms":"NaN"},
+		{"request_id":"d","status":200,"stream":"yes"},
+		{"request_id":"e","status":200,"prompt_tokens":1.9}
+	]`
+	req := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"accepted":1,"rejected":4}` {
+		t.Fatalf("answer = %d %s, want 200 {\"accepted\":1,\"rejected\":4}", rec.Code, rec.Body)
+	}
+	if got := testutil.ToFloat64(m.Tokens.WithLabelValues("chat-ui", "qwen3", "ollama-1", metrics.DirectionPrompt)); got != 7 {
+		t.Errorf("prompt tokens of the valid event = %v, want 7", got)
+	}
+	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventRejected)); got != 4 {
+		t.Errorf("aisa_usage_events_total{rejected} = %v, want 4", got)
+	}
+	for _, reason := range metrics.UsageRequestReasons {
+		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != 0 {
+			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want 0", reason, got)
+		}
 	}
 }
 
@@ -207,6 +255,61 @@ func TestHandlerBodyTooLarge(t *testing.T) {
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 413", rec.Code)
+	}
+	if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(metrics.UsageRequestTooLarge)); got != 1 {
+		t.Errorf("aisa_usage_requests_rejected_total{too_large} = %v, want 1", got)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+func TestHandlerUnreadableBody(t *testing.T) {
+	m := metrics.New("test")
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/usage", io.MultiReader(strings.NewReader(`[{"request_id":"a",`), failingReader{}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(metrics.UsageRequestUnreadable)); got != 1 {
+		t.Errorf("aisa_usage_requests_rejected_total{reason=\"unreadable\"} = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(m.UsageEvents); n != 0 {
+		t.Errorf("aisa_usage_events_total has %d series, want 0: no event was read", n)
+	}
+}
+
+// A batch whose events are all wrong writes one warn line, and no field value: a misconfigured
+// sink may put a credential in any field.
+func TestHandlerLogsRejectedEventsOncePerRequest(t *testing.T) {
+	var buf bytes.Buffer
+	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(&buf, nil)))
+
+	var body strings.Builder
+	body.WriteString("[")
+	for i := range 500 {
+		if i > 0 {
+			body.WriteString(",")
+		}
+		body.WriteString(`{"request_id":"r","status":200,"stream":"Bearer sk-secret"}`)
+	}
+	body.WriteString("]")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body.String())))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if n := strings.Count(buf.String(), "level=WARN"); n != 1 {
+		t.Errorf("%d warn lines for one request, want 1:\n%s", n, buf.String())
+	}
+	if strings.Contains(buf.String(), "sk-secret") {
+		t.Errorf("the log quotes a field value:\n%s", buf.String())
 	}
 }
 

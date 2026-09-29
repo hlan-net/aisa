@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +13,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/hlan-net/aisa/internal/consumers"
+	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/server"
 )
 
 func TestRunRejectsBadInput(t *testing.T) {
@@ -94,6 +98,26 @@ func TestObserveLoad(t *testing.T) {
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %v, want %v", name, tc.got, tc.want)
+		}
+	}
+}
+
+// The routes answer a usage request that is not a POST with 405 and do not count it as a
+// rejected usage request: a log sink always POSTs, so it is no usage being lost.
+func TestRoutesUsageWrongMethod(t *testing.T) {
+	m := metrics.New("test")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := server.New(log, m.Handler(), time.Second)
+	routes(srv, http.NotFoundHandler(), ledger.New(m, ledger.NewDedup(10, time.Minute), nil, log))
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/usage", nil))
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") == "" {
+		t.Errorf("GET /v1/usage: %d, Allow %q; want 405 with Allow", rec.Code, rec.Header().Get("Allow"))
+	}
+	for _, reason := range metrics.UsageRequestReasons {
+		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != 0 {
+			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want 0", reason, got)
 		}
 	}
 }
