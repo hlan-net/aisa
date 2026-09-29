@@ -108,7 +108,9 @@ Backends (Consul catalog), provider keys (Vault) and model routing live in aisa'
 What a template does, as found in spike S9:
 
 - **Only healthy backends are rendered**, grouped by the models in their service meta. A model without a healthy backend gets an answer from the gateway itself: 503 with an error body, not a missing route.
-- **A backend names its provider key** with the service meta `key`: the name of the secret under `secret/aisa/providers/`. A backend without it gets no key.
+- **A backend names its provider key** with the service meta `key`: the name of the secret under `secret/aisa/providers/`. A backend without it gets no key, and **no backend gets the client's `Authorization`**: APISIX's `ai-proxy-multi` forwards the client's headers, so the internal route removes it.
+- **A second hop keeps the request's id.** The internal route of APISIX is a new request with an id of its own, so the client-facing route passes the id it sent to the decision along, and the usage event carries that one.
+- **A request aisa denied is reported by the client-facing route**, because it never reaches the internal one. Its logger runs only for requests without `X-Aisa-Consumer`, so an allowed request still has one event.
 - **Values from Consul and Vault are rendered as quoted strings**, so a name cannot change the structure of the config.
 - **The rendered file is shared as a directory.** consul-template replaces the file by renaming a new one over it, which a mount of the single file does not show.
 - **The template sets how often secrets are read again** (`default_lease_duration`); it is the time a rotated key takes to reach the gateway.

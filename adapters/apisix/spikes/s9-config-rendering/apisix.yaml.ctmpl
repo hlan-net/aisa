@@ -38,6 +38,9 @@ routes:
                 end
               end
               core.request.set_header(ctx, "X-Aisa-Requested-Model", model)
+              -- The internal hop is a new request with an id of its own; its usage event carries this one,
+              -- the id sent to the decision.
+              core.request.set_header(ctx, "X-Aisa-Request-Id", ctx.var.apisix_request_id)
             end
       forward-auth:
         uri: http://stub-aisa:8080/v1/decide
@@ -48,6 +51,21 @@ routes:
         extra_headers:
           X-Request-Id: $apisix_request_id
         status_on_error: 503
+      # A request aisa denied (or could not decide) ends here, so this route reports it. The
+      # filter is true only without X-Aisa-Consumer, which forward-auth sets on an allowed request,
+      # whose event comes from the internal route.
+      http-logger:
+        _meta:
+          filter: [["http_x_aisa_consumer", "!", "~~", "."]]
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format:
+          ts: $time_iso8601
+          request_id: $apisix_request_id
+          consumer: $http_x_aisa_consumer
+          requested_model: $http_x_aisa_requested_model
+          status: $status
     upstream:
       type: roundrobin
       # The default 60 s read timeout would end a slow stream on the internal hop.
@@ -61,6 +79,15 @@ routes:
     priority: 10
     vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "==", {{ $model | toJSON }}]]
     plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              -- ai-proxy-multi forwards the client's headers and only overlays auth.header, so the
+              -- client's credential would reach every backend without a provider key.
+              require("apisix.core").request.set_header(ctx, "Authorization", nil)
+            end
       ai-proxy-multi:
         timeout: 600000
         instances:
@@ -89,7 +116,7 @@ routes:
         inactive_timeout: 1
         log_format:
           ts: $time_iso8601
-          request_id: $apisix_request_id
+          request_id: $http_x_aisa_request_id
           consumer: $http_x_aisa_consumer
           model: $llm_model
           requested_model: $request_llm_model
@@ -117,7 +144,7 @@ routes:
         inactive_timeout: 1
         log_format:
           ts: $time_iso8601
-          request_id: $apisix_request_id
+          request_id: $http_x_aisa_request_id
           consumer: $http_x_aisa_consumer
           requested_model: $http_x_aisa_requested_model
           status: $status

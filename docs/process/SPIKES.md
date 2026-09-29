@@ -104,6 +104,7 @@ Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.
 
 - A backend names its provider key with the service meta `key`; backends without it get no key.
 - Values from Consul and Vault are rendered as quoted strings, and the rendered file is shared with the gateway as a directory.
-- The health check interval of a backend decides how long requests fail after it dies; 30 s in the example of `CONSUL.md` means up to half a minute of failures for a share of the requests.
+- How long requests fail after a backend dies is its health check's interval and timeout, plus the template's quiet period and the gateway's reload; 30 s in the example of `CONSUL.md` means more than half a minute of failures for a share of the requests. Requests already sent to it can wait until the gateway's timeout.
 - The template must set `default_lease_duration`, or a rotated key takes 5 minutes to arrive.
+- Found in review: `ai-proxy-multi` forwards the client's `Authorization` to a backend without a key, the internal hop has a request id of its own, and a denied request never reaches the internal route's logger. The template removes the header, passes the decision's id along and logs denials on the client route.
 - Open: nothing checks the rendered file before the gateway loads it, and a catalog that comes back empty renders a config without backends. Both need a guard in the adapter ([#18](https://github.com/hlan-net/aisa/issues/18)).

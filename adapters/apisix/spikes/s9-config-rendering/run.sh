@@ -86,11 +86,11 @@ maintenance() { # maintenance <backend> <true|false>
     curl -fsS -X PUT "$CONSUL/v1/agent/service/maintenance/$backend?enable=$enable&reason=spike-s9" >/dev/null
 }
 
-# ask <model> [curl args...] → sets STATUS; the body is in $tmp/body
+# [KEY=<consumer key>] ask <model> [curl args...] → sets STATUS; the body is in $tmp/body
 ask() {
     local model=$1
     shift
-    STATUS=$(curl -sS -m 60 -o "$tmp/body" -w '%{http_code}' -H 'Authorization: Bearer dev-key-chat-ui' \
+    STATUS=$(curl -sS -m 60 -o "$tmp/body" -w '%{http_code}' -H "Authorization: Bearer ${KEY:-dev-key-chat-ui}" \
         -H 'Content-Type: application/json' -H 'X-Mock-Completion-Tokens: 2' "$@" \
         -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hello there\"}]}" \
         "$GATEWAY/v1/chat/completions" || true)
@@ -161,6 +161,26 @@ check "  ... with an error a client can read" no_backend "$(jq -r '.error.type' 
 sleep 2
 check "who served what" "cloud-large:mock-cloud llama3.2:mock-local qwen3:mock-local qwen3:mock-local-2" \
     "$(events | jq -r '[.[] | select(.status == 200) | "\(.requested_model):\(.backend)"] | unique | join(" ")')"
+check "every usage event carries the request id sent to the decision" true \
+    "$(curl -fsS "$STUB/debug/requests" | jq '([.[] | select(.kind == "decide") | .headers["X-Request-Id"]]) as $ids
+        | [.[] | select(.kind == "usage") | .body.request_id] | length > 0 and all(. as $id | $ids | index($id))')"
+authorization() { # authorization <backend>: how often it received an Authorization header, "true false ..."
+    "${COMPOSE[@]}" logs --no-log-prefix "$1" 2>/dev/null | jq -r 'select(.msg == "chat completion") | .authorization_present' |
+        sort | uniq -c | awk '{ printf "%s:%s ", $2, $1 }' | sed 's/ $//'
+}
+check "backends without a key never see the client's Authorization" "" \
+    "$(authorization mock-local | tr ' ' '\n' | grep '^true' || true)$(authorization mock-local-2 | tr ' ' '\n' | grep '^true' || true)"
+check "  ... and mock-cloud gets its provider key" "true:1" "$(authorization mock-cloud)"
+clear_events
+ask qwen3
+allowed=$STATUS
+KEY=dev-key-blocked ask qwen3
+blocked=$STATUS
+KEY=no-such-key ask qwen3
+unknown=$STATUS
+sleep 2
+check "allowed, blocked and unknown key" "200 429 401" "$allowed $blocked $unknown"
+check "  ... one usage event each, with its status" "200 401 429" "$(events | jq -r '[.[] | .status | tonumber] | sort | map(tostring) | join(" ")')"
 
 echo
 echo "== Reload under load: a backend leaves and returns 10 times (Consul maintenance mode)"

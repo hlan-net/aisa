@@ -27,11 +27,15 @@ docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s9-config-rendering
 
 Every value from Consul or Vault is written with `toJSON`, so a name with a quote or a colon in it cannot change the structure of the file.
 
+The internal route removes the client's `Authorization` before `ai-proxy-multi`, which forwards the client's headers and only adds the instance's own `auth.header`; without that, a backend without a key would receive the consumer's credential. The internal hop is a new request with an id of its own, so the client route passes the id it sent to `/v1/decide` along as `X-Aisa-Request-Id`, and the usage events log that one. A request that `forward-auth` denies never reaches the internal route, so the client route has an `http-logger` of its own, limited by `_meta.filter` to requests without `X-Aisa-Consumer`: each request then has exactly one usage event.
+
 ## How the file reaches APISIX
 
 consul-template writes a new file and renames it over the old one. A bind mount of the file itself keeps showing the old one, so consul-template and APISIX share a directory, and `conf/apisix.yaml` is a link into it. APISIX looks at the file once a second and loads it when it has changed and ends with `#END`.
 
 ## Output of the recorded run (2026-09-28, APISIX 3.18.0, consul-template 0.43.0, arm64)
+
+The five checks after "who served what" were added on 2026-09-29 and recorded on amd64.
 
 ```
 == Rendering: backends from the Consul catalog, the provider key from Vault
@@ -45,6 +49,11 @@ consul-template writes a new file and renames it over the old one. A bind mount 
   ok    a model that no backend serves                                     503
   ok      ... with an error a client can read                              no_backend
   ok    who served what                                                    cloud-large:mock-cloud llama3.2:mock-local qwen3:mock-local qwen3:mock-local-2
+  ok    every usage event carries the request id sent to the decision      true
+  ok    backends without a key never see the client's Authorization        
+  ok      ... and mock-cloud gets its provider key                         true:1
+  ok    allowed, blocked and unknown key                                   200 429 401
+  ok      ... one usage event each, with its status                        200 401 429
 
 == Reload under load: a backend leaves and returns 10 times (Consul maintenance mode)
   ok    failed requests during 20 reloads                                  0
