@@ -120,6 +120,12 @@ quota_key="dev-key-${quota_consumer}"
 curl -fsS -o /dev/null -H 'X-Vault-Token: dev-root' -H 'Content-Type: application/json' \
     -d "{\"data\":{\"key_sha256\":\"$(printf %s "$quota_key" | sha256sum | cut -d' ' -f1)\",\"quota_profile\":\"tiny\"}}" \
     "$VAULT/v1/secret/data/aisa/consumers/$quota_consumer"
+# aisa reloads its consumers for an unknown key at most every 5 s (AISA_CONSUMER_MISS_REFRESH),
+# and the unknown key above has just used that reload.
+for _ in $(seq 1 15); do
+    [[ "$(decide "$quota_key" '{"model":"qwen3"}')" == 401* ]] || break
+    sleep 1
+done
 expect "aisa: quota: tokens left" "200 $quota_consumer qwen3" "$(decide "$quota_key" '{"model":"qwen3"}')"
 expect "aisa: quota: usage of 120 tokens accepted" "200" \
     "$(send_usage "{\"request_id\":\"${smoke_run_id}-quota\",\"consumer\":\"$quota_consumer\",\"model\":\"qwen3\",\"status\":200,\"prompt_tokens\":60,\"completion_tokens\":60}")"
