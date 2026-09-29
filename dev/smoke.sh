@@ -93,16 +93,19 @@ tokens_metric() {
 }
 prompt_before=$(tokens_metric chat-ui qwen3 prompt)
 prompt_before=${prompt_before:-0}
+smoke_run_id="smoke-$$-$(date +%s)"
+req1="${smoke_run_id}-1"
+req2="${smoke_run_id}-2"
 expect "aisa: usage accepted (single event)" "200" \
-    "$(send_usage '{"request_id":"smoke-req-1","consumer":"chat-ui","model":"qwen3","backend":"mock-local","status":200,"prompt_tokens":10,"completion_tokens":25,"latency_ms":150,"ttft_ms":50,"stream":false}')"
+    "$(send_usage "{\"request_id\":\"$req1\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":200,\"prompt_tokens\":10,\"completion_tokens\":25,\"latency_ms\":150,\"ttft_ms\":50,\"stream\":false}")"
 expect "aisa: token metrics incremented" "$((prompt_before + 10))" "$(tokens_metric chat-ui qwen3 prompt)"
 
 expect "aisa: duplicate usage accepted" "200" \
-    "$(send_usage '{"request_id":"smoke-req-1","consumer":"chat-ui","model":"qwen3","backend":"mock-local","status":200,"prompt_tokens":10,"completion_tokens":25}')"
+    "$(send_usage "{\"request_id\":\"$req1\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":200,\"prompt_tokens\":10,\"completion_tokens\":25}")"
 expect "aisa: duplicate event did not double count tokens" "$((prompt_before + 10))" "$(tokens_metric chat-ui qwen3 prompt)"
 
 expect "aisa: usage accepted (batch array)" "200" \
-    "$(send_usage '[{"request_id":"smoke-req-2","consumer":"chat-ui","model":"qwen3","backend":"mock-local","status":"200","prompt_tokens":"5","completion_tokens":"15"}]')"
+    "$(send_usage "[{\"request_id\":\"$req2\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":\"200\",\"prompt_tokens\":\"5\",\"completion_tokens\":\"15\"}]")"
 expect "aisa: batch tokens incremented" "$((prompt_before + 15))" "$(tokens_metric chat-ui qwen3 prompt)"
 
 echo "== gateway → decide → backend"

@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"bytes"
 	"testing"
 )
 
@@ -153,11 +154,33 @@ func TestParseEventsRejects(t *testing.T) {
 		"number":              `123`,
 		"boolean":             `true`,
 		"invalid json":        `{not json`,
-		"array of non-object": `[1, 2, 3]`,
-		"array invalid json":  `[{"r": 1}, invalid]`,
+		"array of non-object":   `[1, 2, 3]`,
+		"array invalid json":    `[{"r": 1}, invalid]`,
+		"fractional string int": `{"prompt_tokens": "1.9"}`,
+		"fractional json int":   `{"prompt_tokens": 1.9}`,
+		"float +Inf":            `{"latency_ms": "+Inf"}`,
+		"float -Inf":            `{"latency_ms": "-Inf"}`,
+		"float NaN":             `{"latency_ms": "NaN"}`,
 	} {
 		if _, err := ParseEvents([]byte(in)); err == nil {
 			t.Errorf("%s: want error for %q", name, in)
 		}
+	}
+}
+
+func TestParseEventsBatchLimit(t *testing.T) {
+	// Create an array with maxBatchEvents + 1 items
+	var buf bytes.Buffer
+	buf.WriteString("[")
+	for i := 0; i <= maxBatchEvents; i++ {
+		if i > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(`{"request_id":"req"}`)
+	}
+	buf.WriteString("]")
+
+	if _, err := ParseEvents(buf.Bytes()); err == nil {
+		t.Error("want error for batch exceeding maxBatchEvents")
 	}
 }

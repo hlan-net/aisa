@@ -3,16 +3,21 @@ package ledger
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/hlan-net/aisa/internal/metrics"
 )
 
 // maxBody bounds the request body aisa reads for usage events (16 MiB).
 const maxBody = 16 << 20
+
+// maxLabel bounds the length of string labels (request_id, consumer, model, backend) to prevent oversized metric labels.
+const maxLabel = 256
 
 // Handler ingests usage events from gateways at POST /v1/usage.
 type Handler struct {
@@ -55,6 +60,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for i, ev := range events {
+		if err := validateEvent(ev); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("event %d: %s", i, err.Error())})
+			return
+		}
+	}
+
 	for _, ev := range events {
 		h.recordEvent(ev)
 	}
@@ -62,9 +74,44 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"accepted": len(events)})
 }
 
+// validateEvent verifies that required fields and numeric bounds conform to the usage contract.
+func validateEvent(ev Event) error {
+	if strings.TrimSpace(ev.RequestID) == "" {
+		return errors.New("missing request_id")
+	}
+	if len(ev.RequestID) > maxLabel {
+		return fmt.Errorf("request_id exceeds %d bytes", maxLabel)
+	}
+	if ev.Status < 100 || ev.Status > 599 {
+		return fmt.Errorf("invalid status %d: must be an HTTP status code (100-599)", ev.Status)
+	}
+	if ev.PromptTokens < 0 {
+		return errors.New("prompt_tokens cannot be negative")
+	}
+	if ev.CompletionTokens < 0 {
+		return errors.New("completion_tokens cannot be negative")
+	}
+	if ev.LatencyMS < 0 {
+		return errors.New("latency_ms cannot be negative")
+	}
+	if ev.TTFTMS < 0 {
+		return errors.New("ttft_ms cannot be negative")
+	}
+	if len(ev.Consumer) > maxLabel {
+		return fmt.Errorf("consumer exceeds %d bytes", maxLabel)
+	}
+	if len(ev.Model) > maxLabel {
+		return fmt.Errorf("model exceeds %d bytes", maxLabel)
+	}
+	if len(ev.Backend) > maxLabel {
+		return fmt.Errorf("backend exceeds %d bytes", maxLabel)
+	}
+	return nil
+}
+
 // recordEvent deduplicates by request id and updates the metrics.
 func (h *Handler) recordEvent(ev Event) {
-	if ev.RequestID != "" && h.dedup.SeenOrAdd(ev.RequestID) {
+	if h.dedup.SeenOrAdd(ev.RequestID) {
 		h.log.Debug("duplicate usage event skipped", "request_id", ev.RequestID)
 		return
 	}

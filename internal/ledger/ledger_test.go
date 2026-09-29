@@ -178,6 +178,25 @@ func TestHandlerRejects(t *testing.T) {
 	if recBad.Code != http.StatusBadRequest {
 		t.Errorf("bad JSON status = %d, want 400", recBad.Code)
 	}
+
+	for name, in := range map[string]string{
+		"missing request_id":       `{"status": 200}`,
+		"empty request_id":         `{"request_id": "   ", "status": 200}`,
+		"status below 100":         `{"request_id": "r1", "status": 99}`,
+		"status above 599":         `{"request_id": "r1", "status": 600}`,
+		"negative prompt tokens":   `{"request_id": "r1", "status": 200, "prompt_tokens": -5}`,
+		"negative latency":         `{"request_id": "r1", "status": 200, "latency_ms": -10}`,
+		"oversized request_id":     `{"request_id": "` + strings.Repeat("a", 257) + `", "status": 200}`,
+		"oversized model":          `{"request_id": "r1", "status": 200, "model": "` + strings.Repeat("m", 257) + `"}`,
+		"second event in batch bad": `[{"request_id": "r1", "status": 200}, {"request_id": "", "status": 200}]`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(in))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", name, rec.Code)
+		}
+	}
 }
 
 func TestHandlerBodyTooLarge(t *testing.T) {

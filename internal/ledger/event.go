@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
+
+// maxBatchEvents limits the number of events in a single batch request to prevent memory amplification.
+const maxBatchEvents = 10_000
 
 // Event is the normalized schema of a finished request that a gateway reports (contract 2).
 type Event struct {
@@ -48,23 +52,13 @@ func (f *FlexInt64) UnmarshalJSON(data []byte) error {
 		}
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			fl, ferr := strconv.ParseFloat(s, 64)
-			if ferr != nil {
-				return fmt.Errorf("invalid int: %q", s)
-			}
-			*f = FlexInt64(fl)
-			return nil
+			return fmt.Errorf("invalid int: %q", s)
 		}
 		*f = FlexInt64(n)
 		return nil
 	}
 	var n int64
 	if err := json.Unmarshal(data, &n); err != nil {
-		var fl float64
-		if json.Unmarshal(data, &fl) == nil {
-			*f = FlexInt64(fl)
-			return nil
-		}
 		return err
 	}
 	*f = FlexInt64(n)
@@ -84,7 +78,7 @@ func (f *FlexInt) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// FlexFloat64 unmarshals a float64 from a JSON number, a string (e.g. "9120.5"), null or "".
+// FlexFloat64 unmarshals a finite float64 from a JSON number, a string (e.g. "9120.5"), null or "".
 type FlexFloat64 float64
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -108,12 +102,18 @@ func (f *FlexFloat64) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return fmt.Errorf("invalid float: %q", s)
 		}
+		if math.IsNaN(fl) || math.IsInf(fl, 0) {
+			return fmt.Errorf("invalid float: %q is not finite", s)
+		}
 		*f = FlexFloat64(fl)
 		return nil
 	}
 	var fl float64
 	if err := json.Unmarshal(data, &fl); err != nil {
 		return err
+	}
+	if math.IsNaN(fl) || math.IsInf(fl, 0) {
+		return errors.New("invalid float: not finite")
 	}
 	*f = FlexFloat64(fl)
 	return nil
@@ -160,19 +160,36 @@ func ParseEvents(body []byte) ([]Event, error) {
 		return nil, errors.New("empty request body")
 	}
 	if trimmed[0] == '[' {
-		var rawEvents []json.RawMessage
-		if err := json.Unmarshal(trimmed, &rawEvents); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(trimmed))
+		tok, err := dec.Token()
+		if err != nil {
 			return nil, fmt.Errorf("invalid JSON array: %w", err)
 		}
-		events := make([]Event, len(rawEvents))
-		for i, raw := range rawEvents {
-			rawTrimmed := bytes.TrimSpace(raw)
-			if len(rawTrimmed) == 0 || rawTrimmed[0] != '{' {
-				return nil, fmt.Errorf("event %d is not a JSON object", i)
+		delim, ok := tok.(json.Delim)
+		if !ok || delim != '[' {
+			return nil, errors.New("expected start of JSON array")
+		}
+		var events []Event
+		for dec.More() {
+			if len(events) >= maxBatchEvents {
+				return nil, fmt.Errorf("batch exceeds maximum of %d events", maxBatchEvents)
 			}
-			if err := json.Unmarshal(rawTrimmed, &events[i]); err != nil {
-				return nil, fmt.Errorf("event %d: %w", i, err)
+			var ev Event
+			if err := dec.Decode(&ev); err != nil {
+				return nil, fmt.Errorf("event %d: %w", len(events), err)
 			}
+			events = append(events, ev)
+		}
+		tok, err = dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("invalid JSON array: %w", err)
+		}
+		delim, ok = tok.(json.Delim)
+		if !ok || delim != ']' {
+			return nil, errors.New("expected end of JSON array")
+		}
+		if dec.More() {
+			return nil, errors.New("unexpected trailing data after JSON array")
 		}
 		return events, nil
 	}
@@ -180,8 +197,12 @@ func ParseEvents(body []byte) ([]Event, error) {
 		return nil, errors.New("body is not a JSON object or an array of objects")
 	}
 	var ev Event
-	if err := json.Unmarshal(trimmed, &ev); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	if err := dec.Decode(&ev); err != nil {
 		return nil, fmt.Errorf("invalid JSON object: %w", err)
+	}
+	if dec.More() {
+		return nil, errors.New("unexpected trailing data after JSON object")
 	}
 	return []Event{ev}, nil
 }
