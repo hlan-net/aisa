@@ -310,16 +310,11 @@ func (c *Client) do(ctx context.Context, method, path, token string, body []byte
 	case resp.StatusCode == http.StatusNoContent:
 		return nil
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		var e struct {
-			Errors []string `json:"errors"`
-		}
-		decoded := json.Unmarshal(data, &e) == nil
-		// Vault says "no data here" with a 404 and no errors. With errors, the 404 is about the
-		// mount; without a JSON object, it is not from Vault.
-		if resp.StatusCode == http.StatusNotFound && decoded && len(e.Errors) == 0 {
+		errs, noData := errorAnswer(data)
+		if resp.StatusCode == http.StatusNotFound && noData {
 			return fmt.Errorf("vault %s %s: %w", method, path, ErrNotFound)
 		}
-		return &StatusError{Code: resp.StatusCode, Errors: e.Errors}
+		return &StatusError{Code: resp.StatusCode, Errors: errs}
 	}
 	if out == nil {
 		return nil
@@ -328,4 +323,31 @@ func (c *Client) do(ctx context.Context, method, path, token string, body []byte
 		return fmt.Errorf("vault %s %s: decode answer: %w", method, path, err)
 	}
 	return nil
+}
+
+// errorAnswer reads the body of an error from Vault: its errors, and whether it is Vault's way of
+// saying "no data here". That is an empty errors list, or the metadata of a deleted or destroyed
+// version.
+// With errors, a 404 is about the mount. Any other answer, a JSON one from a proxy included, is
+// not from Vault.
+func errorAnswer(data []byte) (errs []string, noData bool) {
+	var e struct {
+		Errors *[]string `json:"errors"`
+		Data   *struct {
+			Metadata *struct {
+				DeletionTime string `json:"deletion_time"`
+				Destroyed    bool   `json:"destroyed"`
+			} `json:"metadata"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(data, &e) != nil {
+		return nil, false
+	}
+	if e.Errors != nil {
+		return *e.Errors, len(*e.Errors) == 0
+	}
+	if e.Data == nil || e.Data.Metadata == nil {
+		return nil, false
+	}
+	return nil, e.Data.Metadata.DeletionTime != "" || e.Data.Metadata.Destroyed
 }

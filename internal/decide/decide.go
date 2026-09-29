@@ -33,6 +33,9 @@ const (
 // X-Aisa-Requested-Model spares aisa the body.
 const maxBody = 16 << 20
 
+// maxModel is the longest model name aisa accepts, in bytes, from the header and the body alike.
+const maxModel = 256
+
 // Lookup finds the consumer of a key; consumers.Store implements it.
 type Lookup interface {
 	Lookup(ctx context.Context, key string) (consumers.Consumer, consumers.Result)
@@ -84,6 +87,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if errors.Is(err, errModelTooLong) {
+		h.deny(w, log, consumer.Name, denial{
+			status: http.StatusBadRequest, result: metrics.ResultInvalid,
+			typ: "invalid_request_error", code: "invalid_model",
+			msg: fmt.Sprintf("the requested model name is longer than %d bytes", maxModel),
+		})
+		return
+	}
 	if model == "" {
 		h.deny(w, log, consumer.Name, denial{
 			status: http.StatusBadRequest, result: metrics.ResultInvalid,
@@ -132,12 +143,19 @@ func bearer(v string) (string, bool) {
 // errBodyTooLarge: the body is larger than maxBody, so the model in it may not have been seen.
 var errBodyTooLarge = errors.New("request body too large")
 
+// errModelTooLong: the model name is longer than maxModel.
+var errModelTooLong = fmt.Errorf("model name longer than %d bytes", maxModel)
+
 // requestedModel reads the model from X-Aisa-Requested-Model or, when absent, from the JSON
 // request body. The header takes precedence: the adapter sets it from the body and overwrites
 // any client value (adapter rule 2). A request without a model, or with a body that is not a
-// JSON object, has the model "".
+// JSON object, has the model "". A model longer than maxModel is errModelTooLong, from either
+// source, so an adapter's choice between the header and the body does not change the answer.
 func requestedModel(r *http.Request) (string, error) {
 	if m := strings.TrimSpace(r.Header.Get(HeaderRequestedModel)); m != "" {
+		if len(m) > maxModel {
+			return "", errModelTooLong
+		}
 		return m, nil
 	}
 	if r.Body == nil {
@@ -152,6 +170,9 @@ func requestedModel(r *http.Request) (string, error) {
 	if body.exceeded {
 		return "", errBodyTooLarge
 	}
+	if errors.Is(err, errModelTooLong) {
+		return "", err
+	}
 	if err != nil {
 		return "", nil
 	}
@@ -160,7 +181,7 @@ func requestedModel(r *http.Request) (string, error) {
 
 // modelOf returns the string value of the key "model" of a JSON object, the last one when the
 // key is repeated, as encoding/json and most other parsers choose. A model that is not a string
-// is "".
+// is "". A model longer than maxModel is errModelTooLong.
 //
 // It reads the object byte by byte and keeps only the keys and the model, so the memory it
 // needs does not grow with the body: a gateway may forward megabytes of prompt and images.
@@ -171,13 +192,16 @@ func modelOf(r io.Reader) (string, error) {
 	if err := s.expect('{'); err != nil {
 		return "", err
 	}
-	model := ""
+	model, long := "", false
 	for first := true; ; first = false {
 		c, err := s.next()
 		if err != nil {
 			return "", err
 		}
 		if c == '}' {
+			if long || len(strings.TrimSpace(model)) > maxModel {
+				return "", errModelTooLong
+			}
 			return model, nil
 		}
 		if !first {
@@ -206,8 +230,9 @@ func modelOf(r io.Reader) (string, error) {
 			err = s.skip(c)
 		case c == '"':
 			model, err = s.str(true)
+			long = s.long
 		default:
-			model = ""
+			model, long = "", false
 			err = s.skip(c)
 		}
 		if err != nil {
@@ -216,12 +241,15 @@ func modelOf(r io.Reader) (string, error) {
 	}
 }
 
-// maxString is the longest key or model that is kept. A longer one is read past and is "".
-const maxString = 1024
+// maxString is the longest key or model that is kept, as it is written in the body: long enough
+// for a model of maxModel bytes with every byte escaped. A longer one is read past and is "".
+const maxString = 6*maxModel + 2
 
 type scanner struct {
 	r   *bufio.Reader
 	buf []byte
+	// long: the last string that str was to keep was longer than maxString.
+	long bool
 }
 
 // next returns the next byte that is not white space.
@@ -252,6 +280,7 @@ func (s *scanner) expect(want byte) error {
 // its escapes resolved.
 func (s *scanner) str(keep bool) (string, error) {
 	s.buf = append(s.buf[:0], '"')
+	s.long = false
 	for {
 		c, err := s.r.ReadByte()
 		if err != nil {
@@ -263,6 +292,7 @@ func (s *scanner) str(keep bool) (string, error) {
 		switch c {
 		case '"':
 			if !keep || len(s.buf) > maxString {
+				s.long = keep
 				return "", nil
 			}
 			var v string

@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/vault"
 )
 
@@ -328,6 +329,12 @@ func (s *Store) load(ctx context.Context) error {
 	for _, name := range names {
 		if strings.HasSuffix(name, "/") {
 			continue // a subdirectory, not a consumer
+		}
+		if name == metrics.ConsumerUnknown {
+			// Its usage would be counted together with rejected credentials and requests served
+			// while aisa was unreachable.
+			s.log.Error("a consumer may not be named "+metrics.ConsumerUnknown+"; it cannot authenticate", "consumer", name)
+			continue
 		}
 		listed++
 		e, err := s.readConsumer(ctx, name, now)

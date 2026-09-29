@@ -3,6 +3,7 @@ package decide
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -71,6 +72,14 @@ func TestDecide(t *testing.T) {
 			`{"model":"qwen3"}`, 401, "", "", "invalid_api_key", [2]string{metrics.ConsumerUnknown, metrics.ResultDenyAuth}},
 		{"no model", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
 			`{"messages":[]}`, 400, "", "", "missing_model", [2]string{"chat-ui", metrics.ResultInvalid}},
+		{"model in the header too long", http.MethodPost,
+			map[string]string{"Authorization": "Bearer key-chat", "X-Aisa-Requested-Model": strings.Repeat("m", maxModel+1)},
+			``, 400, "", "", "invalid_model", [2]string{"chat-ui", metrics.ResultInvalid}},
+		{"model in the body too long", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
+			`{"model":"` + strings.Repeat("m", maxModel+1) + `"}`, 400, "", "", "invalid_model", [2]string{"chat-ui", metrics.ResultInvalid}},
+		{"model at the limit", http.MethodPost,
+			map[string]string{"Authorization": "Bearer key-chat", "X-Aisa-Requested-Model": strings.Repeat("m", maxModel)},
+			``, 200, "chat-ui", strings.Repeat("m", maxModel), "", [2]string{"chat-ui", metrics.ResultAllow}},
 		{"body is not JSON", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
 			`not json`, 400, "", "", "missing_model", [2]string{"chat-ui", metrics.ResultInvalid}},
 		{"body is not an object", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
@@ -255,10 +264,13 @@ func TestModelOfAgreesWithEncodingJSON(t *testing.T) {
 			t.Fatalf("the test's own body is not valid JSON: %s: %v", body, err)
 		}
 		wantModel, _ := want["model"].(string)
-		if len(wantModel) > maxString {
-			wantModel = ""
-		}
 		got, err := modelOf(strings.NewReader(body))
+		if len(strings.TrimSpace(wantModel)) > maxModel {
+			if !errors.Is(err, errModelTooLong) || got != "" {
+				t.Errorf("%s: model = %q, %v, want errModelTooLong", body[:40], got, err)
+			}
+			continue
+		}
 		if err != nil {
 			t.Errorf("%s: %v", body, err)
 		}
@@ -300,7 +312,12 @@ var modelBodies = []string{
 	`{"n":0,"f":false,"z":null,"e":1e-9,"model":"after literals"}`,
 	`{"a":[],"b":{},"c":[{}],"d":"","model":"after empty values"}`,
 	`{"model":"qwen3","stream":true,"max_tokens":32,"temperature":0}`,
+	`{"model":"` + strings.Repeat("m", maxModel) + `"}`,
+	`{"model":"` + strings.Repeat("m", maxModel+1) + `"}`,
+	`{"model":"` + strings.Repeat(`\u006d`, maxModel) + `"}`,
 	`{"model":"` + strings.Repeat("m", maxString-2) + `"}`,
+	`{"model":"` + strings.Repeat("m", 4*maxString) + `","model":"qwen3"}`,
+	`{"model":"qwen3","model":"` + strings.Repeat("m", 4*maxString) + `"}`,
 	`{"model":"` + strings.Repeat("m", 4*maxString) + `"}`,
 	`{"` + strings.Repeat("k", 4*maxString) + `":"long key","model":"qwen3"}`,
 	`{"model":"qwen3","content":"` + strings.Repeat("x", 100_000) + `"}`,
@@ -334,8 +351,11 @@ func FuzzModelOf(f *testing.F) {
 			return // not valid JSON, or not an object: the backend rejects it
 		}
 		wantModel, _ := want["model"].(string)
-		if len(wantModel) > maxString-2 {
-			return // at the limit of what is kept; covered by the test above
+		if len(strings.TrimSpace(wantModel)) > maxModel {
+			if !errors.Is(err, errModelTooLong) {
+				t.Fatalf("a model of %d bytes: %v, want errModelTooLong\n%s", len(wantModel), err, body)
+			}
+			return
 		}
 		if err != nil {
 			t.Fatalf("valid JSON, and modelOf fails: %v\n%s", err, body)

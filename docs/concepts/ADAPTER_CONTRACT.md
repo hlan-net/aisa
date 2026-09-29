@@ -34,7 +34,7 @@ POST /v1/decide            (GET is accepted too, for gateways that cannot send a
   out: 200 + headers   X-Aisa-Consumer: batch-jobs
                        X-Aisa-Model: qwen3              (possibly rewritten, e.g. budget downgrade)
                        X-Aisa-Budget-Remaining: 4.20  (only when the consumer has a budget)
-       400 no model in the header or the body
+       400 no model in the header or the body, or a model name longer than 256 bytes
        401 unknown or invalid credential
        413 no model in the header, and the body is larger than 16 MiB
        429 quota or budget exhausted
@@ -54,7 +54,7 @@ Spike S8 showed that these must hold for the decision to be safe and for downgra
 1. **Strip client-supplied `X-Aisa-*` headers** before the decision. Some forward-auth implementations clear them only on a successful answer, so a client could otherwise choose the model itself when aisa is unreachable and the adapter fails open.
 2. **Set `X-Aisa-Requested-Model` from the body**, overwriting any client value, or forward the body.
 3. **Route by `X-Aisa-Model` and forward the request with that model**, not the one the client asked for. A downgrade changes both the backend and the model name in the forwarded body.
-4. **Pass aisa's 401, 429 and 400 answers to the client unchanged**, and answer 503 when aisa is unreachable and the requested model has no backend with `fail_policy = "open"`.
+4. **Pass every answer aisa returns to the client unchanged**: 400, 401, 413, 429 and 503. A 503 from aisa is a decision (fail closed: it cannot verify credentials), not an outage, and must never lead to fail-open routing. aisa is *unreachable* only when the gateway gets no answer from it: the connection fails or the request times out. Then the gateway answers 503 itself when the requested model has no backend with `fail_policy = "open"`.
 5. **When aisa is unreachable, route by `X-Aisa-Requested-Model`** (rule 2), and only to the model's backends with `fail_policy = "open"`. Never route by `X-Aisa-Model` then: no decision set it. There is no downgrade, and any credential is accepted, including an unknown one. The usage events of these requests have an empty `consumer`; aisa counts them under the consumer `unknown` and charges no quota or budget.
 
 ## 2. Usage events (after the request)

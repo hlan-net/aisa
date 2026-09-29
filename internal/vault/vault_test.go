@@ -250,8 +250,13 @@ func TestNotFoundIsOnlyWhatVaultSaysAboutItsData(t *testing.T) {
 	}{
 		"a path without data":         {`{"errors":[]}`, true},
 		"a deleted version":           {`{"data":{"data":null,"metadata":{"deletion_time":"2026-01-01T00:00:00Z"}}}`, true},
+		"a destroyed version":         {`{"data":{"data":null,"metadata":{"deletion_time":"","destroyed":true}}}`, true},
 		"a mount that does not exist": {`{"errors":["no handler for route \"nomount/metadata/aisa/consumers/\". route entry not found."]}`, false},
 		"a proxy in front of Vault":   {`<html><body>404 Not Found</body></html>`, false},
+		"a proxy's empty object":      {`{}`, false},
+		"a proxy's JSON null":         {`null`, false},
+		"a proxy's JSON message":      {`{"message":"not found"}`, false},
+		"errors that are null":        {`{"errors":null}`, false},
 		"an empty answer":             {``, false},
 	} {
 		f.mu.Lock()

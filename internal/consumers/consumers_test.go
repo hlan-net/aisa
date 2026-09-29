@@ -119,6 +119,24 @@ func TestRotationWithTwoHashes(t *testing.T) {
 	}
 }
 
+func TestTheReservedNameUnknownCannotAuthenticate(t *testing.T) {
+	src := &fakeSource{data: map[string]map[string]any{
+		"unknown": {"key_sha256": hashOf("key-unknown")},
+		"chat-ui": {"key_sha256": hashOf("key-chat")},
+	}}
+	s, _ := newStore(src)
+	ctx := context.Background()
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if c, res := s.Lookup(ctx, "key-unknown"); res != Unknown {
+		t.Errorf("a consumer named unknown: %+v, %v, want Unknown", c, res)
+	}
+	if c, res := s.Lookup(ctx, "key-chat"); res != Found || c.Name != "chat-ui" {
+		t.Errorf("the other consumer: %+v, %v", c, res)
+	}
+}
+
 func TestInvalidAndDuplicateHashes(t *testing.T) {
 	src := &fakeSource{data: map[string]map[string]any{
 		"a":      {"key_sha256": hashOf("shared") + " not-a-hash"},
