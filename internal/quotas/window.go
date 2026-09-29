@@ -44,7 +44,8 @@ func (w *Window) Add(ctx context.Context, consumer string, tokens int64, at time
 	m := minute(at)
 	key := w.key(consumer, m)
 	expire := time.Unix((m+buckets+1)*int64(bucket/time.Second), 0)
-	_, err := w.rdb.Pipelined(ctx, func(p redis.Pipeliner) error {
+	// MULTI/EXEC: a bucket never exists without its expiry.
+	_, err := w.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
 		p.IncrBy(ctx, key, tokens)
 		p.ExpireAt(ctx, key, expire)
 		return nil

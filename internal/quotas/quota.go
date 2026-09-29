@@ -3,6 +3,7 @@ package quotas
 import (
 	"context"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/hlan-net/aisa/internal/consumers"
@@ -94,10 +95,7 @@ func (q *Quota) Check(ctx context.Context, c consumers.Consumer) Verdict {
 		q.log.Warn("cannot read quota usage; allowing the request", "consumer", c.Name, "error", err)
 		return Verdict{Outcome: Allow, Limit: prof.TokensPerHour}
 	}
-	var used int64
-	for _, n := range usage {
-		used += n
-	}
+	used := sum(usage)
 	v := Verdict{Outcome: Allow, Limit: prof.TokensPerHour, Used: used}
 	if used >= prof.TokensPerHour {
 		v.Outcome = Exhausted
@@ -109,13 +107,13 @@ func (q *Quota) Check(ctx context.Context, c consumers.Consumer) Verdict {
 // retryAfter is how long until the oldest buckets leave the window and take the usage below
 // limit. A limit of 0 is never reached, so it is the whole window.
 func retryAfter(usage []int64, limit int64, now time.Time) time.Duration {
-	var used int64
-	for _, n := range usage {
-		used += n
-	}
+	used := sum(usage)
 	first := minute(now) - int64(len(usage)) + 1
 	for i, n := range usage {
-		used -= n
+		// A saturated sum stays saturated: the true usage is not known below it.
+		if used < math.MaxInt64 {
+			used -= n
+		}
 		if used < limit {
 			// Bucket i counts until the minute that begins a window after its own.
 			leaves := time.Unix((first+int64(i)+buckets)*int64(bucket/time.Second), 0)
@@ -123,6 +121,25 @@ func retryAfter(usage []int64, limit int64, now time.Time) time.Duration {
 		}
 	}
 	return window
+}
+
+// AddTokens adds two token counts, saturating at math.MaxInt64 instead of wrapping, so huge
+// counts cannot turn negative and pass under a limit. Negative counts are taken as 0.
+func AddTokens(a, b int64) int64 {
+	a, b = max(a, 0), max(b, 0)
+	if a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
+}
+
+// sum adds the buckets of a window with AddTokens.
+func sum(usage []int64) int64 {
+	var total int64
+	for _, n := range usage {
+		total = AddTokens(total, n)
+	}
+	return total
 }
 
 // Charge counts tokens that a consumer used at a time. Tokens older than the window no longer

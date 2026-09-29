@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -212,9 +213,11 @@ func TestHandlerBodyTooLarge(t *testing.T) {
 // fakeCharger notes the charges.
 type fakeCharger struct {
 	charges map[string]int64 // "consumer@minute" → tokens
+	calls   int
 }
 
 func (f *fakeCharger) Charge(_ context.Context, consumer string, tokens int64, at time.Time) error {
+	f.calls++
 	f.charges[consumer+"@"+at.UTC().Format("15:04:05")] += tokens
 	return nil
 }
@@ -227,7 +230,7 @@ func TestHandlerCharges(t *testing.T) {
 
 	body := `[
 		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-09-29T12:00:10Z"},
-		{"request_id": "b", "consumer": "chat-ui", "status": 200, "prompt_tokens": "1", "completion_tokens": 2, "ts": "2026-09-29T12:00:50.5+00:00"},
+		{"request_id": "b", "consumer": "chat-ui", "status": 200, "prompt_tokens": "1", "completion_tokens": 2, "ts": "2026-09-29T14:00:50.5+02:00"},
 		{"request_id": "c", "consumer": "chat-ui", "status": 200, "prompt_tokens": 100, "ts": "2026-09-29T12:01:00Z"},
 		{"request_id": "d", "consumer": "chat-ui", "status": 200, "prompt_tokens": 7, "ts": "not a time"},
 		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-09-29T12:00:10Z"},
@@ -244,12 +247,27 @@ func TestHandlerCharges(t *testing.T) {
 	// One charge per consumer and minute; not the duplicate, the event without a consumer, the
 	// one without tokens or the invalid one. A ts that cannot be read is now.
 	want := map[string]int64{"chat-ui@12:00:00": 18, "chat-ui@12:01:00": 100, "chat-ui@12:30:00": 7}
-	if len(c.charges) != len(want) {
-		t.Errorf("charges = %v, want %v", c.charges, want)
+	// Equal minutes in other time zones are one charge.
+	if len(c.charges) != len(want) || c.calls != len(want) {
+		t.Errorf("charges = %v in %d calls, want %v", c.charges, c.calls, want)
 	}
 	for k, v := range want {
 		if c.charges[k] != v {
 			t.Errorf("charges[%s] = %d, want %d (all: %v)", k, c.charges[k], v, c.charges)
 		}
+	}
+}
+
+func TestHandlerChargesSaturate(t *testing.T) {
+	c := &fakeCharger{charges: map[string]int64{}}
+	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	body := `[
+		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 9223372036854775807, "completion_tokens": 1, "ts": "2026-09-29T12:00:10Z"},
+		{"request_id": "b", "consumer": "chat-ui", "status": 200, "prompt_tokens": 9223372036854775807, "ts": "2026-09-29T12:00:20Z"}
+	]`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
+	if got := c.charges["chat-ui@12:00:00"]; got != math.MaxInt64 {
+		t.Errorf("charged %d, want the saturated %d", got, int64(math.MaxInt64))
 	}
 }

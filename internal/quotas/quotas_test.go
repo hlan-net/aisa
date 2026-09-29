@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"strconv"
 	"sync"
 	"testing"
@@ -397,5 +398,29 @@ func TestQuotaWithRedis(t *testing.T) {
 	clock = now.Add(v.RetryAfter)
 	if v := q.Check(ctx, c); v.Outcome != Allow || v.Used != 50 {
 		t.Errorf("after retry-after: %+v", v)
+	}
+}
+
+func TestAddTokensSaturates(t *testing.T) {
+	for _, tc := range []struct{ a, b, want int64 }{
+		{1, 2, 3},
+		{math.MaxInt64, 1, math.MaxInt64},
+		{math.MaxInt64 - 1, math.MaxInt64 - 1, math.MaxInt64},
+		{-5, 3, 3},
+	} {
+		if got := AddTokens(tc.a, tc.b); got != tc.want {
+			t.Errorf("AddTokens(%d, %d) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestCheckHugeUsageStaysExhausted(t *testing.T) {
+	u := make([]int64, buckets)
+	u[0], u[1], u[2] = math.MaxInt64, math.MaxInt64, 5
+	q := New(loaded(consul.Pair{Key: "batch", Value: []byte(`{"tokens_per_hour": 100}`)}),
+		&fakeCounter{usage: u}, metrics.New("test"), discard, Options{})
+	v := q.Check(context.Background(), consumers.Consumer{Name: "a", QuotaProfile: "batch"})
+	if v.Outcome != Exhausted || v.Used != math.MaxInt64 || v.RetryAfter <= 0 {
+		t.Errorf("verdict = %+v, want exhausted with saturated usage", v)
 	}
 }

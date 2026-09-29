@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/quotas"
 )
 
 // maxBody bounds the request body aisa reads for usage events (16 MiB).
@@ -46,6 +47,10 @@ func New(m *metrics.Metrics, dedup *Dedup, charger Charger, log *slog.Logger) *H
 		now:     time.Now,
 	}
 }
+
+// chargeTimeout bounds the charges of one batch together, so a Redis that is down cannot keep
+// a request busy for one timeout per consumer and minute.
+const chargeTimeout = 5 * time.Second
 
 // charge is the tokens of one consumer in one minute of a batch, charged together.
 type charge struct {
@@ -99,8 +104,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		h.metrics.UsageEvents.WithLabelValues(metrics.EventAccepted).Inc()
 		h.recordEvent(ev)
-		if tokens := int64(ev.PromptTokens) + int64(ev.CompletionTokens); tokens > 0 && ev.Consumer != "" {
-			charges[charge{ev.Consumer, h.eventTime(ev).Truncate(time.Minute)}] += tokens
+		if tokens := quotas.AddTokens(int64(ev.PromptTokens), int64(ev.CompletionTokens)); tokens > 0 && ev.Consumer != "" {
+			key := charge{ev.Consumer, h.eventTime(ev).UTC().Truncate(time.Minute)}
+			charges[key] = quotas.AddTokens(charges[key], tokens)
 		}
 		accepted++
 	}
@@ -123,11 +129,19 @@ func (h *Handler) chargeAll(ctx context.Context, charges map[charge]int64) {
 	if h.charger == nil {
 		return
 	}
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chargeTimeout)
+	defer cancel()
+	done := 0
 	for c, tokens := range charges {
+		if ctx.Err() != nil {
+			h.log.Warn("quota charges of a batch timed out; the rest are not counted",
+				"charged", done, "skipped", len(charges)-done)
+			return
+		}
 		// The charger logs and counts its errors; the events stay accepted, since a retry
 		// would be dropped as a duplicate anyway.
 		_ = h.charger.Charge(ctx, c.consumer, tokens, c.minute)
+		done++
 	}
 }
 
