@@ -115,12 +115,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"accepted": accepted, "rejected": rejected})
 }
 
-// eventTime is when the gateway logged the event, or now when its ts is missing or unreadable.
+// eventTime is when the gateway logged the event, or now when its ts is missing, unreadable
+// or in the future. Future times are taken as now here, before the charges are grouped, so they
+// cannot split one consumer's charges into many minutes.
 func (h *Handler) eventTime(ev Event) time.Time {
-	if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(ev.Timestamp)); err == nil {
+	now := h.now()
+	if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(ev.Timestamp)); err == nil && !t.After(now) {
 		return t
 	}
-	return h.now()
+	return now
 }
 
 // chargeAll counts the tokens of a batch towards the quotas. It is not cancelled when the log

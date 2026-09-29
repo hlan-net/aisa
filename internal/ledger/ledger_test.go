@@ -233,6 +233,8 @@ func TestHandlerCharges(t *testing.T) {
 		{"request_id": "b", "consumer": "chat-ui", "status": 200, "prompt_tokens": "1", "completion_tokens": 2, "ts": "2026-09-29T14:00:50.5+02:00"},
 		{"request_id": "c", "consumer": "chat-ui", "status": 200, "prompt_tokens": 100, "ts": "2026-09-29T12:01:00Z"},
 		{"request_id": "d", "consumer": "chat-ui", "status": 200, "prompt_tokens": 7, "ts": "not a time"},
+		{"request_id": "g", "consumer": "chat-ui", "status": 200, "prompt_tokens": 1, "ts": "2026-09-29T15:00:00Z"},
+		{"request_id": "h", "consumer": "chat-ui", "status": 200, "prompt_tokens": 1, "ts": "2027-01-01T00:00:00Z"},
 		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-09-29T12:00:10Z"},
 		{"request_id": "e", "consumer": "", "status": 200, "prompt_tokens": 1000},
 		{"request_id": "f", "consumer": "batch-jobs", "status": 429},
@@ -245,8 +247,8 @@ func TestHandlerCharges(t *testing.T) {
 	}
 
 	// One charge per consumer and minute; not the duplicate, the event without a consumer, the
-	// one without tokens or the invalid one. A ts that cannot be read is now.
-	want := map[string]int64{"chat-ui@12:00:00": 18, "chat-ui@12:01:00": 100, "chat-ui@12:30:00": 7}
+	// one without tokens or the invalid one. A ts that cannot be read or is in the future is now.
+	want := map[string]int64{"chat-ui@12:00:00": 18, "chat-ui@12:01:00": 100, "chat-ui@12:30:00": 9}
 	// Equal minutes in other time zones are one charge.
 	if len(c.charges) != len(want) || c.calls != len(want) {
 		t.Errorf("charges = %v in %d calls, want %v", c.charges, c.calls, want)
