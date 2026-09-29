@@ -61,7 +61,7 @@ func (f *FlexInt64) UnmarshalJSON(data []byte) error {
 	var n int64
 	if err := json.Unmarshal(data, &n); err != nil {
 		var fl float64
-		if ferr := json.Unmarshal(data, &fl); ferr == nil {
+		if json.Unmarshal(data, &fl) == nil {
 			*f = FlexInt64(fl)
 			return nil
 		}
