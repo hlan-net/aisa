@@ -79,7 +79,7 @@ Keep the gateway endpoint internal: behind an IP allowlist or on an internal-onl
 
 | Failure | Behaviour |
 |---|---|
-| aisa down | Per-consumer fail policy: `closed` for paid providers (the request is rejected with 503), `open` for local models (allowed; usage is recorded later if the log sink retries). The gateway cannot identify the consumer without aisa, so how to apply this is still open; until then adapters fail closed (spike S8). |
+| aisa down | Per-backend fail policy (Consul service meta `fail_policy`): a request is served by the requested model's `open` backends, typically local models, and rejected with 503 when the model has none, as for paid providers. The consumer plays no part, because the gateway cannot identify it without aisa. Usage is recorded under the consumer `unknown` if the log sink delivers it ([#4](https://github.com/hlan-net/aisa/issues/4)). |
 | Redis down | aisa falls back to the persisted monthly totals in Consul KV. Quotas are enforced approximately, budgets still work. |
 | A backend down | Consul health check → consul-template re-renders without it → the gateway falls back to another instance |
 | Vault down | aisa keeps its cached identities and keys until their TTL expires, then fails closed |

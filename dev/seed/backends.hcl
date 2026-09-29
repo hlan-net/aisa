@@ -10,6 +10,7 @@ services {
     provider = "openai-compatible"
     models   = "qwen3,llama3.2"
     priority = "1"
+    fail_policy = "open"
   }
   check {
     id       = "service:mock-local"

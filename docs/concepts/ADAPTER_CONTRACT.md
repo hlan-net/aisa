@@ -42,7 +42,7 @@ POST /v1/decide            (GET is accepted too, for gateways that cannot send a
 
 - aisa authenticates the client (consumer key or JWT, both backed by Vault), so the gateway needs no per-consumer configuration.
 - The decision needs the **model name**, which is in the request body. Gateways that forward the body (Envoy `with_request_body`, APISIX `forward-auth` with `POST`) can send it directly. The preferred form is the `X-Aisa-Requested-Model` header, set by a small pre-step that copies `model` from the body, so aisa never receives the prompt (spike S8). The header takes precedence over the body.
-- **Fail policy** is configurable per consumer: `closed` (reject if aisa is down) for paid providers, `open` for local models. When aisa is unreachable the gateway cannot tell which consumer a request belongs to, so this is an open design question; until it is settled, adapters fail closed with 503.
+- **Fail policy** is a property of the backend, set in its Consul service meta `fail_policy` ([`CONSUL.md`](./CONSUL.md#backends-consul-catalog)): `closed` (the default) or `open`. When aisa is unreachable, the gateway cannot tell who the consumer is, so the consumer plays no part: a request is served only by the requested model's backends whose policy is `open`, and answered with 503 when the model has none. Typically local models are `open` and paid providers `closed`.
 
 ### Adapter rules for the decision
 
@@ -51,7 +51,8 @@ Spike S8 showed that these must hold for the decision to be safe and for downgra
 1. **Strip client-supplied `X-Aisa-*` headers** before the decision. Some forward-auth implementations clear them only on a successful answer, so a client could otherwise choose the model itself when aisa is unreachable and the adapter fails open.
 2. **Set `X-Aisa-Requested-Model` from the body**, overwriting any client value, or forward the body.
 3. **Route by `X-Aisa-Model` and forward the request with that model**, not the one the client asked for. A downgrade changes both the backend and the model name in the forwarded body.
-4. **Pass aisa's 401, 429 and 400 answers to the client unchanged**, and answer 503 when aisa is unreachable and the fail policy is closed.
+4. **Pass aisa's 401, 429 and 400 answers to the client unchanged**, and answer 503 when aisa is unreachable and the requested model has no backend with `fail_policy = "open"`.
+5. **When aisa is unreachable, route by `X-Aisa-Requested-Model`** (rule 2), and only to the model's backends with `fail_policy = "open"`. Never route by `X-Aisa-Model` then: no decision set it. There is no downgrade, and any credential is accepted, including an unknown one. The usage events of these requests have an empty `consumer`; aisa counts them under the consumer `unknown` and charges no quota or budget.
 
 ## 2. Usage events (after the request)
 
