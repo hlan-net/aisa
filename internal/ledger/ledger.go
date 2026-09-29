@@ -218,6 +218,12 @@ func (h *Handler) recordEvent(ev Event) {
 
 	h.metrics.Requests.WithLabelValues(consumer, ev.Model, ev.Backend, statusStr).Inc()
 
+	if usageMissing(ev) {
+		// The tokens were used but not reported: a backend that does not stream usage, or a
+		// client that disconnected mid-stream (#12). Counted, so it is not silently free.
+		h.metrics.UsageMissing.WithLabelValues(consumer, ev.Model, ev.Backend).Inc()
+	}
+
 	if ev.PromptTokens > 0 {
 		h.metrics.Tokens.WithLabelValues(consumer, ev.Model, ev.Backend, metrics.DirectionPrompt).Add(float64(ev.PromptTokens))
 	}
@@ -241,6 +247,13 @@ func (h *Handler) recordEvent(ev Event) {
 		"completion_tokens", ev.CompletionTokens,
 		"request_id", ev.RequestID,
 	)
+}
+
+// usageMissing reports whether ev is a successful response without token counts. The contract
+// reads that as usage the gateway did not see, not as no usage; missing, null, "0" and 0 all
+// arrive here as zero.
+func usageMissing(ev Event) bool {
+	return ev.Status >= 200 && ev.Status < 300 && ev.PromptTokens == 0 && ev.CompletionTokens == 0
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
