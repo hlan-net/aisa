@@ -7,7 +7,7 @@ Most spikes test whether the **APISIX adapter** can meet the contract in [`ADAPT
 | # | Question | Why it matters | How to test | Outcome |
 |---|---|---|---|---|
 | S2 | Are token counts in the gateway's log data correct for **streaming** responses from Ollama's OpenAI endpoint? | Usage events feed cost and budgets | Compare the logged counts with Ollama's own `eval_count` for streamed and non-streamed requests, with and without `stream_options.include_usage` | **Partly** (2026-09-28): exact through APISIX when the backend streams usage, which a real Ollama does; lost when a backend does not or the client disconnects. [Details](#s2--s6-usage-events-from-apisix) |
-| S5 | Does the official `apache/apisix` Helm chart support standalone mode well, or are plain manifests simpler? | Adapter deployment shape | Install the chart with standalone values and check for an etcd dependency | — |
+| S5 | Does the official `apache/apisix` Helm chart support standalone mode well, or are plain manifests simpler? | Adapter deployment shape | Install the chart with standalone values and check for an etcd dependency | **The chart supports standalone mode, but not the adapter** (2026-09-29): it reads its routes from a ConfigMap only. The adapter uses plain manifests. [Details](#s5-apisix-in-standalone-mode-on-kubernetes) |
 | S6 | Can APISIX `http-logger` produce the usage event schema: token counts, model, TTFT and upstream from the AI plugin variables in `log_format`? | Contract 2 | Configure `log_format` with the `llm_*` variables and receive the events in the stub | **Yes** (2026-09-28), with type and latency caveats. [Details](#s2--s6-usage-events-from-apisix) |
 | S7 | Resource use on a small arm64 node (e.g. Raspberry Pi 4) of APISIX, aisa and consul-template together | Requests and limits, whether it runs on small clusters | Measure CPU and memory while running parallel streams | **Small enough** (2026-09-28, on a Raspberry Pi 5): about 85 MB idle and 115 MB under 100 streams with one nginx worker. Requests and limits are still to be confirmed on a Raspberry Pi 4 with real aisa ([#16](https://github.com/hlan-net/aisa/issues/16)). [Details](#s7--s10-footprint-and-added-latency) |
 | S8 | Can APISIX `forward-auth` send the **model name** (it is in the body) to `/v1/decide`, and can the route then choose the backend from the returned `X-Aisa-Model` header? | Contract 1, including downgrade | Try `forward-auth` with body forwarding; if that fails, a `serverless-pre-function` that copies `model` to a header. Route to `ai-proxy-multi` by header. | **Yes, with an internal hop** (2026-09-28). [Details below](#s8-forward-auth-and-model-routing-on-apisix) |
@@ -146,3 +146,25 @@ Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.
 - The template must set `default_lease_duration`, or a rotated key takes 5 minutes to arrive.
 - Found in review: `ai-proxy-multi` forwards the client's `Authorization` to a backend without a key, the internal hop has a request id of its own, and a denied request never reaches the internal route's logger. The template removes the header, passes the decision's id along and logs denials on the client route.
 - Open: nothing checks the rendered file before the gateway loads it, a file without routes takes every route away, and a catalog that comes back empty renders a config without backends. Both need a guard in the adapter ([#18](https://github.com/hlan-net/aisa/issues/18)).
+
+### S5: APISIX in standalone mode on Kubernetes
+
+**2026-09-29**, the official chart `apisix/apisix` 2.17.0 (APISIX 3.18.0) and plain manifests with consul-template 0.43.0, on k3s 1.36 with Raspberry Pi 4 nodes (arm64, 4 cores, 8 GB) and a real Ollama 0.31.1 outside the cluster. The values, manifests, script and full output are in [`adapters/apisix/spikes/s5-helm-chart/`](../../adapters/apisix/spikes/s5-helm-chart/).
+
+**Result: the official chart runs APISIX in standalone mode without etcd, but it cannot carry the adapter. The adapter is deployed with plain manifests.**
+
+What was verified:
+
+1. **The chart supports standalone mode.** With `apisix.deployment.mode: standalone` and `etcd.enabled: false` it renders no etcd; a Secret with an empty password and an environment variable are left of it. The number of workers and the internal listener of the two-hop route are values. Requests to Ollama worked, streamed and not.
+2. **The chart reads its routes from a ConfigMap only.** It mounts the ConfigMap at a fixed path and links `apisix.yaml` to it. A directory that a sidecar renders into cannot be mounted at that path: Kubernetes rejects the second mount. So the chart leaves no place for consul-template, and provider keys would be in a ConfigMap, which the cluster stores.
+3. **A change of the ConfigMap reached APISIX after 17 to 61 s** in four tries, the time the kubelet takes to update a mounted ConfigMap. `helm upgrade` does not replace the pod for it. No request failed.
+4. **Plain manifests carry the adapter as designed.** APISIX and consul-template run in one pod and share a directory in memory. An init container renders once, because APISIX does not start without an `apisix.yaml`. A request passed the client-facing route, the decision, the internal route, Ollama and the usage event; the pod was ready 5 s after it was applied and 5 s after it was replaced.
+5. **A change in Consul reached APISIX after 2 to 3 s**, measured through the Kubernetes API. A backend left and returned five times under a request loop, and no request was answered otherwise than expected.
+6. **Model names are not route ids.** An APISIX route id takes letters, digits, `-`, `_` and `.`; `llama3.2:3b` has a colon. APISIX left that model's route out, with an error in its log only, and requests for the model got the 503 of "no healthy backend". The template now replaces the other characters and appends a hash of the name.
+7. **On a Raspberry Pi 4, APISIX with one worker had a working set of 46 to 49 MiB** after a few requests, and consul-template 3 to 4 MiB. This is not a measurement under load; it is the first number from the hardware that [#16](https://github.com/hlan-net/aisa/issues/16) asks about, and it is below the 61 MB of proportional set size on a Raspberry Pi 5 (S7), which counts differently.
+
+Consequences, reflected in [`ARCHITECTURE.md`](../concepts/ARCHITECTURE.md) and [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#3-config-rendering-gateway-configuration):
+
+- The APISIX adapter ships manifests, or a small chart of its own, with APISIX and consul-template in one pod. It does not build on the official chart.
+- A template makes the names it takes from Consul valid for the gateway before it uses them as identifiers.
+- Not tested here: consul-template with Consul's ACLs and with Vault's Kubernetes auth, and the adapter's NetworkPolicy. They belong to `feature/apisix-adapter`.

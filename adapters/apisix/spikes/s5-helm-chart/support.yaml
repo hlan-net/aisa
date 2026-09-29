@@ -1,0 +1,91 @@
+# Spike S5: what the adapter talks to in the spike, from public images only.
+#
+#   consul      a dev-mode Consul for the backends
+#   stub-aisa   nginx that answers /v1/decide as aisa would for a known consumer, and takes
+#               usage events at /v1/usage. It checks no credential.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consul
+  labels: {app: consul}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: consul}
+  template:
+    metadata:
+      labels: {app: consul}
+    spec:
+      containers:
+        - name: consul
+          image: hashicorp/consul:2.0.4
+          args: ["agent", "-dev", "-client=0.0.0.0", "-log-level=warn"]
+          ports:
+            - {containerPort: 8500}
+          readinessProbe:
+            httpGet: {path: /v1/status/leader, port: 8500}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+spec:
+  selector: {app: consul}
+  ports:
+    - {port: 8500, targetPort: 8500}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stub-aisa
+data:
+  default.conf: |
+    log_format usage '$request_method $uri $status $request_length';
+    server {
+      listen 8080;
+      access_log /dev/stdout usage;
+      location = /v1/decide {
+        add_header X-Aisa-Consumer chat-ui always;
+        add_header X-Aisa-Model $http_x_aisa_requested_model always;
+        return 200;
+      }
+      location = /v1/usage { return 204; }
+      location = /healthz { access_log off; return 200; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stub-aisa
+  labels: {app: stub-aisa}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: stub-aisa}
+  template:
+    metadata:
+      labels: {app: stub-aisa}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.29-alpine
+          ports:
+            - {containerPort: 8080}
+          volumeMounts:
+            - {name: conf, mountPath: /etc/nginx/conf.d}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 2
+      volumes:
+        - name: conf
+          configMap: {name: stub-aisa}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stub-aisa
+spec:
+  selector: {app: stub-aisa}
+  ports:
+    - {port: 8080, targetPort: 8080}

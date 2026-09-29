@@ -69,7 +69,7 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> \
 
 - **Own namespace.** aisa, the gateway and Redis run together in a dedicated namespace (`aisa` by default), not in `kube-system`. Vault's Kubernetes auth binds roles to a namespace and service account, so aisa's Vault access stays separate from other workloads, and NetworkPolicies, resource quotas and upgrades apply to aisa alone.
 - **Shared service.** Applications in other namespaces use the gateway's Service as an OpenAI-compatible endpoint (e.g. `http://<gateway-service>.aisa.svc.cluster.local/v1`); clients outside the cluster come in through an internal ingress (see [Exposure](#exposure)). A namespace is not an identity: each application authenticates with its own consumer credential ([`VAULT.md`](./VAULT.md)).
-- **Gateway.** The gateway is installed separately, with its upstream chart or plain manifests (spike S5) and the files in `adapters/<gateway>/`; aisa's chart does not bundle it.
+- **Gateway.** The gateway is installed separately, with the files in `adapters/<gateway>/`. For APISIX these are manifests of its own and not the upstream chart, which has no place for the sidecar that renders the config (spike S5). aisa's chart does not bundle it.
 
 ## Exposure
 
