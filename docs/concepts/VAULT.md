@@ -25,9 +25,10 @@ Each role can only read its own paths.
 
 ### First version: consumer keys
 ```
-secret/aisa/consumers/chat-ui     key_sha256=<hash>  fail_policy=open    quota_profile=interactive
-secret/aisa/consumers/batch-jobs  key_sha256=<hash>  fail_policy=closed  quota_profile=batch
+secret/aisa/consumers/chat-ui     key_sha256=<hash>  quota_profile=interactive
+secret/aisa/consumers/batch-jobs  key_sha256=<hash>  quota_profile=batch
 ```
+- A consumer has no fail policy: when aisa is unreachable the gateway cannot tell who the consumer is, so the policy belongs to the backend ([`CONSUL.md`](./CONSUL.md#backends-consul-catalog)).
 - Vault stores only the **SHA-256 of the key**. The plaintext key is shown once when created and handed to the client.
 - aisa caches the consumer list, refreshing it every 60 s and when a key is not found, so key validation does not call Vault on every request.
 - Rotation: write a second hash, move the client to the new key, then delete the old hash.

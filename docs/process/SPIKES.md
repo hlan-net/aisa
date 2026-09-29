@@ -36,9 +36,9 @@ What was verified:
 Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md) and [`ARCHITECTURE.md`](../concepts/ARCHITECTURE.md):
 
 - The decision API reads the requested model from `X-Aisa-Requested-Model`, or from the JSON body when the header is absent, and answers 400 when there is neither.
-- Adapter rules: strip client-supplied `X-Aisa-*` headers before the decision, route by `X-Aisa-Model` and forward the request with that model, and answer 503 when aisa is unreachable and the fail policy is closed.
+- Adapter rules: strip client-supplied `X-Aisa-*` headers before the decision, route by `X-Aisa-Model` and forward the request with that model, and answer 503 when aisa is unreachable and the requested model has no fail-open backend.
 - The APISIX template renders the client-facing route plus one internal route per model. A model-aware instance selector in `ai-proxy-multi` would remove the hop and is listed as an upstream contribution in [`ROADMAP.md`](../../ROADMAP.md).
-- The fail policy cannot be per consumer as written: when aisa is unreachable, the gateway does not know who the consumer is. This is filed as a design issue; until it is settled the adapter fails closed.
+- The fail policy cannot be per consumer as written: when aisa is unreachable, the gateway does not know who the consumer is. Settled in [#4](https://github.com/hlan-net/aisa/issues/4): the fail policy is the backend's Consul service meta `fail_policy`, and a request fails open only to the requested model's `open` backends.
 - Also observed: `ai-proxy-multi` has a 30 s default `timeout`, too short for slow local models; the template must set it. The default `http-logger` format includes the client's `Authorization` header, so the usage log format (S6) must be explicit.
 
 ### S2 + S6: usage events from APISIX

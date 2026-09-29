@@ -44,8 +44,10 @@ done
 curl -fsS -X DELETE "$STUB/debug/requests" >/dev/null
 
 echo "== sources of truth"
-expect "vault: consumer chat-ui seeded" "open" \
-    "$(curl -fsS -H 'X-Vault-Token: dev-root' "$VAULT/v1/secret/data/aisa/consumers/chat-ui" | jq -r .data.data.fail_policy)"
+expect "vault: consumer chat-ui seeded" "interactive" \
+    "$(curl -fsS -H 'X-Vault-Token: dev-root' "$VAULT/v1/secret/data/aisa/consumers/chat-ui" | jq -r .data.data.quota_profile)"
+expect "consul: mock-local fails open" "open" \
+    "$(curl -fsS "$CONSUL/v1/catalog/service/aisa-backend" | jq -r '.[] | select(.ServiceID == "mock-local") | .ServiceMeta.fail_policy')"
 expect "consul: pricing for cloud-large" "0.015" \
     "$(curl -fsS "$CONSUL/v1/kv/aisa/pricing/cloud-large?raw" | jq -r .output_per_1k)"
 expect "consul: two healthy aisa-backend instances" "2" \

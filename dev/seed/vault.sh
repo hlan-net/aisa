@@ -11,9 +11,9 @@ until vault status >/dev/null 2>&1; do sleep 1; done
 sha256() { printf %s "$1" | sha256sum | cut -d' ' -f1; }
 
 vault kv put secret/aisa/consumers/chat-ui \
-    key_sha256="$(sha256 dev-key-chat-ui)" fail_policy=open quota_profile=interactive
+    key_sha256="$(sha256 dev-key-chat-ui)" quota_profile=interactive
 vault kv put secret/aisa/consumers/batch-jobs \
-    key_sha256="$(sha256 dev-key-batch-jobs)" fail_policy=closed quota_profile=batch
+    key_sha256="$(sha256 dev-key-batch-jobs)" quota_profile=batch
 vault kv put secret/aisa/providers/cloud api_key=dev-provider-key
 
 echo "vault seeded"
