@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -178,8 +179,8 @@ func ParseEvents(body []byte) ([]Event, error) {
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("invalid JSON object: %w", err)
 	}
-	if dec.More() {
-		return nil, errors.New("unexpected trailing data after JSON object")
+	if err := atEnd(dec); err != nil {
+		return nil, fmt.Errorf("after the JSON object: %w", err)
 	}
 	return []Event{decodeEvent(raw)}, nil
 }
@@ -215,10 +216,19 @@ func parseEventArray(trimmed []byte) ([]Event, error) {
 	if !ok || delim != ']' {
 		return nil, errors.New("expected end of JSON array")
 	}
-	if dec.More() {
-		return nil, errors.New("unexpected trailing data after JSON array")
+	if err := atEnd(dec); err != nil {
+		return nil, fmt.Errorf("after the JSON array: %w", err)
 	}
 	return events, nil
+}
+
+// atEnd returns an error unless dec has read all of its input. dec.More is not enough: it
+// reports false before a stray ] or } too.
+func atEnd(dec *json.Decoder) error {
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("unexpected trailing data")
+	}
+	return nil
 }
 
 // decodeEvent decodes one well-formed JSON value into an Event. When it fails, the event

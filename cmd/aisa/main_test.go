@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +13,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/hlan-net/aisa/internal/consumers"
+	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/server"
 )
 
 func TestRunRejectsBadInput(t *testing.T) {
@@ -95,5 +99,22 @@ func TestObserveLoad(t *testing.T) {
 		if tc.got != tc.want {
 			t.Errorf("%s = %v, want %v", name, tc.got, tc.want)
 		}
+	}
+}
+
+// A usage request that is not a POST reaches the ledger through the routes and is counted.
+func TestRoutesCountAUsageRequestWithTheWrongMethod(t *testing.T) {
+	m := metrics.New("test")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := server.New(log, m.Handler(), time.Second)
+	routes(srv, http.NotFoundHandler(), ledger.New(m, ledger.NewDedup(10, time.Minute), log))
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/usage", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /v1/usage: status = %d, want 405", rec.Code)
+	}
+	if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(metrics.UsageRequestMethod)); got != 1 {
+		t.Errorf("aisa_usage_requests_rejected_total{reason=\"method\"} = %v, want 1", got)
 	}
 }

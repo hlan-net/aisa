@@ -156,6 +156,11 @@ func TestParseEventsRejects(t *testing.T) {
 		"invalid json":        `{not json`,
 		"array invalid json":  `[{"r": 1}, invalid]`,
 		"array trailing data": `[{"r": 1}] {}`,
+		"array extra ]":       `[{"request_id": "r", "status": 200}]]`,
+		"array extra }":       `[{"request_id": "r", "status": 200}]}`,
+		"object extra ]":      `{"request_id": "r", "status": 200}]`,
+		"object extra }":      `{"request_id": "r", "status": 200}}`,
+		"object then object":  `{"request_id": "r"} {"request_id": "s"}`,
 		"array unterminated":  `[{"r": 1},`,
 	} {
 		if _, err := ParseEvents([]byte(in)); err == nil {

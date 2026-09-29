@@ -224,8 +224,11 @@ func TestHandlerValueErrorRejectsOnlyItsEvent(t *testing.T) {
 	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventRejected)); got != 4 {
 		t.Errorf("aisa_usage_events_total{rejected} = %v, want 4", got)
 	}
-	if n := testutil.CollectAndCount(m.UsageRequestsRejected); n != 0 {
-		t.Errorf("aisa_usage_requests_rejected_total has %d series, want 0", n)
+	for _, reason := range []string{metrics.UsageRequestMalformed, metrics.UsageRequestTooLarge,
+		metrics.UsageRequestUnreadable, metrics.UsageRequestMethod} {
+		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != 0 {
+			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want 0", reason, got)
+		}
 	}
 }
 

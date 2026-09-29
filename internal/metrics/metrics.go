@@ -177,6 +177,11 @@ func New(version string) *Metrics {
 		m.UsageEvents, m.UsageRequestsRejected,
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 	)
+	// The reasons are fixed: start each at 0, so the first rejection is an increase that an
+	// alert on increase() or rate() can see.
+	for _, reason := range []string{UsageRequestMalformed, UsageRequestTooLarge, UsageRequestUnreadable, UsageRequestMethod} {
+		m.UsageRequestsRejected.WithLabelValues(reason)
+	}
 	return m
 }
 
