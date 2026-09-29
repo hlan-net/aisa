@@ -29,6 +29,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | Done ([#19](https://github.com/hlan-net/aisa/pull/19)): reloads are clean and take 1 to 2 s; the rendered file needs a guard ([#18](https://github.com/hlan-net/aisa/issues/18)) |
 | 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | Done ([#17](https://github.com/hlan-net/aisa/pull/17)): fits a small node with one nginx worker; `forward-auth` adds 0.3 to 2 ms. Measured on a Raspberry Pi 5 |
 | 6 | `claude/sonarqube-pr-scan-66r8m0` | SonarQube scan with Go coverage for PRs and `main` | Done ([#15](https://github.com/hlan-net/aisa/pull/15)): coverage needs `SONAR_TOKEN` |
+| 7 | `spike/apisix-chart` | S5: APISIX in standalone mode on Kubernetes, the official chart or plain manifests | In review: plain manifests; the chart has no place for the sidecar that renders the config |
 
 ## v0.2.0: First version (token quotas)
 

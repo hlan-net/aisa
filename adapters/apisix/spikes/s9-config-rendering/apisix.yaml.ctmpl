@@ -73,7 +73,16 @@ routes:
       nodes:
         "127.0.0.1:9081": 1
 {{ range scratch.MapValues "models" }}{{ $model := . }}
-  - id: {{ printf "model-%s" $model | toJSON }}
+  {{- /* A route id may hold letters, digits, "-", "_" and "." only, and model names have more:
+         "llama3.2:3b". It is also at most 64 characters long. With an id that APISIX rejects,
+         the route is left out. A name that must be changed is cut to 49 characters and gets a
+         hash, which keeps two names apart that differ only in what was replaced or cut. */}}
+  {{- $safe := $model | regexReplaceAll "[^a-zA-Z0-9_.-]" "-" }}
+  {{- $id := printf "model-%s" $safe }}
+  {{- if or (ne $safe $model) (gt (len $safe) 58) }}
+    {{- $id = printf "model-%s-%s" ($safe | sprig_trunc 49) (sha256Hex $model | sprig_trunc 8) }}
+  {{- end }}
+  - id: {{ $id | toJSON }}
     uri: /v1/chat/completions
     methods: [POST]
     priority: 10

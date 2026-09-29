@@ -182,7 +182,10 @@ check "every usage event carries the request id sent to the decision" true \
     "$(curl -fsS "$STUB/debug/requests" | jq '([.[] | select(.kind == "decide") | .headers["X-Request-Id"]]) as $ids
         | [.[] | select(.kind == "usage") | .body.request_id] | length > 0 and all(. as $id | $ids | index($id))')"
 authorization() { # authorization <backend>: how often it received an Authorization header, "true false ..."
-    "${COMPOSE[@]}" logs --no-log-prefix "$1" 2>/dev/null | jq -r 'select(.msg == "chat completion") | .authorization_present' |
+    local backend=$1
+    # Some versions of docker compose put a terminal control sequence before each line.
+    "${COMPOSE[@]}" logs --no-log-prefix "$backend" 2>/dev/null | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' |
+        jq -r 'select(.msg == "chat completion") | .authorization_present' |
         sort | uniq -c | awk '{ printf "%s:%s ", $2, $1 }' | sed 's/ $//'
 }
 check "backends without a key never see the client's Authorization" "" \
