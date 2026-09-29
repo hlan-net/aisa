@@ -58,6 +58,7 @@ ask() { # ask <model> <stream> → sets STATUS; the answer is in $tmp/answer
         -H 'Content-Type: application/json' -d "$(chat "$model" "$stream")" "$GATEWAY/v1/chat/completions" >"$tmp/answer" || true
     STATUS=$(tail -1 "$tmp/answer")
 }
+joined() { tr '\n' ' ' | sed 's/ $//'; } # the lines of its input, on one line
 wait_until() { # wait_until <seconds> <command...>
     local seconds=$1 end
     shift
@@ -77,7 +78,7 @@ usage_of() { # usage_of <container>: "<cores> / <MiB>" as the kubelet reports it
 hardware() { # hardware <pod selector> <container>
     local selector=$1 container=$2
     "${K[@]}" exec "$("${K[@]}" get pod -l "$selector" -o name | head -1)" -c "$container" -- \
-        sh -c 'grep -m1 "^Model" /proc/cpuinfo | cut -d: -f2- | sed "s/^ //"; nproc' | tr '\n' ' ' | sed 's/ $//'
+        sh -c 'grep -m1 "^Model" /proc/cpuinfo | cut -d: -f2- | sed "s/^ //"; nproc' | joined
 }
 
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE" >/dev/null
@@ -111,7 +112,7 @@ part_chart() {
     sed "s#gpu-box.internal:11434#$OLLAMA_ADDR#" "$here/values-standalone.yaml" >"$tmp/values.yaml"
     helm template apisix apisix/apisix --version "$CHART_VERSION" -n "$NAMESPACE" -f "$tmp/values.yaml" >"$tmp/rendered.yaml"
     check "kinds that the chart renders" "ConfigMap ConfigMap Deployment Secret Service" \
-        "$(grep '^kind:' "$tmp/rendered.yaml" | awk '{ print $2 }' | sort | tr '\n' ' ' | sed 's/ $//')"
+        "$(grep '^kind:' "$tmp/rendered.yaml" | awk '{ print $2 }' | sort | joined)"
     check "  ... left of etcd: a Secret and an environment variable" "1 1" \
         "$(grep -c '^  name: etcd-apisix$' "$tmp/rendered.yaml" || true) $(grep -c 'name: APISIX_ETCD_PASSWORD' "$tmp/rendered.yaml" || true)"
 
@@ -243,8 +244,8 @@ part_manifests() {
     safe=$(sed 's/[^a-zA-Z0-9_.-]/-/g' <<<"$MODEL")
     id=model-$safe
     [[ "$safe" == "$MODEL" ]] || id="model-$safe-$(printf '%s' "$MODEL" | sha256sum | cut -c1-8)"
-    check "routes" "$(printf '%s\n' client "$id" model-no-colon-model no-backend | sort | tr '\n' ' ' | sed 's/ $//')" \
-        "$(rendered | sed -n 's/^  - id: "\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' | sort | tr '\n' ' ' | sed 's/ $//')"
+    check "routes" "$(printf '%s\n' client "$id" model-no-colon-model no-backend | sort | joined)" \
+        "$(rendered | sed -n 's/^  - id: "\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' | sort | joined)"
     check "routes that APISIX rejected" 0 "$("${K[@]}" logs deploy/apisix -c apisix 2>/dev/null | grep -c 'failed to check item' || true)"
 
     echo

@@ -16,6 +16,9 @@ spec:
     metadata:
       labels: {app: apisix}
     spec:
+      # Nothing in the pod talks to the Kubernetes API. With Vault's Kubernetes auth,
+      # consul-template gets a token of its own, projected for Vault.
+      automountServiceAccountToken: false
       initContainers:
         # APISIX does not start without an apisix.yaml, so the first render comes before it.
         - name: render-once
@@ -25,8 +28,8 @@ spec:
             - {name: render, mountPath: /spike, readOnly: true}
             - {name: rendered, mountPath: /rendered}
           resources: &render-resources
-            requests: {cpu: 10m, memory: 32Mi}
-            limits: {memory: 64Mi}
+            requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+            limits: {memory: 64Mi, ephemeral-storage: 64Mi}
       containers:
         - name: apisix
           image: apache/apisix:3.18.0-debian
@@ -48,8 +51,8 @@ spec:
             periodSeconds: 2
           # The starting values of spike S7, to be confirmed (#16).
           resources:
-            requests: {cpu: 100m, memory: 96Mi}
-            limits: {memory: 192Mi}
+            requests: {cpu: 100m, memory: 96Mi, ephemeral-storage: 64Mi}
+            limits: {memory: 192Mi, ephemeral-storage: 512Mi}
         - name: consul-template
           image: hashicorp/consul-template:0.43.0
           args: ["-config=/spike/consul-template.hcl"]
