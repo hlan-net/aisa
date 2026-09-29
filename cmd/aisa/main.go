@@ -17,6 +17,8 @@
 //	AISA_CONSUMER_REFRESH       interval of reloading the consumers               1m
 //	AISA_CONSUMER_MISS_REFRESH  least time between reloads for unknown keys       5s
 //	AISA_CONSUMER_MAX_STALE     age of the consumers after which aisa fails closed 15m
+//	AISA_LEDGER_DEDUP_CAPACITY  request IDs kept for dedup                        100000
+//	AISA_LEDGER_DEDUP_TTL       how long request IDs are kept for dedup           15m
 //
 // With -healthcheck it asks the aisa that runs on AISA_ADDR for /healthz and exits, for the
 // health check of a container.
@@ -37,6 +39,7 @@ import (
 	"github.com/hlan-net/aisa/internal/config"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/decide"
+	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/server"
 	"github.com/hlan-net/aisa/internal/vault"
@@ -100,6 +103,8 @@ func run(args []string) error {
 	decision := decide.New(store, m, log.With("component", "decide"))
 	srv.Handle("POST /v1/decide", decision)
 	srv.Handle("GET /v1/decide", decision)
+	ledg := ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), log.With("component", "ledger"))
+	srv.Handle("POST /v1/usage", ledg)
 	if err := srv.Run(ctx, cfg.Addr); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}

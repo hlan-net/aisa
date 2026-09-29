@@ -106,9 +106,30 @@ func TestFromEnvRejects(t *testing.T) {
 		"prefix of slashes only":  {"AISA_VAULT_PREFIX": "/"},
 		"mount of slashes only":   {"AISA_VAULT_KV_MOUNT": "//"},
 		"max stale below refresh": {"AISA_CONSUMER_REFRESH": "10m", "AISA_CONSUMER_MAX_STALE": "5m"},
+		"dedup capacity not int":  {"AISA_LEDGER_DEDUP_CAPACITY": "invalid"},
+		"dedup capacity zero":     {"AISA_LEDGER_DEDUP_CAPACITY": "0"},
+		"dedup capacity negative": {"AISA_LEDGER_DEDUP_CAPACITY": "-1"},
+		"dedup ttl not duration":  {"AISA_LEDGER_DEDUP_TTL": "forever"},
+		"dedup ttl zero":          {"AISA_LEDGER_DEDUP_TTL": "0s"},
 	} {
 		if _, err := FromEnv(env(vars)); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
+	}
+}
+
+func TestFromEnvLedger(t *testing.T) {
+	cfg, err := FromEnv(env(map[string]string{
+		"AISA_LEDGER_DEDUP_CAPACITY": "50000",
+		"AISA_LEDGER_DEDUP_TTL":      "10m",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ledger.DedupCapacity != 50000 {
+		t.Errorf("DedupCapacity = %d, want 50000", cfg.Ledger.DedupCapacity)
+	}
+	if cfg.Ledger.DedupTTL != 10*time.Minute {
+		t.Errorf("DedupTTL = %v, want 10m", cfg.Ledger.DedupTTL)
 	}
 }

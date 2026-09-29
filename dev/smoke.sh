@@ -80,6 +80,31 @@ expect "aisa: unknown key" "401  " "$(decide dev-key-nobody '{"model":"qwen3"}')
 expect "aisa: no model" "400  " "$(decide dev-key-chat-ui '{"messages":[]}')"
 expect "aisa: decisions counted" "$((allowed_before + 1))" "$(allowed)"
 
+echo "== aisa: /v1/usage event ingestion and metrics"
+send_usage() {
+    local body=$1
+    curl -sS -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' \
+        -d "$body" "$AISA/v1/usage"
+}
+tokens_metric() {
+    local consumer=$1 model=$2 direction=$3
+    curl -fsS "$AISA/metrics" | awk -v c="$consumer" -v m="$model" -v d="$direction" '
+        $1 ~ "^aisa_tokens_total{" && $1 ~ "consumer=\"" c "\"" && $1 ~ "model=\"" m "\"" && $1 ~ "direction=\"" d "\"" { print $2 + 0 }' | head -n1
+}
+prompt_before=$(tokens_metric chat-ui qwen3 prompt)
+prompt_before=${prompt_before:-0}
+expect "aisa: usage accepted (single event)" "200" \
+    "$(send_usage '{"request_id":"smoke-req-1","consumer":"chat-ui","model":"qwen3","backend":"mock-local","status":200,"prompt_tokens":10,"completion_tokens":25,"latency_ms":150,"ttft_ms":50,"stream":false}')"
+expect "aisa: token metrics incremented" "$((prompt_before + 10))" "$(tokens_metric chat-ui qwen3 prompt)"
+
+expect "aisa: duplicate usage accepted" "200" \
+    "$(send_usage '{"request_id":"smoke-req-1","consumer":"chat-ui","model":"qwen3","backend":"mock-local","status":200,"prompt_tokens":10,"completion_tokens":25}')"
+expect "aisa: duplicate event did not double count tokens" "$((prompt_before + 10))" "$(tokens_metric chat-ui qwen3 prompt)"
+
+expect "aisa: usage accepted (batch array)" "200" \
+    "$(send_usage '[{"request_id":"smoke-req-2","consumer":"chat-ui","model":"qwen3","backend":"mock-local","status":"200","prompt_tokens":"5","completion_tokens":"15"}]')"
+expect "aisa: batch tokens incremented" "$((prompt_before + 15))" "$(tokens_metric chat-ui qwen3 prompt)"
+
 echo "== gateway → decide → backend"
 out=$(chat dev-key-chat-ui '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}')
 expect "non-streaming: status" "200" "$(head -n1 <<<"$out")"

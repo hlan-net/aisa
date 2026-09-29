@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **Usage ledger** (`POST /v1/usage`): aisa ingests normalized usage events from gateways, deduplicates retried events by `request_id` using an in-memory bounded LRU cache with TTL (`AISA_LEDGER_DEDUP_CAPACITY`, `AISA_LEDGER_DEDUP_TTL`), and updates `aisa_requests_total`, `aisa_tokens_total`, `aisa_latency_seconds`, and `aisa_ttft_seconds`. It accepts both single JSON event objects and arrays of events, parses numbers and booleans flexibly as numbers, booleans or strings, accounts events without a consumer under `unknown`, and safely ignores unknown fields without logging credentials.
+
 ## [0.1.0] - 2026-09-29
 
 The first release: the design, the answered spikes, the dev stack and the start of aisa itself. The image `ghcr.io/hlan-net/aisa:v0.1.0` authenticates consumers with the decision API; quotas and budgets are not enforced yet.

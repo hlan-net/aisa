@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +22,7 @@ type Config struct {
 
 	Vault     Vault
 	Consumers Consumers
+	Ledger    Ledger
 }
 
 // Vault is where aisa reads consumers from (docs/concepts/VAULT.md).
@@ -57,6 +59,15 @@ type Consumers struct {
 	MaxStale time.Duration
 }
 
+// Ledger sets how the usage ledger operates.
+type Ledger struct {
+	// DedupCapacity is the max number of request IDs kept to deduplicate events
+	// (AISA_LEDGER_DEDUP_CAPACITY).
+	DedupCapacity int
+	// DedupTTL is how long a request ID is kept before expiring (AISA_LEDGER_DEDUP_TTL).
+	DedupTTL time.Duration
+}
+
 // Defaults are the values used for variables that are unset or empty.
 func Defaults() Config {
 	return Config{
@@ -74,6 +85,10 @@ func Defaults() Config {
 			Refresh:     time.Minute,
 			MissRefresh: 5 * time.Second,
 			MaxStale:    15 * time.Minute,
+		},
+		Ledger: Ledger{
+			DedupCapacity: 100_000,
+			DedupTTL:      15 * time.Minute,
 		},
 	}
 }
@@ -122,10 +137,18 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		{"AISA_CONSUMER_REFRESH", &cfg.Consumers.Refresh},
 		{"AISA_CONSUMER_MISS_REFRESH", &cfg.Consumers.MissRefresh},
 		{"AISA_CONSUMER_MAX_STALE", &cfg.Consumers.MaxStale},
+		{"AISA_LEDGER_DEDUP_TTL", &cfg.Ledger.DedupTTL},
 	} {
 		if err := duration(getenv, d.name, d.dst); err != nil {
 			return cfg, err
 		}
+	}
+	if v := getenv("AISA_LEDGER_DEDUP_CAPACITY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return cfg, fmt.Errorf("AISA_LEDGER_DEDUP_CAPACITY: want a positive integer, got %q", v)
+		}
+		cfg.Ledger.DedupCapacity = n
 	}
 	if cfg.Consumers.MaxStale < cfg.Consumers.Refresh {
 		return cfg, fmt.Errorf("AISA_CONSUMER_MAX_STALE (%s) must not be shorter than AISA_CONSUMER_REFRESH (%s)",
