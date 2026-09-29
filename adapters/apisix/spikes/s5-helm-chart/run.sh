@@ -239,11 +239,14 @@ part_manifests() {
     check "the rendered file is in memory" tmpfs "$("${K[@]}" exec deploy/apisix -c apisix -- df /rendered | awk 'NR == 2 { print $1 }')"
     check "nginx workers" 1 "$("${K[@]}" exec deploy/apisix -c apisix -- sh -c \
         'for p in /proc/[0-9]*; do tr "\0" " " <$p/cmdline; echo; done' 2>/dev/null | grep -c 'worker process' || true)"
-    # A model name with other characters than a route id may have gets them replaced, and a hash.
+    # The route id of the model, as the template makes it: characters that a route id may not
+    # hold are replaced, and a changed or long name is cut to 49 characters and gets a hash.
     local safe id
     safe=$(sed 's/[^a-zA-Z0-9_.-]/-/g' <<<"$MODEL")
     id=model-$safe
-    [[ "$safe" == "$MODEL" ]] || id="model-$safe-$(printf '%s' "$MODEL" | sha256sum | cut -c1-8)"
+    if [[ "$safe" != "$MODEL" ]] || ((${#safe} > 58)); then
+        id="model-${safe:0:49}-$(printf '%s' "$MODEL" | sha256sum | cut -c1-8)"
+    fi
     check "routes" "$(printf '%s\n' client "$id" model-no-colon-model no-backend | sort | joined)" \
         "$(rendered | sed -n 's/^  - id: "\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' | sort | joined)"
     check "routes that APISIX rejected" 0 "$("${K[@]}" logs deploy/apisix -c apisix 2>/dev/null | grep -c 'failed to check item' || true)"
