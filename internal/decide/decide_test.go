@@ -411,12 +411,7 @@ func TestQuota(t *testing.T) {
 			if len(q.checked) != 1 || q.checked[0].QuotaProfile != "interactive" {
 				t.Errorf("checked = %+v, want chat-ui with its profile", q.checked)
 			}
-			if tc.wantCode != "" {
-				checkErrorBody(t, rec.Body.Bytes(), tc.wantCode)
-				if rec.Header().Get(HeaderConsumer) != "" {
-					t.Error("a denial must not carry X-Aisa-Consumer")
-				}
-			}
+			checkDenial(t, rec, tc.wantCode)
 			if got := rec.Header().Get("Retry-After"); got != tc.wantRetryAfter {
 				t.Errorf("Retry-After = %q, want %q", got, tc.wantRetryAfter)
 			}
@@ -424,6 +419,19 @@ func TestQuota(t *testing.T) {
 				t.Errorf("aisa_decisions_total{chat-ui,%s} = %v, want 1", tc.wantResult, n)
 			}
 		})
+	}
+}
+
+// checkDenial checks the error body and the absence of X-Aisa-Consumer of a denial; wantCode ""
+// is an allowed request.
+func checkDenial(t *testing.T, rec *httptest.ResponseRecorder, wantCode string) {
+	t.Helper()
+	if wantCode == "" {
+		return
+	}
+	checkErrorBody(t, rec.Body.Bytes(), wantCode)
+	if rec.Header().Get(HeaderConsumer) != "" {
+		t.Error("a denial must not carry X-Aisa-Consumer")
 	}
 }
 

@@ -23,9 +23,9 @@ type Profile struct {
 	TokensPerHour int64
 }
 
-// Source reads the quota profiles, from Consul KV outside tests. It works like consul.List:
+// Lister reads the quota profiles, from Consul KV outside tests. It works like consul.List:
 // with index 0 it answers at once, with an earlier index it waits for a change.
-type Source interface {
+type Lister interface {
 	List(ctx context.Context, index uint64) ([]consul.Pair, uint64, error)
 }
 
@@ -37,7 +37,7 @@ type ConsulSource struct {
 	Wait time.Duration
 }
 
-// List implements Source.
+// List implements Lister.
 func (s ConsulSource) List(ctx context.Context, index uint64) ([]consul.Pair, uint64, error) {
 	wait := s.Wait
 	if wait <= 0 {
@@ -74,7 +74,7 @@ type ProfileOptions struct {
 
 // Profiles holds the quota profiles, kept up to date with the source.
 type Profiles struct {
-	src  Source
+	src  Lister
 	opts ProfileOptions
 	log  *slog.Logger
 
@@ -85,7 +85,7 @@ type Profiles struct {
 }
 
 // NewProfiles returns an empty set of profiles. Call Run to fill it.
-func NewProfiles(src Source, log *slog.Logger, opts ProfileOptions) *Profiles {
+func NewProfiles(src Lister, log *slog.Logger, opts ProfileOptions) *Profiles {
 	if opts.RetryMin <= 0 {
 		opts.RetryMin = time.Second
 	}

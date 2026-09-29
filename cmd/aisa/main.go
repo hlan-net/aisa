@@ -113,7 +113,7 @@ func run(args []string) error {
 	checks := []server.Check{{Name: "consumers", Probe: store.Ready}}
 	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
 	var (
-		quota   decide.Quota
+		quota   decide.QuotaChecker
 		charger ledger.Charger
 	)
 	if cfg.QuotasEnabled() {

@@ -53,7 +53,8 @@ type Client struct {
 func New(o Options) (*Client, error) {
 	addr := o.Addr
 	if !strings.Contains(addr, "://") {
-		addr = "http://" + addr
+		// Consul's own default without a scheme; set https in CONSUL_HTTP_ADDR for TLS.
+		addr = (&url.URL{Scheme: "http", Host: addr}).String()
 	}
 	u, err := url.Parse(addr)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {

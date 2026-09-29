@@ -45,21 +45,21 @@ type Lookup interface {
 	Lookup(ctx context.Context, key string) (consumers.Consumer, consumers.Result)
 }
 
-// Quota checks a consumer's token quota; quotas.Quota implements it.
-type Quota interface {
+// QuotaChecker checks a consumer's token quota; quotas.Quota implements it.
+type QuotaChecker interface {
 	Check(ctx context.Context, c consumers.Consumer) quotas.Verdict
 }
 
 // Handler answers /v1/decide.
 type Handler struct {
 	consumers Lookup
-	quota     Quota
+	quota     QuotaChecker
 	metrics   *metrics.Metrics
 	log       *slog.Logger
 }
 
 // New returns the decision handler. With a nil quota, no consumer has a quota.
-func New(c Lookup, q Quota, m *metrics.Metrics, log *slog.Logger) *Handler {
+func New(c Lookup, q QuotaChecker, m *metrics.Metrics, log *slog.Logger) *Handler {
 	return &Handler{consumers: c, quota: q, metrics: m, log: log}
 }
 

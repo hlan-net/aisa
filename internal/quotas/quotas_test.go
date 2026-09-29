@@ -202,7 +202,7 @@ func TestWindow(t *testing.T) {
 	}
 
 	key := "aisa:quota:{chat-ui}:" + itoa(minute(now))
-	if ttl := mr.TTL(key); ttl <= 0 {
+	if mr.TTL(key) <= 0 {
 		t.Errorf("%s has no expiry", key)
 	}
 }
@@ -304,20 +304,25 @@ func TestCheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := metrics.New("test")
 			q := New(tc.profiles, tc.counter, m, discard, Options{Now: func() time.Time { return now }})
-			v := q.Check(context.Background(), tc.consumer)
-			if v.Outcome != tc.want {
-				t.Errorf("outcome = %v, want %v (%+v)", v.Outcome, tc.want, v)
-			}
-			if v.Outcome == Unavailable && v.Err == nil {
-				t.Error("unavailable without an error")
-			}
-			if v.Outcome == Exhausted && (v.RetryAfter <= 0 || v.Used != 100 || v.Limit != 100) {
-				t.Errorf("exhausted: %+v", v)
-			}
+			checkVerdict(t, q.Check(context.Background(), tc.consumer), tc.want)
 			if got := testutil.ToFloat64(m.QuotaErrors.WithLabelValues(metrics.QuotaOpCheck)); got != tc.errors {
 				t.Errorf("check errors = %v, want %v", got, tc.errors)
 			}
 		})
+	}
+}
+
+// checkVerdict checks a verdict of TestCheck, whose exhausted consumer has used 100 of 100.
+func checkVerdict(t *testing.T, v Verdict, want Outcome) {
+	t.Helper()
+	if v.Outcome != want {
+		t.Errorf("outcome = %v, want %v (%+v)", v.Outcome, want, v)
+	}
+	if v.Outcome == Unavailable && v.Err == nil {
+		t.Error("unavailable without an error")
+	}
+	if v.Outcome == Exhausted && (v.RetryAfter <= 0 || v.Used != 100 || v.Limit != 100) {
+		t.Errorf("exhausted: %+v", v)
 	}
 }
 
