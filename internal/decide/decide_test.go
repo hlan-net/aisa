@@ -73,6 +73,22 @@ func TestDecide(t *testing.T) {
 			`{"messages":[]}`, 400, "", "", "missing_model", [2]string{"chat-ui", metrics.ResultInvalid}},
 		{"body is not JSON", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
 			`not json`, 400, "", "", "missing_model", [2]string{"chat-ui", metrics.ResultInvalid}},
+		{"body is not an object", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
+			`["model","qwen3"]`, 400, "", "", "missing_model", [2]string{"chat-ui", metrics.ResultInvalid}},
+		{"body cut short", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
+			`{"model":"qwen3","messages":[{"role":"user"`, 400, "", "", "missing_model", [2]string{"chat-ui", metrics.ResultInvalid}},
+		{"model is not a string", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
+			`{"model":{"name":"qwen3"},"messages":[]}`, 400, "", "", "missing_model", [2]string{"chat-ui", metrics.ResultInvalid}},
+		{"model only inside a message", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
+			`{"messages":[{"role":"user","model":"qwen3","content":{"model":"qwen3"}}]}`, 400, "", "", "missing_model",
+			[2]string{"chat-ui", metrics.ResultInvalid}},
+		{"model after the messages", http.MethodPost, map[string]string{"Authorization": "Bearer key-chat"},
+			`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"stream":true,"model":" qwen3 "}`,
+			200, "chat-ui", "qwen3", "", [2]string{"chat-ui", metrics.ResultAllow}},
+		{"model given twice: the last one, as the backend reads it", http.MethodPost,
+			map[string]string{"Authorization": "Bearer key-chat"},
+			`{"model":"llama3.2","messages":[],"model":"qwen3"}`, 200, "chat-ui", "qwen3", "",
+			[2]string{"chat-ui", metrics.ResultAllow}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) { runDecide(t, tt) })
@@ -127,7 +143,183 @@ func TestUnavailableFailsClosed(t *testing.T) {
 	if rec.Header().Get(HeaderConsumer) != "" {
 		t.Error("a 503 must not carry X-Aisa-Consumer")
 	}
-	if n := testutil.CollectAndCount(m.Decisions); n != 0 {
-		t.Errorf("aisa_decisions_total has %d series, want 0: no decision was made", n)
+	checkErrorBody(t, rec.Body.Bytes(), "consumers_unavailable")
+	// Counted, so an outage of Vault shows in aisa's metrics as denials and not as less traffic.
+	if n := testutil.ToFloat64(m.Decisions.WithLabelValues(metrics.ConsumerUnknown, metrics.ResultUnavailable)); n != 1 {
+		t.Errorf("aisa_decisions_total{unknown,unavailable} = %v, want 1", n)
 	}
+}
+
+func TestBodySize(t *testing.T) {
+	// A prompt that fills the body up to the limit, with the model after it.
+	body := func(size int) string {
+		const head, tail = `{"messages":[{"role":"user","content":"`, `"}],"model":"qwen3"}`
+		return head + strings.Repeat("x", size-len(head)-len(tail)) + tail
+	}
+	for name, tc := range map[string]struct {
+		size       int
+		wantStatus int
+		wantCode   string
+	}{
+		"as large as the limit":     {maxBody, 200, ""},
+		"one byte over the limit":   {maxBody + 1, 413, "request_too_large"},
+		"twice as large as allowed": {2 * maxBody, 413, "request_too_large"},
+	} {
+		h, m := newHandler(false)
+		req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(body(tc.size)))
+		req.Header.Set("Authorization", "Bearer key-chat")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.wantStatus {
+			t.Errorf("%s: status = %d, want %d", name, rec.Code, tc.wantStatus)
+			continue
+		}
+		if tc.wantCode != "" {
+			checkErrorBody(t, rec.Body.Bytes(), tc.wantCode)
+			if n := testutil.ToFloat64(m.Decisions.WithLabelValues("chat-ui", metrics.ResultInvalid)); n != 1 {
+				t.Errorf("%s: aisa_decisions_total{chat-ui,invalid} = %v, want 1", name, n)
+			}
+		}
+	}
+}
+
+func TestLargeBodyWithTheHeaderIsNotRead(t *testing.T) {
+	h, _ := newHandler(false)
+	body := &countingReader{r: strings.NewReader(strings.Repeat("x", 1<<20))}
+	req := httptest.NewRequest(http.MethodPost, "/v1/decide", body)
+	req.Header.Set("Authorization", "Bearer key-chat")
+	req.Header.Set(HeaderRequestedModel, "qwen3")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || body.n != 0 {
+		t.Errorf("status = %d, %d bytes of the body read; want 200 and none", rec.Code, body.n)
+	}
+}
+
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+// BenchmarkModelAfterLargePrompt shows what finding the model costs when a gateway forwards a
+// body with a large prompt: the memory per request must stay far below the size of the body.
+func BenchmarkModelAfterLargePrompt(b *testing.B) {
+	messages := strings.Repeat(`{"role":"user","content":"`+strings.Repeat("x", 1000)+`"},`, 8000) // 8 MiB
+	body := `{"messages":[` + strings.TrimSuffix(messages, ",") + `],"model":"qwen3"}`
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	for b.Loop() {
+		req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(body))
+		if m, err := requestedModel(req); err != nil || m != "qwen3" {
+			b.Fatalf("model = %q, %v", m, err)
+		}
+	}
+}
+
+// TestModelOfAgreesWithEncodingJSON compares the scanner with the standard library on bodies
+// that are valid JSON: what aisa takes for the model must be what a backend reads.
+func TestModelOfAgreesWithEncodingJSON(t *testing.T) {
+	for _, body := range modelBodies {
+		// Into a map: a struct would also take "Model", which Go matches without regard to case
+		// and a backend does not.
+		var want map[string]any
+		if err := json.Unmarshal([]byte(body), &want); err != nil {
+			t.Fatalf("the test's own body is not valid JSON: %s: %v", body, err)
+		}
+		wantModel, _ := want["model"].(string)
+		if len(wantModel) > maxString {
+			wantModel = ""
+		}
+		got, err := modelOf(strings.NewReader(body))
+		if err != nil {
+			t.Errorf("%s: %v", body, err)
+		}
+		if got != wantModel {
+			t.Errorf("%s: model = %q, encoding/json reads %q", body, got, wantModel)
+		}
+	}
+}
+
+var modelBodies = []string{
+	`{}`,
+	`{"model":"qwen3"}`,
+	` { "model" : "qwen3" } `,
+	"{\n\t\"model\":\r\n\"qwen3\"\n}",
+	`{"model":""}`,
+	`{"model":null}`,
+	`{"model":42}`,
+	`{"model":-1.5e3,"x":1}`,
+	`{"model":true}`,
+	`{"model":["qwen3"]}`,
+	`{"model":{"model":"inner"}}`,
+	`{"model":{"model":"inner"},"model":"outer"}`,
+	`{"model":"first","model":"last"}`,
+	`{"model":"first","model":7}`,
+	`{"Model":"upper"}`,
+	`{"models":"plural","mode":"short"}`,
+	`{"\u006dodel":"escaped key"}`,
+	`{"model":"qw\u0065n3"}`,
+	`{"model":"with \"quotes\" and \\ backslash"}`,
+	`{"model":"ends with a backslash \\"}`,
+	`{"model":"snow \u2603 and clef \ud834\udd1e"}`,
+	`{"model":"ünïcödé ☃"}`,
+	`{"a":"}","b":"]","c":"{\"model\":\"in a string\"}","model":"qwen3"}`,
+	`{"a":"\\","model":"after a string that ends with a backslash"}`,
+	`{"a":"\\\"","model":"after an escaped backslash and quote"}`,
+	`{"messages":[{"role":"user","content":"hi","model":"in a message"}],"model":"qwen3"}`,
+	`{"messages":[[[{"model":"deep"}]],{"a":{"b":{"model":"deeper"}}}],"model":"qwen3"}`,
+	`{"messages":[{"model":"only in a message"}]}`,
+	`{"n":0,"f":false,"z":null,"e":1e-9,"model":"after literals"}`,
+	`{"a":[],"b":{},"c":[{}],"d":"","model":"after empty values"}`,
+	`{"model":"qwen3","stream":true,"max_tokens":32,"temperature":0}`,
+	`{"model":"` + strings.Repeat("m", maxString-2) + `"}`,
+	`{"model":"` + strings.Repeat("m", 4*maxString) + `"}`,
+	`{"` + strings.Repeat("k", 4*maxString) + `":"long key","model":"qwen3"}`,
+	`{"model":"qwen3","content":"` + strings.Repeat("x", 100_000) + `"}`,
+	`{"content":"` + strings.Repeat(`\"`, 50_000) + `","model":"qwen3"}`,
+}
+
+func TestModelOfRejects(t *testing.T) {
+	for _, body := range []string{
+		``, ` `, `null`, `"model"`, `42`, `[{"model":"qwen3"}]`,
+		`{`, `{"model"`, `{"model":`, `{"model":"qwen3"`, `{"model":"qwen3`, `{"model":"qwen3",`,
+		`{"model" "qwen3"}`, `{"model":"qwen3" "x":1}`, `{model:"qwen3"}`, `{"model":,}`,
+		`{"messages":[{"role":"user"`, `{"a":"unterminated`, `{"a":"\`,
+	} {
+		if m, err := modelOf(strings.NewReader(body)); err == nil {
+			t.Errorf("%q: model = %q, want an error", body, m)
+		}
+	}
+}
+
+// FuzzModelOf looks for bodies that are valid JSON and on which the scanner and the standard
+// library disagree. `go test` runs it on the bodies above only; `go test -fuzz=FuzzModelOf
+// ./internal/decide` searches.
+func FuzzModelOf(f *testing.F) {
+	for _, body := range modelBodies {
+		f.Add(body)
+	}
+	f.Fuzz(func(t *testing.T, body string) {
+		got, err := modelOf(strings.NewReader(body))
+		var want map[string]any
+		if json.Unmarshal([]byte(body), &want) != nil {
+			return // not valid JSON, or not an object: the backend rejects it
+		}
+		wantModel, _ := want["model"].(string)
+		if len(wantModel) > maxString-2 {
+			return // at the limit of what is kept; covered by the test above
+		}
+		if err != nil {
+			t.Fatalf("valid JSON, and modelOf fails: %v\n%s", err, body)
+		}
+		if got != wantModel {
+			t.Fatalf("model = %q, encoding/json reads %q\n%s", got, wantModel, body)
+		}
+	})
 }

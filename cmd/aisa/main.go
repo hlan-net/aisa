@@ -83,6 +83,7 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("vault: %w", err)
 	}
+	m := metrics.New(version.Version)
 	store := consumers.New(
 		consumers.Vault{Client: vc, Mount: cfg.Vault.KVMount, Prefix: cfg.Vault.Prefix},
 		log.With("component", "consumers"),
@@ -90,10 +91,10 @@ func run(args []string) error {
 			Refresh:     cfg.Consumers.Refresh,
 			MissRefresh: cfg.Consumers.MissRefresh,
 			MaxStale:    cfg.Consumers.MaxStale,
+			OnLoad:      func(s consumers.Stats) { observeLoad(m, s, time.Now()) },
 		})
 	go store.Run(ctx)
 
-	m := metrics.New(version.Version)
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout,
 		server.Check{Name: "consumers", Probe: store.Ready})
 	decision := decide.New(store, m, log.With("component", "decide"))
@@ -104,6 +105,19 @@ func run(args []string) error {
 	}
 	log.Info("stopped")
 	return nil
+}
+
+// observeLoad puts the result of a load of the consumers into the metrics.
+func observeLoad(m *metrics.Metrics, s consumers.Stats, now time.Time) {
+	if s.Err != nil {
+		m.ConsumerLoads.WithLabelValues(metrics.LoadError).Inc()
+		return
+	}
+	m.ConsumerLoads.WithLabelValues(metrics.LoadOK).Inc()
+	m.Consumers.Set(float64(s.Consumers))
+	m.ConsumerKeys.Set(float64(s.Keys))
+	m.ConsumersUnreadable.Set(float64(s.Unreadable))
+	m.ConsumersLoaded.Set(float64(now.Unix()))
 }
 
 // vaultAuth logs in with a fixed token when one is configured, as in development, and with the

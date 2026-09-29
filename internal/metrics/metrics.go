@@ -18,12 +18,13 @@ const (
 
 // Values of the result label of aisa_decisions_total.
 const (
-	ResultAllow      = "allow"
-	ResultDenyAuth   = "deny_auth"   // unknown, invalid or missing credential (401)
-	ResultInvalid    = "invalid"     // no model in the request (400)
-	ResultDenyQuota  = "deny_quota"  // quota exhausted (429)
-	ResultDenyBudget = "deny_budget" // budget exhausted (429)
-	ResultDowngrade  = "downgrade"
+	ResultAllow       = "allow"
+	ResultDenyAuth    = "deny_auth"   // unknown, invalid or missing credential (401)
+	ResultInvalid     = "invalid"     // no model in the request (400), or a body too large to look for it (413)
+	ResultUnavailable = "unavailable" // aisa cannot verify credentials and fails closed (503)
+	ResultDenyQuota   = "deny_quota"  // quota exhausted (429)
+	ResultDenyBudget  = "deny_budget" // budget exhausted (429)
+	ResultDowngrade   = "downgrade"
 )
 
 // ConsumerUnknown is the consumer label of a decision without a known consumer, such as a
@@ -51,7 +52,24 @@ type Metrics struct {
 	TTFT    *prometheus.HistogramVec
 	// Decisions counts the answers of the decision API by consumer and result.
 	Decisions *prometheus.CounterVec
+
+	// Consumers, ConsumerKeys and ConsumersUnreadable describe the consumers in memory: how
+	// many can authenticate, how many key hashes they have, and how many Vault listed and aisa
+	// could not read.
+	Consumers           prometheus.Gauge
+	ConsumerKeys        prometheus.Gauge
+	ConsumersUnreadable prometheus.Gauge
+	// ConsumerLoads counts the loads of the consumers by result, LoadOK or LoadError.
+	ConsumerLoads *prometheus.CounterVec
+	// ConsumersLoaded is when the consumers were last loaded, in seconds since the epoch.
+	ConsumersLoaded prometheus.Gauge
 }
+
+// Values of the result label of aisa_consumer_loads_total.
+const (
+	LoadOK    = "ok"
+	LoadError = "error"
+)
 
 // New returns aisa's metrics, registered in a new registry together with the Go runtime and
 // process collectors and aisa_build_info for the given version.
@@ -94,6 +112,26 @@ func New(version string) *Metrics {
 			Name: "aisa_decisions_total",
 			Help: "Answers of the decision API.",
 		}, []string{"consumer", "result"}),
+		Consumers: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_consumers",
+			Help: "Consumers in memory that can authenticate.",
+		}),
+		ConsumerKeys: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_consumer_keys",
+			Help: "Key hashes of the consumers in memory.",
+		}),
+		ConsumersUnreadable: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_consumers_unreadable",
+			Help: "Consumers that Vault listed and aisa could not read at the last load.",
+		}),
+		ConsumerLoads: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_consumer_loads_total",
+			Help: "Loads of the consumers from Vault.",
+		}, []string{"result"}),
+		ConsumersLoaded: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_consumers_loaded_timestamp_seconds",
+			Help: "When the consumers were last loaded from Vault.",
+		}),
 	}
 
 	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -107,6 +145,7 @@ func New(version string) *Metrics {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		buildInfo,
 		m.Requests, m.Tokens, m.Cost, m.BudgetLimit, m.BudgetSpent, m.Latency, m.TTFT, m.Decisions,
+		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 	)
 	return m
 }

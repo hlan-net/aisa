@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,10 +22,11 @@ func hashOf(key string) string {
 }
 
 type fakeSource struct {
-	mu      sync.Mutex
-	data    map[string]map[string]any
-	fail    error
-	listing int
+	mu       sync.Mutex
+	data     map[string]map[string]any
+	fail     error            // of the listing
+	failRead map[string]error // of reading a consumer
+	listing  int
 }
 
 func (f *fakeSource) Names(context.Context) ([]string, error) {
@@ -44,6 +46,9 @@ func (f *fakeSource) Names(context.Context) ([]string, error) {
 func (f *fakeSource) Read(_ context.Context, name string) (map[string]any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failRead[name]; err != nil {
+		return nil, err
+	}
 	d, ok := f.data[name]
 	if !ok {
 		return nil, ErrGone
@@ -62,9 +67,11 @@ type clock struct{ t time.Time }
 func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
+func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
 func newStore(src Source) (*Store, *clock) {
 	c := &clock{t: time.Unix(1_700_000_000, 0)}
-	s := New(src, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
+	s := New(src, quiet(), Options{
 		Refresh: time.Minute, MissRefresh: 5 * time.Second, MaxStale: 15 * time.Minute, Now: c.now,
 	})
 	return s, c
@@ -196,7 +203,7 @@ func TestNotLoadedIsUnavailable(t *testing.T) {
 
 func TestRunLoadsAndStops(t *testing.T) {
 	src := &fakeSource{data: map[string]map[string]any{"a": {"key_sha256": hashOf("k")}}}
-	s := New(src, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
+	s := New(src, quiet(), Options{
 		Refresh: 10 * time.Millisecond, MissRefresh: time.Second, MaxStale: time.Minute,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -274,22 +281,279 @@ func (s *slowSource) Names(ctx context.Context) ([]string, error) {
 	return nil, ctx.Err()
 }
 
-func TestUnknownKeyReloadIsBounded(t *testing.T) {
-	src := &slowSource{}
-	s := New(src, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
-		Refresh: time.Minute, MissRefresh: time.Millisecond, MaxStale: time.Minute,
-	})
-	// Loaded once, so lookups can be answered; then Vault stops answering.
+const missTimeout = 100 * time.Millisecond
+
+// newLoadedStore returns a store that was loaded once, so lookups can be answered.
+func newLoadedStore(src Source, o Options) *Store {
+	s := New(src, quiet(), o)
 	s.mu.Lock()
 	s.byHash, s.loadedAt = map[string]Consumer{}, time.Now()
 	s.mu.Unlock()
-	time.Sleep(2 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond) // past MissRefresh
+	return s
+}
+
+func TestUnknownKeyReloadIsBounded(t *testing.T) {
+	s := newLoadedStore(&slowSource{}, Options{
+		Refresh: time.Minute, MissRefresh: time.Millisecond, MissTimeout: missTimeout, MaxStale: time.Minute,
+	})
+	start := time.Now()
+	if _, res := s.Lookup(context.Background(), "unknown"); res != Unknown {
+		t.Errorf("result = %v, want Unknown", res)
+	}
+	if d := time.Since(start); d > missTimeout+time.Second {
+		t.Errorf("lookup took %s, want it bounded by %s", d, missTimeout)
+	}
+}
+
+// blockingSource answers the listing only when it is released, like a Vault that is slow.
+type blockingSource struct {
+	fakeSource
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingSource) Names(ctx context.Context) ([]string, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return b.fakeSource.Names(ctx)
+}
+
+func TestUnknownKeyDoesNotWaitForALoadInProgress(t *testing.T) {
+	src := &blockingSource{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	src.data = map[string]map[string]any{}
+	s := newLoadedStore(src, Options{
+		Refresh: time.Minute, MissRefresh: time.Millisecond, MissTimeout: missTimeout, MaxStale: time.Minute,
+	})
+
+	// The periodic load hangs on a slow Vault, with a context that lasts.
+	loaded := make(chan error, 1)
+	go func() { loaded <- s.Load(context.Background()) }()
+	<-src.entered
+	time.Sleep(2 * time.Millisecond) // past MissRefresh since that load began
 
 	start := time.Now()
 	if _, res := s.Lookup(context.Background(), "unknown"); res != Unknown {
 		t.Errorf("result = %v, want Unknown", res)
 	}
-	if d := time.Since(start); d > missLoadTimeout+time.Second {
-		t.Errorf("lookup took %s, want it bounded by %s", d, missLoadTimeout)
+	if d := time.Since(start); d > missTimeout+time.Second {
+		t.Errorf("lookup took %s while a load was in progress, want it bounded by %s", d, missTimeout)
+	}
+	close(src.release)
+	if err := <-loaded; err != nil {
+		t.Errorf("the load in progress: %v", err)
+	}
+}
+
+func TestRequestsThatWaitedDoNotLoadAgain(t *testing.T) {
+	src := &blockingSource{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	src.data = map[string]map[string]any{}
+	s := newLoadedStore(src, Options{
+		Refresh: time.Minute, MissRefresh: time.Millisecond, MissTimeout: 5 * time.Second, MaxStale: time.Minute,
+	})
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() { s.Lookup(context.Background(), "unknown") })
+	}
+	<-src.entered
+	time.Sleep(20 * time.Millisecond) // the other requests have joined the load by now
+	close(src.release)
+	wg.Wait()
+	if src.listing != 1 {
+		t.Errorf("%d loads for 8 requests that arrived together, want 1", src.listing)
+	}
+}
+
+func TestLoadGivesUpWaitingWhenItsContextIsDone(t *testing.T) {
+	src := &blockingSource{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	s := New(src, quiet(), Options{Refresh: time.Minute, MissRefresh: time.Second, MaxStale: time.Minute})
+	go func() { _ = s.Load(context.Background()) }()
+	<-src.entered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := s.Load(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want the deadline of the waiting caller", err)
+	}
+	close(src.release)
+}
+
+func TestOneUnreadableConsumerDoesNotStopTheOthers(t *testing.T) {
+	src := &fakeSource{data: map[string]map[string]any{
+		"chat-ui":    {"key_sha256": hashOf("chat")},
+		"batch-jobs": {"key_sha256": hashOf("batch")},
+	}}
+	s, clk := newStore(src)
+	var stats Stats
+	s.opts.OnLoad = func(st Stats) { stats = st }
+	ctx := context.Background()
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if stats.Consumers != 2 || stats.Keys != 2 || stats.Unreadable != 0 || stats.Err != nil {
+		t.Errorf("stats = %+v, want 2 consumers, 2 keys, none unreadable", stats)
+	}
+
+	// batch-jobs cannot be read any more, and a new consumer appears.
+	src.mu.Lock()
+	src.failRead = map[string]error{"batch-jobs": errors.New("permission denied")}
+	src.data["new-app"] = map[string]any{"key_sha256": hashOf("new")}
+	src.mu.Unlock()
+	clk.advance(time.Minute)
+	if err := s.Load(ctx); err != nil {
+		t.Fatalf("one unreadable consumer failed the load: %v", err)
+	}
+	for key, want := range map[string]string{"chat": "chat-ui", "new": "new-app", "batch": "batch-jobs"} {
+		if c, res := s.Lookup(ctx, key); res != Found || c.Name != want {
+			t.Errorf("%s: %+v, %v; want %s", key, c, res, want)
+		}
+	}
+	if stats.Consumers != 3 || stats.Unreadable != 1 {
+		t.Errorf("stats = %+v, want 3 consumers, 1 unreadable", stats)
+	}
+
+	// Its keys are kept for MaxStale, not for good: they may have been revoked since.
+	clk.advance(15 * time.Minute)
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, res := s.Lookup(ctx, "batch"); res != Unknown {
+		t.Errorf("a consumer unreadable for more than MaxStale: %v, want Unknown", res)
+	}
+	if _, res := s.Lookup(ctx, "chat"); res != Found {
+		t.Errorf("the readable consumer: %v, want Found", res)
+	}
+}
+
+func TestNewConsumerThatCannotBeReadIsLeftOut(t *testing.T) {
+	src := &fakeSource{
+		data:     map[string]map[string]any{"chat-ui": {"key_sha256": hashOf("chat")}, "bad%name": {"key_sha256": hashOf("bad")}},
+		failRead: map[string]error{"bad%name": errors.New("invalid URL escape")},
+	}
+	s, _ := newStore(src)
+	ctx := context.Background()
+	if err := s.Load(ctx); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if _, res := s.Lookup(ctx, "chat"); res != Found {
+		t.Errorf("the readable consumer: %v, want Found", res)
+	}
+	if _, res := s.Lookup(ctx, "bad"); res != Unknown {
+		t.Errorf("the unreadable consumer: %v, want Unknown", res)
+	}
+}
+
+func TestLoadFailsWhenNoConsumerCanBeRead(t *testing.T) {
+	src := &fakeSource{data: map[string]map[string]any{
+		"chat-ui":    {"key_sha256": hashOf("chat")},
+		"batch-jobs": {"key_sha256": hashOf("batch")},
+	}}
+	s, clk := newStore(src)
+	ctx := context.Background()
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	down := errors.New("vault sealed")
+	src.mu.Lock()
+	src.failRead = map[string]error{"chat-ui": down, "batch-jobs": down}
+	src.mu.Unlock()
+	clk.advance(time.Minute)
+	if err := s.Load(ctx); !errors.Is(err, down) {
+		t.Errorf("err = %v, want the load to fail with Vault's error", err)
+	}
+	if _, res := s.Lookup(ctx, "chat"); res != Found {
+		t.Errorf("after the failed load: %v, want Found", res)
+	}
+	clk.advance(15 * time.Minute)
+	if _, res := s.Lookup(ctx, "chat"); res != Unavailable {
+		t.Errorf("16 min after the last load: %v, want Unavailable", res)
+	}
+}
+
+func TestEmptyListRejectsEveryKey(t *testing.T) {
+	src := &fakeSource{data: map[string]map[string]any{"chat-ui": {"key_sha256": hashOf("chat")}}}
+	s, clk := newStore(src)
+	ctx := context.Background()
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The last consumer is deleted in Vault: that must take effect.
+	src.mu.Lock()
+	delete(src.data, "chat-ui")
+	src.mu.Unlock()
+	clk.advance(time.Minute)
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, res := s.Lookup(ctx, "chat"); res != Unknown {
+		t.Errorf("after the consumer was deleted: %v, want Unknown", res)
+	}
+}
+
+func TestRunRetriesAFailedLoadSoon(t *testing.T) {
+	src := &fakeSource{
+		data: map[string]map[string]any{"a": {"key_sha256": hashOf("k")}},
+		fail: errors.New("vault is starting"),
+	}
+	var failures atomic.Int32
+	s := New(src, quiet(), Options{
+		Refresh: time.Hour, RetryMin: 5 * time.Millisecond, MissRefresh: time.Second, MaxStale: 2 * time.Hour,
+		OnLoad: func(st Stats) {
+			if st.Err != nil {
+				failures.Add(1)
+			}
+			if failures.Load() == 3 {
+				src.mu.Lock()
+				src.fail = nil // Vault is up
+				src.mu.Unlock()
+			}
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for s.Ready(ctx) != nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := s.Ready(ctx); err != nil {
+		t.Fatalf("not ready although Vault came up: %v; with Refresh of an hour the retry must come sooner", err)
+	}
+	if n := failures.Load(); n != 3 {
+		t.Errorf("failures = %d, want 3", n)
+	}
+}
+
+func TestParseHashes(t *testing.T) {
+	a, b := hashOf("a"), hashOf("b")
+	for name, tc := range map[string]struct {
+		in   string
+		want []string
+		bad  int
+	}{
+		"one":                    {a, []string{a}, 0},
+		"comma":                  {a + "," + b, []string{a, b}, 0},
+		"comma and space":        {a + ", " + b, []string{a, b}, 0},
+		"lines":                  {a + "\n" + b, []string{a, b}, 0},
+		"lines from a CRLF file": {a + "\r\n" + b + "\r\n", []string{a, b}, 0},
+		"tabs":                   {a + "\t" + b, []string{a, b}, 0},
+		"upper case":             {strings.ToUpper(a), []string{a}, 0},
+		"one invalid":            {a + " zz", []string{a}, 1},
+		"too short":              {"abcd", nil, 1},
+		"empty":                  {"", nil, 0},
+	} {
+		got, bad := parseHashes(tc.in)
+		if strings.Join(got, " ") != strings.Join(tc.want, " ") || bad != tc.bad {
+			t.Errorf("%s: %v, %d bad; want %v, %d bad", name, got, bad, tc.want, tc.bad)
+		}
 	}
 }

@@ -6,8 +6,11 @@
 package decide
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -26,7 +29,8 @@ const (
 )
 
 // maxBody bounds the request body aisa reads to find the model. The gateway may forward the
-// whole client request, prompt included; the model is usually near the start.
+// whole client request, prompt and images included. An adapter that sets
+// X-Aisa-Requested-Model spares aisa the body.
 const maxBody = 16 << 20
 
 // Lookup finds the consumer of a key; consumers.Store implements it.
@@ -61,15 +65,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case consumers.Unavailable:
 		// Fail closed: without current consumers aisa cannot tell a valid key from a revoked one.
 		log.Error("cannot decide: consumers are not available")
-		writeError(w, http.StatusServiceUnavailable, "server_error", "consumers_unavailable",
-			"aisa cannot verify credentials at the moment")
+		h.deny(w, log, metrics.ConsumerUnknown, denial{
+			status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
+			typ: "server_error", code: "consumers_unavailable", msg: "aisa cannot verify credentials at the moment",
+		})
 		return
 	case consumers.Unknown:
 		h.deny(w, log, metrics.ConsumerUnknown, denyAuth("unknown or invalid consumer key"))
 		return
 	}
 
-	model := requestedModel(r)
+	model, err := requestedModel(r)
+	if errors.Is(err, errBodyTooLarge) {
+		h.deny(w, log, consumer.Name, denial{
+			status: http.StatusRequestEntityTooLarge, result: metrics.ResultInvalid,
+			typ: "invalid_request_error", code: "request_too_large",
+			msg: "the request is too large for aisa to find its model; the gateway should send the model in X-Aisa-Requested-Model",
+		})
+		return
+	}
 	if model == "" {
 		h.deny(w, log, consumer.Name, denial{
 			status: http.StatusBadRequest, result: metrics.ResultInvalid,
@@ -115,24 +129,224 @@ func bearer(v string) (string, bool) {
 	return key, key != ""
 }
 
+// errBodyTooLarge: the body is larger than maxBody, so the model in it may not have been seen.
+var errBodyTooLarge = errors.New("request body too large")
+
 // requestedModel reads the model from X-Aisa-Requested-Model or, when absent, from the JSON
 // request body. The header takes precedence: the adapter sets it from the body and overwrites
-// any client value (adapter rule 2).
-func requestedModel(r *http.Request) string {
+// any client value (adapter rule 2). A request without a model, or with a body that is not a
+// JSON object, has the model "".
+func requestedModel(r *http.Request) (string, error) {
 	if m := strings.TrimSpace(r.Header.Get(HeaderRequestedModel)); m != "" {
-		return m
+		return m, nil
 	}
 	if r.Body == nil {
-		return ""
+		return "", nil
 	}
-	var body struct {
-		Model string `json:"model"`
+	body := &limited{r: r.Body, left: maxBody}
+	model, err := modelOf(body)
+	if body.exceeded {
+		return "", errBodyTooLarge
 	}
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxBody))
-	if err := dec.Decode(&body); err != nil {
-		return ""
+	if err != nil {
+		return "", nil
 	}
-	return strings.TrimSpace(body.Model)
+	return strings.TrimSpace(model), nil
+}
+
+// modelOf returns the string value of the key "model" of a JSON object, the last one when the
+// key is repeated, as encoding/json and most other parsers choose. A model that is not a string
+// is "".
+//
+// It reads the object byte by byte and keeps only the keys and the model, so the memory it
+// needs does not grow with the body: a gateway may forward megabytes of prompt and images.
+// It checks the structure only as far as it must to find its way. A body that is not valid
+// JSON may still have a model here; the backend rejects such a request later.
+func modelOf(r io.Reader) (string, error) {
+	s := scanner{r: bufio.NewReader(r)}
+	if err := s.expect('{'); err != nil {
+		return "", err
+	}
+	model := ""
+	for first := true; ; first = false {
+		c, err := s.next()
+		if err != nil {
+			return "", err
+		}
+		if c == '}' {
+			return model, nil
+		}
+		if !first {
+			if c != ',' {
+				return "", fmt.Errorf("want , or } after a value, got %q", c)
+			}
+			if c, err = s.next(); err != nil {
+				return "", err
+			}
+		}
+		if c != '"' {
+			return "", fmt.Errorf("want a key, got %q", c)
+		}
+		key, err := s.str(true)
+		if err != nil {
+			return "", err
+		}
+		if err := s.expect(':'); err != nil {
+			return "", err
+		}
+		if c, err = s.next(); err != nil {
+			return "", err
+		}
+		switch {
+		case key != "model":
+			err = s.skip(c)
+		case c == '"':
+			model, err = s.str(true)
+		default:
+			model = ""
+			err = s.skip(c)
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+}
+
+// maxString is the longest key or model that is kept. A longer one is read past and is "".
+const maxString = 1024
+
+type scanner struct {
+	r   *bufio.Reader
+	buf []byte
+}
+
+// next returns the next byte that is not white space.
+func (s *scanner) next() (byte, error) {
+	for {
+		c, err := s.r.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			return c, nil
+		}
+	}
+}
+
+func (s *scanner) expect(want byte) error {
+	c, err := s.next()
+	if err != nil {
+		return err
+	}
+	if c != want {
+		return fmt.Errorf("want %q, got %q", want, c)
+	}
+	return nil
+}
+
+// str reads a string whose opening quote has been read. With keep it returns the string, with
+// its escapes resolved.
+func (s *scanner) str(keep bool) (string, error) {
+	s.buf = append(s.buf[:0], '"')
+	for {
+		c, err := s.r.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		if keep && len(s.buf) <= maxString {
+			s.buf = append(s.buf, c)
+		}
+		switch c {
+		case '"':
+			if !keep || len(s.buf) > maxString {
+				return "", nil
+			}
+			var v string
+			if err := json.Unmarshal(s.buf, &v); err != nil {
+				return "", fmt.Errorf("string: %w", err)
+			}
+			return v, nil
+		case '\\':
+			// The next byte is escaped, a quote included. The digits of \u are ordinary bytes.
+			e, err := s.r.ReadByte()
+			if err != nil {
+				return "", err
+			}
+			if keep && len(s.buf) <= maxString {
+				s.buf = append(s.buf, e)
+			}
+		}
+	}
+}
+
+// skip reads past the value that begins with c.
+func (s *scanner) skip(c byte) error {
+	switch c {
+	case '"':
+		_, err := s.str(false)
+		return err
+	case '{', '[':
+		return s.skipNested()
+	case '}', ']', ',', ':':
+		return fmt.Errorf("want a value, got %q", c)
+	}
+	// A number, true, false or null: it ends before the next comma or bracket.
+	for {
+		b, err := s.r.Peek(1)
+		if err != nil {
+			return err
+		}
+		switch b[0] {
+		case ',', '}', ']', ' ', '\t', '\n', '\r':
+			return nil
+		}
+		_, _ = s.r.Discard(1)
+	}
+}
+
+// skipNested reads to the end of the object or array whose opening bracket has been read.
+func (s *scanner) skipNested() error {
+	for depth := 1; depth > 0; {
+		c, err := s.r.ReadByte()
+		if err != nil {
+			return err
+		}
+		switch c {
+		case '"':
+			if _, err := s.str(false); err != nil {
+				return err
+			}
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+		}
+	}
+	return nil
+}
+
+// limited reads at most left bytes and notes when there was more to read.
+type limited struct {
+	r        io.Reader
+	left     int64
+	exceeded bool
+}
+
+func (l *limited) Read(p []byte) (int, error) {
+	if l.left <= 0 {
+		// At the limit: one more byte tells a body of exactly this size from a larger one.
+		var one [1]byte
+		if n, _ := l.r.Read(one[:]); n > 0 {
+			l.exceeded = true
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > l.left {
+		p = p[:l.left]
+	}
+	n, err := l.r.Read(p)
+	l.left -= int64(n)
+	return n, err
 }
 
 // writeError writes an OpenAI-style error body, which the gateway passes to the client.

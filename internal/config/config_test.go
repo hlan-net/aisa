@@ -103,6 +103,8 @@ func TestFromEnvRejects(t *testing.T) {
 		"negative timeout":        {"AISA_SHUTDOWN_TIMEOUT": "-5s"},
 		"no Vault address":        {"VAULT_ADDR": ""},
 		"refresh not a duration":  {"AISA_CONSUMER_REFRESH": "often"},
+		"prefix of slashes only":  {"AISA_VAULT_PREFIX": "/"},
+		"mount of slashes only":   {"AISA_VAULT_KV_MOUNT": "//"},
 		"max stale below refresh": {"AISA_CONSUMER_REFRESH": "10m", "AISA_CONSUMER_MAX_STALE": "5m"},
 	} {
 		if _, err := FromEnv(env(vars)); err == nil {

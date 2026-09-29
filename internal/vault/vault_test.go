@@ -21,6 +21,11 @@ type fakeVault struct {
 	valid   map[string]bool
 	secrets map[string]map[string]any // "mount/path" → data
 	lastJWT string
+	// denied are paths that the policy of every token forbids.
+	denied map[string]bool
+	// notFound, when set, is the body of a 404 that answers every request for data.
+	notFound string
+	lookups  int
 }
 
 func newFakeVault(t *testing.T) (*fakeVault, *httptest.Server) {
@@ -46,7 +51,12 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case path == "auth/token/lookup-self":
+		f.lookups++
 		_, _ = w.Write([]byte(`{"data":{}}`))
+	case f.denied[path]:
+		writeStatus(w, http.StatusForbidden, `{"errors":["1 error occurred:\n\t* permission denied\n\n"]}`)
+	case f.notFound != "":
+		writeStatus(w, http.StatusNotFound, f.notFound)
 	case r.Method == "LIST" && strings.HasPrefix(path, "secret/metadata/"):
 		f.list(w, strings.TrimPrefix(path, "secret/metadata/"))
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "secret/data/"):
@@ -223,5 +233,137 @@ func TestNewValidates(t *testing.T) {
 	}
 	if _, err := New(Options{Addr: "https://vault:8200", Auth: TokenAuth{Token: "x"}, CACert: "/no/such/file"}); err == nil {
 		t.Error("want an error for a missing CA file")
+	}
+}
+
+func TestNotFoundIsOnlyWhatVaultSaysAboutItsData(t *testing.T) {
+	f, srv := newFakeVault(t)
+	c, err := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	for name, tc := range map[string]struct {
+		body     string
+		notFound bool
+	}{
+		"a path without data":         {`{"errors":[]}`, true},
+		"a deleted version":           {`{"data":{"data":null,"metadata":{"deletion_time":"2026-01-01T00:00:00Z"}}}`, true},
+		"a mount that does not exist": {`{"errors":["no handler for route \"nomount/metadata/aisa/consumers/\". route entry not found."]}`, false},
+		"a proxy in front of Vault":   {`<html><body>404 Not Found</body></html>`, false},
+		"an empty answer":             {``, false},
+	} {
+		f.mu.Lock()
+		f.notFound = tc.body
+		f.mu.Unlock()
+		if tc.body == "" {
+			// The fake answers from its data when notFound is empty; a bare 404 comes from the default.
+			_, err = c.List(ctx, "nomount", "aisa/consumers")
+		} else {
+			_, err = c.List(ctx, "secret", "aisa/consumers")
+		}
+		if got := errors.Is(err, ErrNotFound); got != tc.notFound {
+			t.Errorf("%s: ErrNotFound = %v, want %v (err: %v)", name, got, tc.notFound, err)
+		}
+		var se *StatusError
+		if !tc.notFound && (!errors.As(err, &se) || se.Code != http.StatusNotFound) {
+			t.Errorf("%s: err = %v, want a StatusError with 404", name, err)
+		}
+	}
+}
+
+func TestNamesAreEscaped(t *testing.T) {
+	f, srv := newFakeVault(t)
+	f.secrets["secret/aisa/consumers/a"] = map[string]any{"owner": "a"}
+	names := []string{"a?b", "a#b", "50%", "with space", "a%3Fb"}
+	for _, n := range names {
+		f.secrets["secret/aisa/consumers/"+n] = map[string]any{"owner": n}
+	}
+	c, err := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		data, err := c.Read(context.Background(), "secret", "aisa/consumers/"+n)
+		if err != nil {
+			t.Errorf("%q: %v", n, err)
+			continue
+		}
+		if data["owner"] != n {
+			t.Errorf("%q: read the secret of %q", n, data["owner"])
+		}
+	}
+}
+
+func TestDeniedByPolicyDoesNotLogInAgain(t *testing.T) {
+	f, srv := newFakeVault(t)
+	f.denied = map[string]bool{"secret/metadata/aisa/consumers": true}
+	jwt := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(jwt, []byte("sa-jwt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{Addr: srv.URL, Auth: KubernetesAuth{Mount: "kubernetes", Role: "aisa", TokenPath: jwt}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		_, err := c.List(context.Background(), "secret", "aisa/consumers")
+		var se *StatusError
+		if !errors.As(err, &se) || se.Code != http.StatusForbidden {
+			t.Fatalf("err = %v, want Vault's 403", err)
+		}
+	}
+	if f.logins != 1 {
+		t.Errorf("logins = %d after five denied requests, want 1: each login leaves a token in Vault", f.logins)
+	}
+}
+
+func TestFixedTokenThatVaultRejects(t *testing.T) {
+	f, srv := newFakeVault(t)
+	c, err := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "revoked"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Read(context.Background(), "secret", "aisa/consumers/a")
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusForbidden {
+		t.Errorf("err = %v, want Vault's 403", err)
+	}
+	if f.logins != 0 {
+		t.Errorf("logins = %d, want 0 with a fixed token", f.logins)
+	}
+}
+
+func TestOnlyOneLoginWhenSeveralRequestsFindTheTokenRevoked(t *testing.T) {
+	f, srv := newFakeVault(t)
+	f.secrets["secret/aisa/consumers/a"] = map[string]any{"x": "1"}
+	jwt := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(jwt, []byte("sa-jwt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{Addr: srv.URL, Auth: KubernetesAuth{Mount: "kubernetes", Role: "aisa", TokenPath: jwt}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := c.Read(ctx, "secret", "aisa/consumers/a"); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.valid = map[string]bool{}
+	f.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if _, err := c.Read(ctx, "secret", "aisa/consumers/a"); err != nil {
+				t.Errorf("read after revocation: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+	if f.logins != 2 {
+		t.Errorf("logins = %d, want 2: the first one and one after the revocation", f.logins)
 	}
 }

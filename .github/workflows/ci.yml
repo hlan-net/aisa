@@ -73,11 +73,12 @@ jobs:
       - name: Start
         run: |
           # aisa reads its consumers from Vault; a dev-mode Vault without any is enough here.
+          # Both start together: aisa retries until Vault answers.
           docker network create aisa-ci
           docker run -d --name vault --network aisa-ci --cap-add IPC_LOCK hashicorp/vault:2.1.1 \
             server -dev -dev-root-token-id=ci-root -dev-listen-address=0.0.0.0:8200
           docker run -d --name aisa --network aisa-ci -p 127.0.0.1:8080:8080 \
-            -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN=ci-root -e AISA_CONSUMER_REFRESH=2s aisa:ci
+            -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN=ci-root aisa:ci
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then break; fi
             sleep 1
@@ -88,6 +89,7 @@ jobs:
           curl -fsS http://127.0.0.1:8080/healthz
           curl -fsS http://127.0.0.1:8080/readyz
           curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_build_info{version="ci"} 1'
+          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_consumer_loads_total{result="ok"}'
           # No consumers in Vault: every key is unknown.
           [[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer x' \
                 -H 'X-Aisa-Requested-Model: m' -X POST http://127.0.0.1:8080/v1/decide)" == 401 ]]

@@ -22,7 +22,10 @@ import (
 	"time"
 )
 
-// ErrNotFound is returned when a path does not exist.
+// ErrNotFound is returned when a path has no data: a secret that does not exist or whose
+// current version is deleted, or a path without keys. It is what Vault itself says about its
+// data. A 404 for any other reason, such as a mount that does not exist or an answer from a
+// proxy in front of Vault, is a StatusError.
 var ErrNotFound = errors.New("not found")
 
 // Auth obtains a Vault token.
@@ -172,35 +175,74 @@ func (c *Client) Read(ctx context.Context, mount, path string) (map[string]any, 
 	return out.Data.Data, nil
 }
 
-// Probe checks that Vault answers and the token is accepted, for aisa's readiness.
+// lookupSelf is allowed to every token by Vault's default policy.
+const lookupSelf = "auth/token/lookup-self"
+
+// Probe checks that Vault answers and accepts aisa's token, logging in when it has none.
 func (c *Client) Probe(ctx context.Context) error {
-	return c.authed(ctx, http.MethodGet, "auth/token/lookup-self", nil, nil)
+	return c.authed(ctx, http.MethodGet, lookupSelf, nil, nil)
 }
 
-// authed performs a request with a valid token. A 403 may mean the token was revoked or has
-// expired early: it logs in again once and retries.
+// authed performs a request with a valid token. Vault answers 403 both to a token that was
+// revoked or has expired early and to a valid token whose policy does not allow the path. Only
+// the first is helped by logging in again, so it asks Vault about the token before it does:
+// a login on every denied request would leave a token behind each time.
 func (c *Client) authed(ctx context.Context, method, path string, body []byte, out any) error {
-	token, err := c.currentToken(ctx, false)
+	token, err := c.currentToken(ctx, "")
 	if err != nil {
 		return err
 	}
 	err = c.do(ctx, method, path, token, body, out)
-	var se *StatusError
-	if errors.As(err, &se) && se.Code == http.StatusForbidden {
-		if token, err = c.currentToken(ctx, true); err != nil {
-			return err
-		}
-		err = c.do(ctx, method, path, token, body, out)
+	if !isForbidden(err) {
+		return err
 	}
-	return err
+	// When the request was that question itself, its answer is the token's state.
+	if path != lookupSelf && c.tokenState(ctx, token) != tokenInvalid {
+		return err
+	}
+	fresh, lerr := c.currentToken(ctx, token)
+	if lerr != nil {
+		return lerr
+	}
+	if fresh == token {
+		// A fixed token: there is no other one to try.
+		return err
+	}
+	return c.do(ctx, method, path, fresh, body, out)
 }
 
-// currentToken returns the cached token, logging in when there is none, when it expires within
-// a third of its lifetime or a minute, or when force is set.
-func (c *Client) currentToken(ctx context.Context, force bool) (string, error) {
+type tokenState int
+
+const (
+	tokenValid tokenState = iota
+	tokenInvalid
+	tokenUnknown // Vault did not answer the question
+)
+
+// tokenState asks Vault whether it accepts the token.
+func (c *Client) tokenState(ctx context.Context, token string) tokenState {
+	switch err := c.do(ctx, http.MethodGet, lookupSelf, token, nil, nil); {
+	case err == nil:
+		return tokenValid
+	case isForbidden(err):
+		return tokenInvalid
+	default:
+		return tokenUnknown
+	}
+}
+
+func isForbidden(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code == http.StatusForbidden
+}
+
+// currentToken returns the cached token, logging in when there is none or when it expires
+// within a third of its lifetime or a minute. stale is a token that Vault has rejected: it logs
+// in again unless another request has replaced that token in the meantime.
+func (c *Client) currentToken(ctx context.Context, stale string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !force && c.token != "" && (c.expires.IsZero() || c.now().Before(c.expires)) {
+	if c.token != "" && c.token != stale && (c.expires.IsZero() || c.now().Before(c.expires)) {
 		return c.token, nil
 	}
 	token, ttl, err := c.auth.Login(ctx, c)
@@ -229,12 +271,22 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("vault answered %d: %s", e.Code, strings.Join(e.Errors, "; "))
 }
 
+// escapePath escapes each element of a path, so a name with a question mark, a number sign or
+// a percent sign in it stays a name and does not change which path is asked for.
+func escapePath(path string) string {
+	parts := strings.Split(path, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
+}
+
 func (c *Client) do(ctx context.Context, method, path, token string, body []byte, out any) error {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.addr+"/v1/"+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, c.addr+"/v1/"+escapePath(path), rd)
 	if err != nil {
 		return fmt.Errorf("vault request %s: %w", path, err)
 	}
@@ -255,15 +307,18 @@ func (c *Client) do(ctx context.Context, method, path, token string, body []byte
 	}
 
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
-		return fmt.Errorf("vault %s %s: %w", method, path, ErrNotFound)
 	case resp.StatusCode == http.StatusNoContent:
 		return nil
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
 		var e struct {
 			Errors []string `json:"errors"`
 		}
-		_ = json.Unmarshal(data, &e)
+		decoded := json.Unmarshal(data, &e) == nil
+		// Vault says "no data here" with a 404 and no errors. With errors, the 404 is about the
+		// mount; without a JSON object, it is not from Vault.
+		if resp.StatusCode == http.StatusNotFound && decoded && len(e.Errors) == 0 {
+			return fmt.Errorf("vault %s %s: %w", method, path, ErrNotFound)
+		}
 		return &StatusError{Code: resp.StatusCode, Errors: e.Errors}
 	}
 	if out == nil {

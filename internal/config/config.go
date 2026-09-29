@@ -147,10 +147,16 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		{"AISA_VAULT_KV_MOUNT", &cfg.Vault.KVMount},
 		{"AISA_VAULT_PREFIX", &cfg.Vault.Prefix},
 	} {
-		// Mount paths and the prefix are used with and without slashes around them.
-		if s := strings.Trim(getenv(v.name), "/"); s != "" {
-			*v.dst = s
+		raw := getenv(v.name)
+		if raw == "" {
+			continue
 		}
+		// Mount paths and the prefix are used with and without slashes around them.
+		s := strings.Trim(raw, "/")
+		if s == "" {
+			return cfg, fmt.Errorf("%s: want a path, got %q", v.name, raw)
+		}
+		*v.dst = s
 	}
 	if p := getenv("AISA_VAULT_K8S_TOKEN_PATH"); p != "" {
 		cfg.Vault.KubernetesTokenPath = p
