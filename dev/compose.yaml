@@ -111,7 +111,8 @@ services:
 
   aisa:
     # The real aisa, built from the repository's Dockerfile. It reads the seeded consumers from
-    # Vault and answers /v1/decide; the gateway still uses stub-aisa until aisa ingests usage.
+    # Vault and answers /v1/decide; the gateway still uses stub-aisa until PR 5 (feature/apisix-adapter)
+    # switches it with the explicit log_format (#5).
     image: aisa:local
     build:
       context: ..

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,6 +22,7 @@ type Config struct {
 
 	Vault     Vault
 	Consumers Consumers
+	Ledger    Ledger
 }
 
 // Vault is where aisa reads consumers from (docs/concepts/VAULT.md).
@@ -57,6 +59,15 @@ type Consumers struct {
 	MaxStale time.Duration
 }
 
+// Ledger sets how the usage ledger operates.
+type Ledger struct {
+	// DedupCapacity is the max number of request IDs kept to deduplicate events
+	// (AISA_LEDGER_DEDUP_CAPACITY).
+	DedupCapacity int
+	// DedupTTL is how long a request ID is kept before expiring (AISA_LEDGER_DEDUP_TTL).
+	DedupTTL time.Duration
+}
+
 // Defaults are the values used for variables that are unset or empty.
 func Defaults() Config {
 	return Config{
@@ -74,6 +85,10 @@ func Defaults() Config {
 			Refresh:     time.Minute,
 			MissRefresh: 5 * time.Second,
 			MaxStale:    15 * time.Minute,
+		},
+		Ledger: Ledger{
+			DedupCapacity: 100_000,
+			DedupTTL:      15 * time.Minute,
 		},
 	}
 }
@@ -122,46 +137,62 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		{"AISA_CONSUMER_REFRESH", &cfg.Consumers.Refresh},
 		{"AISA_CONSUMER_MISS_REFRESH", &cfg.Consumers.MissRefresh},
 		{"AISA_CONSUMER_MAX_STALE", &cfg.Consumers.MaxStale},
+		{"AISA_LEDGER_DEDUP_TTL", &cfg.Ledger.DedupTTL},
 	} {
 		if err := duration(getenv, d.name, d.dst); err != nil {
 			return cfg, err
 		}
+	}
+	if v := getenv("AISA_LEDGER_DEDUP_CAPACITY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return cfg, fmt.Errorf("AISA_LEDGER_DEDUP_CAPACITY: want a positive integer, got %q", v)
+		}
+		cfg.Ledger.DedupCapacity = n
 	}
 	if cfg.Consumers.MaxStale < cfg.Consumers.Refresh {
 		return cfg, fmt.Errorf("AISA_CONSUMER_MAX_STALE (%s) must not be shorter than AISA_CONSUMER_REFRESH (%s)",
 			cfg.Consumers.MaxStale, cfg.Consumers.Refresh)
 	}
 
-	cfg.Vault.Addr = getenv("VAULT_ADDR")
-	if cfg.Vault.Addr == "" {
-		return cfg, fmt.Errorf("VAULT_ADDR is required: aisa reads its consumers from Vault")
+	if err := vaultFromEnv(getenv, &cfg.Vault); err != nil {
+		return cfg, err
 	}
-	cfg.Vault.CACert = getenv("VAULT_CACERT")
-	cfg.Vault.Token = getenv("VAULT_TOKEN")
-	for _, v := range []struct {
+	return cfg, nil
+}
+
+// vaultFromEnv reads the Vault configuration from environment variables.
+func vaultFromEnv(getenv func(string) string, v *Vault) error {
+	v.Addr = getenv("VAULT_ADDR")
+	if v.Addr == "" {
+		return fmt.Errorf("VAULT_ADDR is required: aisa reads its consumers from Vault")
+	}
+	v.CACert = getenv("VAULT_CACERT")
+	v.Token = getenv("VAULT_TOKEN")
+	for _, f := range []struct {
 		name string
 		dst  *string
 	}{
-		{"AISA_VAULT_K8S_MOUNT", &cfg.Vault.KubernetesMount},
-		{"AISA_VAULT_K8S_ROLE", &cfg.Vault.KubernetesRole},
-		{"AISA_VAULT_KV_MOUNT", &cfg.Vault.KVMount},
-		{"AISA_VAULT_PREFIX", &cfg.Vault.Prefix},
+		{"AISA_VAULT_K8S_MOUNT", &v.KubernetesMount},
+		{"AISA_VAULT_K8S_ROLE", &v.KubernetesRole},
+		{"AISA_VAULT_KV_MOUNT", &v.KVMount},
+		{"AISA_VAULT_PREFIX", &v.Prefix},
 	} {
-		raw := getenv(v.name)
+		raw := getenv(f.name)
 		if raw == "" {
 			continue
 		}
 		// Mount paths and the prefix are used with and without slashes around them.
 		s := strings.Trim(raw, "/")
 		if s == "" {
-			return cfg, fmt.Errorf("%s: want a path, got %q", v.name, raw)
+			return fmt.Errorf("%s: want a path, got %q", f.name, raw)
 		}
-		*v.dst = s
+		*f.dst = s
 	}
 	if p := getenv("AISA_VAULT_K8S_TOKEN_PATH"); p != "" {
-		cfg.Vault.KubernetesTokenPath = p
+		v.KubernetesTokenPath = p
 	}
-	return cfg, nil
+	return nil
 }
 
 // duration sets *dst from the variable name when it is set, and requires a positive duration.
