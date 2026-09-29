@@ -145,6 +145,19 @@ routes:
     uri: /direct/v1/chat/completions
     methods: [POST]
     plugins:
+      # No decision here, but no client-supplied X-Aisa-* header may reach the usage event either.
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+            end
       ai-proxy-multi: *fast
       http-logger: *usage_logger
 #END

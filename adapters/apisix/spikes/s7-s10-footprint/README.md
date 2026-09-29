@@ -27,6 +27,8 @@ docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s7-s10-footprint/co
 
 ## Output of the recorded runs (2026-09-28, APISIX 3.18.0, arm64)
 
+These runs predate the pre-step on `/direct/` that strips client-supplied `X-Aisa-*` headers (added in review), so `/direct/` did no Lua work of its own then.
+
 Raspberry Pi 5 (4 cores, 16 GB), Docker. Not the Raspberry Pi 4 that S7 names: see the outcome in `SPIKES.md` and [#16](https://github.com/hlan-net/aisa/issues/16).
 
 ```
