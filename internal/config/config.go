@@ -23,7 +23,40 @@ type Config struct {
 	Vault     Vault
 	Consumers Consumers
 	Ledger    Ledger
+	// Quotas are enabled when both Consul and Redis are configured.
+	Consul Consul
+	Redis  Redis
 }
+
+// Consul is where aisa reads its quota profiles from (docs/concepts/CONSUL.md). The variables
+// are Consul's own, except the prefix.
+type Consul struct {
+	// Addr is Consul's address (CONSUL_HTTP_ADDR): host:port, or a URL with http or https.
+	// Empty turns quotas off.
+	Addr string
+	// CACert is a PEM file with the CA of Consul's certificate (CONSUL_CACERT).
+	CACert string
+	// Token is an ACL token (CONSUL_HTTP_TOKEN), for development. TokenFile is a file that holds
+	// one (CONSUL_HTTP_TOKEN_FILE), such as one the Vault Agent writes from Vault's Consul
+	// secrets engine. At most one of them is set.
+	Token     string
+	TokenFile string
+	// Prefix is where aisa's keys are in Consul KV (AISA_CONSUL_PREFIX): quota profiles are
+	// under <Prefix>/quotas/.
+	Prefix string
+}
+
+// Redis holds the quota counters.
+type Redis struct {
+	// Addr is Redis's host:port (AISA_REDIS_ADDR). Empty turns quotas off.
+	Addr string
+	// Username and Password authenticate to Redis (AISA_REDIS_USERNAME, AISA_REDIS_PASSWORD).
+	Username string
+	Password string
+}
+
+// QuotasEnabled reports whether quotas are configured.
+func (c Config) QuotasEnabled() bool { return c.Consul.Addr != "" && c.Redis.Addr != "" }
 
 // Vault is where aisa reads consumers from (docs/concepts/VAULT.md).
 type Vault struct {
@@ -90,6 +123,7 @@ func Defaults() Config {
 			DedupCapacity: 100_000,
 			DedupTTL:      15 * time.Minute,
 		},
+		Consul: Consul{Prefix: "aisa"},
 	}
 }
 
@@ -158,7 +192,46 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err := vaultFromEnv(getenv, &cfg.Vault); err != nil {
 		return cfg, err
 	}
+	if err := quotasFromEnv(getenv, &cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// quotasFromEnv reads the Consul and Redis configuration. Quotas need both, so one without the
+// other is an error rather than quotas that are silently off.
+func quotasFromEnv(getenv func(string) string, cfg *Config) error {
+	c := &cfg.Consul
+	c.Addr = getenv("CONSUL_HTTP_ADDR")
+	c.CACert = getenv("CONSUL_CACERT")
+	c.Token = getenv("CONSUL_HTTP_TOKEN")
+	c.TokenFile = getenv("CONSUL_HTTP_TOKEN_FILE")
+	if raw := getenv("AISA_CONSUL_PREFIX"); raw != "" {
+		p := strings.Trim(raw, "/")
+		if p == "" {
+			return fmt.Errorf("AISA_CONSUL_PREFIX: want a path, got %q", raw)
+		}
+		c.Prefix = p
+	}
+	if c.Token != "" && c.TokenFile != "" {
+		return fmt.Errorf("set CONSUL_HTTP_TOKEN or CONSUL_HTTP_TOKEN_FILE, not both")
+	}
+	r := &cfg.Redis
+	r.Addr = getenv("AISA_REDIS_ADDR")
+	r.Username = getenv("AISA_REDIS_USERNAME")
+	r.Password = getenv("AISA_REDIS_PASSWORD")
+	if r.Addr != "" {
+		if _, _, err := net.SplitHostPort(r.Addr); err != nil {
+			return fmt.Errorf("AISA_REDIS_ADDR: want host:port, got %q: %w", r.Addr, err)
+		}
+	}
+	switch {
+	case c.Addr != "" && r.Addr == "":
+		return fmt.Errorf("CONSUL_HTTP_ADDR is set but AISA_REDIS_ADDR is not: token quotas need both")
+	case c.Addr == "" && r.Addr != "":
+		return fmt.Errorf("AISA_REDIS_ADDR is set but CONSUL_HTTP_ADDR is not: token quotas need both")
+	}
+	return nil
 }
 
 // vaultFromEnv reads the Vault configuration from environment variables.

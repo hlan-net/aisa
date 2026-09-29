@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 aisa — **AI Service [Access, Admin, Authority]** — is a Vault- and Consul-native governance layer for LLM traffic. It sits beside an existing AI gateway and adds identities, token quotas, money budgets and normalized usage metrics. It is **not** a gateway: it never proxies model traffic itself. Apache 2.0, public repository `hlan-net/aisa`.
 
-**Status: early development (v0.2.0).** The design lives in `docs/`, and its open questions are answered in `docs/process/SPIKES.md`. aisa has config, health endpoints, the metrics registry and the decision API with consumers from Vault (`internal/vault`, `internal/consumers`, `internal/decide`); the next steps are the PRs of `ROADMAP.md` v0.2.0.
+**Status: early development (v0.2.0).** The design lives in `docs/`, and its open questions are answered in `docs/process/SPIKES.md`. aisa has config, health endpoints, the metrics registry, the decision API with consumers from Vault (`internal/vault`, `internal/consumers`, `internal/decide`), the usage ledger (`internal/ledger`) and token quotas from Consul with counters in Redis (`internal/consul`, `internal/quotas`); the next steps are the PRs of `ROADMAP.md` v0.2.0.
 
 ## Where things are
 
@@ -15,7 +15,7 @@ aisa — **AI Service [Access, Admin, Authority]** — is a Vault- and Consul-na
 | `docs/concepts/` | The core design: `ARCHITECTURE.md`, `ADAPTER_CONTRACT.md` (the three aisa ↔ gateway contracts), `VAULT.md`, `CONSUL.md` |
 | `docs/features/` | User-facing capabilities: `quotas-and-budgets.md`, `usage-metrics.md` |
 | `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes) |
-| `cmd/aisa/`, `internal/` | aisa itself: `config` (environment variables), `server` (HTTP, health), `metrics` (the `aisa_*` registry), `version` |
+| `cmd/aisa/`, `internal/` | aisa itself: `config` (environment variables), `server` (HTTP, health), `metrics` (the `aisa_*` registry), `vault`, `consumers`, `decide`, `ledger`, `consul`, `quotas`, `version` |
 | `Dockerfile` | The product image: a static binary in a distroless image, amd64 and arm64 |
 | `dev/` | Docker Compose dev stack (Vault, Consul, Redis, APISIX standalone, mock backends, stub aisa) and `smoke.sh`; see `dev/README.md` |
 | `ROADMAP.md` | Mission, current state and versioned milestones with PR tables |

@@ -111,6 +111,12 @@ func TestFromEnvRejects(t *testing.T) {
 		"dedup capacity negative": {"AISA_LEDGER_DEDUP_CAPACITY": "-1"},
 		"dedup ttl not duration":  {"AISA_LEDGER_DEDUP_TTL": "forever"},
 		"dedup ttl zero":          {"AISA_LEDGER_DEDUP_TTL": "0s"},
+		"consul without redis":    {"CONSUL_HTTP_ADDR": "consul:8500"},
+		"redis without consul":    {"AISA_REDIS_ADDR": "redis:6379"},
+		"redis without a port":    {"CONSUL_HTTP_ADDR": "consul:8500", "AISA_REDIS_ADDR": "redis"},
+		"consul token twice": {"CONSUL_HTTP_ADDR": "consul:8500", "AISA_REDIS_ADDR": "redis:6379",
+			"CONSUL_HTTP_TOKEN": "a", "CONSUL_HTTP_TOKEN_FILE": "/b"},
+		"consul prefix of slashes only": {"AISA_CONSUL_PREFIX": "/"},
 	} {
 		if _, err := FromEnv(env(vars)); err == nil {
 			t.Errorf("%s: want an error", name)
@@ -131,5 +137,41 @@ func TestFromEnvLedger(t *testing.T) {
 	}
 	if cfg.Ledger.DedupTTL != 10*time.Minute {
 		t.Errorf("DedupTTL = %v, want 10m", cfg.Ledger.DedupTTL)
+	}
+}
+
+func TestFromEnvQuotas(t *testing.T) {
+	cfg, err := FromEnv(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.QuotasEnabled() {
+		t.Error("quotas on without Consul and Redis")
+	}
+
+	cfg, err = FromEnv(env(map[string]string{
+		"CONSUL_HTTP_ADDR":       "https://consul.example:8501",
+		"CONSUL_CACERT":          "/etc/consul/ca.pem",
+		"CONSUL_HTTP_TOKEN_FILE": "/vault/secrets/consul-token",
+		"AISA_CONSUL_PREFIX":     "/teams/aisa/",
+		"AISA_REDIS_ADDR":        "redis:6379",
+		"AISA_REDIS_USERNAME":    "aisa",
+		"AISA_REDIS_PASSWORD":    "secret",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.QuotasEnabled() {
+		t.Error("quotas off with Consul and Redis")
+	}
+	wantConsul := Consul{
+		Addr: "https://consul.example:8501", CACert: "/etc/consul/ca.pem",
+		TokenFile: "/vault/secrets/consul-token", Prefix: "teams/aisa",
+	}
+	if cfg.Consul != wantConsul {
+		t.Errorf("Consul = %+v, want %+v", cfg.Consul, wantConsul)
+	}
+	if want := (Redis{Addr: "redis:6379", Username: "aisa", Password: "secret"}); cfg.Redis != want {
+		t.Errorf("Redis = %+v, want %+v", cfg.Redis, want)
 	}
 }

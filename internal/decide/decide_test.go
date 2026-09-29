@@ -10,11 +10,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/quotas"
 )
 
 type fakeLookup struct {
@@ -38,7 +40,7 @@ func newHandler(unavailable bool) (*Handler, *metrics.Metrics) {
 		keys:        map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}},
 		unavailable: unavailable,
 	}
-	return New(l, m, slog.New(slog.NewTextHandler(io.Discard, nil))), m
+	return New(l, nil, m, slog.New(slog.NewTextHandler(io.Discard, nil))), m
 }
 
 type decideCase struct {
@@ -364,4 +366,78 @@ func FuzzModelOf(f *testing.F) {
 			t.Fatalf("model = %q, encoding/json reads %q\n%s", got, wantModel, body)
 		}
 	})
+}
+
+// fakeQuota answers every check with a fixed verdict and notes who was checked.
+type fakeQuota struct {
+	verdict quotas.Verdict
+	checked []consumers.Consumer
+}
+
+func (f *fakeQuota) Check(_ context.Context, c consumers.Consumer) quotas.Verdict {
+	f.checked = append(f.checked, c)
+	return f.verdict
+}
+
+func TestQuota(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		verdict        quotas.Verdict
+		wantStatus     int
+		wantCode       string
+		wantResult     string
+		wantRetryAfter string
+	}{
+		{"tokens left", quotas.Verdict{Outcome: quotas.Allow, Limit: 100, Used: 99}, 200, "", metrics.ResultAllow, ""},
+		{"exhausted", quotas.Verdict{Outcome: quotas.Exhausted, Limit: 100, Used: 120, RetryAfter: 1500 * time.Millisecond},
+			429, "rate_limit_exceeded", metrics.ResultDenyQuota, "2"},
+		{"profile unknown", quotas.Verdict{Outcome: quotas.Unavailable, Err: quotas.ErrUnknownProfile},
+			503, "quota_unavailable", metrics.ResultUnavailable, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := metrics.New("test")
+			q := &fakeQuota{verdict: tc.verdict}
+			l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}}}
+			h := New(l, q, m, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"qwen3"}`))
+			req.Header.Set("Authorization", "Bearer key-chat")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.wantStatus, rec.Body)
+			}
+			if len(q.checked) != 1 || q.checked[0].QuotaProfile != "interactive" {
+				t.Errorf("checked = %+v, want chat-ui with its profile", q.checked)
+			}
+			if tc.wantCode != "" {
+				checkErrorBody(t, rec.Body.Bytes(), tc.wantCode)
+				if rec.Header().Get(HeaderConsumer) != "" {
+					t.Error("a denial must not carry X-Aisa-Consumer")
+				}
+			}
+			if got := rec.Header().Get("Retry-After"); got != tc.wantRetryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, tc.wantRetryAfter)
+			}
+			if n := testutil.ToFloat64(m.Decisions.WithLabelValues("chat-ui", tc.wantResult)); n != 1 {
+				t.Errorf("aisa_decisions_total{chat-ui,%s} = %v, want 1", tc.wantResult, n)
+			}
+		})
+	}
+}
+
+func TestQuotaNotCheckedForInvalidRequests(t *testing.T) {
+	q := &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Exhausted}}
+	l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui"}}}
+	h := New(l, q, metrics.New("test"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, auth := range []string{"Bearer nope", "Bearer key-chat"} {
+		// The second has a known key but no model.
+		req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{}`))
+		req.Header.Set("Authorization", auth)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	if len(q.checked) != 0 {
+		t.Errorf("quota checked for %d invalid requests", len(q.checked))
+	}
 }

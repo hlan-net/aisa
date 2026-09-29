@@ -60,7 +60,7 @@ for _ in $(seq 1 30); do
     [[ "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")" == 200 ]] && break
     sleep 1
 done
-expect "aisa: ready (consumers loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
+expect "aisa: ready (consumers and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
 # decide <key> <json body> [extra curl args...]: prints "<status> <X-Aisa-Consumer> <X-Aisa-Model>"
 decide() {
     local key=$1 body=$2
@@ -112,6 +112,25 @@ req3="${smoke_run_id}-3"
 expect "aisa: partial batch accepted with invalid event skipped" "200" \
     "$(send_usage "[{\"request_id\":\"$req3\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":\"200\",\"prompt_tokens\":\"2\"},{\"request_id\":\"\",\"status\":200}]")"
 expect "aisa: partial batch valid tokens incremented" "$((prompt_before + 17))" "$(tokens_metric chat-ui qwen3 prompt)"
+
+echo "== aisa: token quotas"
+# A new consumer for each run, so a window left by an earlier run does not matter.
+quota_consumer="quota-${smoke_run_id}"
+quota_key="dev-key-${quota_consumer}"
+curl -fsS -o /dev/null -H 'X-Vault-Token: dev-root' -H 'Content-Type: application/json' \
+    -d "{\"data\":{\"key_sha256\":\"$(printf %s "$quota_key" | sha256sum | cut -d' ' -f1)\",\"quota_profile\":\"tiny\"}}" \
+    "$VAULT/v1/secret/data/aisa/consumers/$quota_consumer"
+expect "aisa: quota: tokens left" "200 $quota_consumer qwen3" "$(decide "$quota_key" '{"model":"qwen3"}')"
+expect "aisa: quota: usage of 120 tokens accepted" "200" \
+    "$(send_usage "{\"request_id\":\"${smoke_run_id}-quota\",\"consumer\":\"$quota_consumer\",\"model\":\"qwen3\",\"status\":200,\"prompt_tokens\":60,\"completion_tokens\":60}")"
+expect "aisa: quota: exhausted after 120 of 100 tokens" "429  " "$(decide "$quota_key" '{"model":"qwen3"}')"
+retry_after=$(curl -sS -o /dev/null -D - -H "Authorization: Bearer $quota_key" -d '{"model":"qwen3"}' "$AISA/v1/decide" |
+    awk -F': ' 'tolower($1) == "retry-after" { gsub(/\r/, "", $2); print $2 }')
+if [[ "$retry_after" =~ ^[0-9]+$ ]] && ((retry_after >= 1 && retry_after <= 3600)); then
+    ok "aisa: quota: Retry-After $retry_after s"
+else
+    fail "aisa: quota: Retry-After: want 1 to 3600, got '$retry_after'"
+fi
 
 echo "== gateway → decide → backend"
 out=$(chat dev-key-chat-ui '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}')

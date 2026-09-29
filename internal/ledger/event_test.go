@@ -148,12 +148,12 @@ func TestParseEventsIgnoresUnknownFields(t *testing.T) {
 
 func TestParseEventsRejects(t *testing.T) {
 	for name, in := range map[string]string{
-		"empty":               "",
-		"whitespace only":     "   \n",
-		"plain string":        `"hello"`,
-		"number":              `123`,
-		"boolean":             `true`,
-		"invalid json":        `{not json`,
+		"empty":                 "",
+		"whitespace only":       "   \n",
+		"plain string":          `"hello"`,
+		"number":                `123`,
+		"boolean":               `true`,
+		"invalid json":          `{not json`,
 		"array of non-object":   `[1, 2, 3]`,
 		"array invalid json":    `[{"r": 1}, invalid]`,
 		"fractional string int": `{"prompt_tokens": "1.9"}`,

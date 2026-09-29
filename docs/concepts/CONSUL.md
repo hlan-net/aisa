@@ -52,13 +52,14 @@ aisa/quotas/<profile>             {"tokens_per_hour": 200000}
 aisa/state/<consumer>/<YYYY-MM>   persisted monthly spend (written by aisa)
 ```
 
+- A quota profile is a JSON object with `tokens_per_hour`, a non-negative integer; other fields are ignored. A profile without it, or one that is not valid JSON, is logged and counted in `aisa_quota_profiles_invalid`, and its consumers are denied with 503 until it is fixed ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#token-quotas-v020)).
 - Local models cost 0 by default. An energy-based price per token can be set from measured power use.
 - **Single source of truth:** prices, budgets and quota profiles are Terraform variables. Terraform writes them to Consul KV, and aisa watches the prefix (blocking queries) and picks up changes without a restart.
 - Hot counters live in Redis. Consul KV only gets the persisted monthly totals once a minute, because Consul's Raft log is not meant for a write per request.
 
 ## ACLs
 
-Terraform-managed Consul policies. The tokens come from Vault's Consul secrets engine (`consul/creds/<role>`), so no static Consul token is deployed:
+Terraform-managed Consul policies. The tokens come from Vault's Consul secrets engine (`consul/creds/<role>`), so no static Consul token is deployed. aisa reads its token from the file `CONSUL_HTTP_TOKEN_FILE` for every request, so the Vault Agent can render and renew it there; `CONSUL_HTTP_TOKEN` is for development:
 
 | Role | Rules |
 |---|---|

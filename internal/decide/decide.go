@@ -1,8 +1,8 @@
 // Package decide is the decision API, contract 1 in docs/concepts/ADAPTER_CONTRACT.md: the
 // gateway asks POST /v1/decide before it proxies a request, and applies the answer.
 //
-// This version authenticates the consumer and passes the requested model through. Quotas and
-// budgets, which can deny a request or rewrite its model, come in later versions.
+// This version authenticates the consumer, checks its token quota and passes the requested
+// model through. Budgets, which can deny a request or rewrite its model, come in a later version.
 package decide
 
 import (
@@ -13,11 +13,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/quotas"
 )
 
 // Headers of the contract.
@@ -41,16 +45,22 @@ type Lookup interface {
 	Lookup(ctx context.Context, key string) (consumers.Consumer, consumers.Result)
 }
 
+// Quota checks a consumer's token quota; quotas.Quota implements it.
+type Quota interface {
+	Check(ctx context.Context, c consumers.Consumer) quotas.Verdict
+}
+
 // Handler answers /v1/decide.
 type Handler struct {
 	consumers Lookup
+	quota     Quota
 	metrics   *metrics.Metrics
 	log       *slog.Logger
 }
 
-// New returns the decision handler.
-func New(c Lookup, m *metrics.Metrics, log *slog.Logger) *Handler {
-	return &Handler{consumers: c, metrics: m, log: log}
+// New returns the decision handler. With a nil quota, no consumer has a quota.
+func New(c Lookup, q Quota, m *metrics.Metrics, log *slog.Logger) *Handler {
+	return &Handler{consumers: c, quota: q, metrics: m, log: log}
 }
 
 // ServeHTTP answers POST and GET /v1/decide.
@@ -102,6 +112,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if d, denied := h.checkQuota(r.Context(), log, consumer); denied {
+		h.deny(w, log, consumer.Name, d)
+		return
+	}
 
 	w.Header().Set(HeaderConsumer, consumer.Name)
 	w.Header().Set(HeaderModel, model)
@@ -110,11 +124,38 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Debug("allow", "consumer", consumer.Name, "model", model)
 }
 
+// checkQuota returns the denial of a consumer whose quota is exhausted or cannot be known.
+func (h *Handler) checkQuota(ctx context.Context, log *slog.Logger, c consumers.Consumer) (denial, bool) {
+	if h.quota == nil {
+		return denial{}, false
+	}
+	v := h.quota.Check(ctx, c)
+	switch v.Outcome {
+	case quotas.Exhausted:
+		return denial{
+			status: http.StatusTooManyRequests, result: metrics.ResultDenyQuota,
+			typ: "tokens", code: "rate_limit_exceeded",
+			msg:        fmt.Sprintf("token quota exhausted: %d of %d tokens per hour used", v.Used, v.Limit),
+			retryAfter: v.RetryAfter,
+		}, true
+	case quotas.Unavailable:
+		// Fail closed: a missing or broken profile must not lift the limit unnoticed.
+		log.Error("cannot check the quota", "consumer", c.Name, "profile", c.QuotaProfile, "error", v.Err)
+		return denial{
+			status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
+			typ: "server_error", code: "quota_unavailable", msg: "aisa cannot check the token quota at the moment",
+		}, true
+	}
+	return denial{}, false
+}
+
 // denial is a negative answer: its status, its aisa_decisions_total result and its error body.
 type denial struct {
 	status         int
 	result         string
 	typ, code, msg string
+	// retryAfter is sent as Retry-After when set.
+	retryAfter time.Duration
 }
 
 func denyAuth(msg string) denial {
@@ -127,6 +168,9 @@ func denyAuth(msg string) denial {
 func (h *Handler) deny(w http.ResponseWriter, log *slog.Logger, consumer string, d denial) {
 	h.metrics.Decisions.WithLabelValues(consumer, d.result).Inc()
 	log.Info("deny", "status", d.status, "consumer", consumer, "result", d.result, "reason", d.code)
+	if d.retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(d.retryAfter.Seconds())), 10))
+	}
 	writeError(w, d.status, d.typ, d.code, d.msg)
 }
 

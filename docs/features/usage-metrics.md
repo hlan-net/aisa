@@ -11,7 +11,7 @@ Full list in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#4-metrics-o
 - `aisa_requests_total`, `aisa_tokens_total{direction}`, `aisa_cost_total`
 - `aisa_budget_limit`, `aisa_budget_spent`
 - `aisa_latency_seconds`, `aisa_ttft_seconds`
-- `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `unavailable` (aisa cannot verify credentials and answers 503, under the consumer `unknown`), `deny_quota`, `deny_budget`, `downgrade`
+- `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `unavailable` (aisa cannot verify credentials, under the consumer `unknown`, or cannot know a consumer's token quota, and answers 503), `deny_quota`, `deny_budget`, `downgrade`
 
 Cost is computed in aisa from the Consul prices, so no Prometheus rules with hardcoded prices are needed.
 
@@ -24,6 +24,9 @@ aisa also reports on its own state. These are not part of the adapter contract:
 | `aisa_consumers_unreadable` | Consumers that Vault listed and aisa could not read at the last load |
 | `aisa_consumer_loads_total{result}` | Loads of the consumers from Vault, `ok` or `error` |
 | `aisa_consumers_loaded_timestamp_seconds` | When the consumers were last loaded |
+| `aisa_quota_profiles`, `aisa_quota_profiles_invalid` | Quota profiles read from Consul, and those that could not be parsed |
+| `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
+| `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
 
 Keep label cardinality in mind: `consumer` × `model` × `backend`. For large deployments, consumers can be aggregated into groups.
 
@@ -59,5 +62,7 @@ Shipped as a `PrometheusRule`:
 | `AisaDown` | aisa's scrape target is down for 2 min (fail policies are now in effect) |
 | `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |
+| `AisaQuotaProfileInvalid` | `aisa_quota_profiles_invalid > 0`: the consumers of a broken profile get 503 |
+| `AisaQuotaCountersFailing` | `aisa_quota_errors_total` increases for 5 min: Redis is unreachable and token quotas are not enforced |
 | `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h |
 | `AisaSlowFirstToken` | p95 time to first token > 20 s for 15 min (model too large for the backend, or the backend is swapping) |

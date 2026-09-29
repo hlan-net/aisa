@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,7 +20,7 @@ func TestHandlerServeHTTP(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	body := []byte(`{
 		"request_id": "r1",
@@ -66,7 +67,7 @@ func TestHandlerDedup(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	body := []byte(`{
 		"request_id": "r-dup",
@@ -115,7 +116,7 @@ func TestHandlerInvalidEventsSkipped(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	body := []byte(`[
 		{
@@ -168,7 +169,7 @@ func TestHandlerRejects(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	// GET method not allowed
 	reqGet := httptest.NewRequest(http.MethodGet, "/v1/usage", nil)
@@ -191,7 +192,7 @@ func TestHandlerBodyTooLarge(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, log)
+	h := New(m, dedup, nil, log)
 
 	// Create body exceeding maxBody (16 MiB)
 	largeBody := io.MultiReader(
@@ -205,5 +206,50 @@ func TestHandlerBodyTooLarge(t *testing.T) {
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 413", rec.Code)
+	}
+}
+
+// fakeCharger notes the charges.
+type fakeCharger struct {
+	charges map[string]int64 // "consumer@minute" → tokens
+}
+
+func (f *fakeCharger) Charge(_ context.Context, consumer string, tokens int64, at time.Time) error {
+	f.charges[consumer+"@"+at.UTC().Format("15:04:05")] += tokens
+	return nil
+}
+
+func TestHandlerCharges(t *testing.T) {
+	m := metrics.New("test")
+	c := &fakeCharger{charges: map[string]int64{}}
+	h := New(m, NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h.now = func() time.Time { return time.Date(2026, 9, 29, 12, 30, 20, 0, time.UTC) }
+
+	body := `[
+		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-09-29T12:00:10Z"},
+		{"request_id": "b", "consumer": "chat-ui", "status": 200, "prompt_tokens": "1", "completion_tokens": 2, "ts": "2026-09-29T12:00:50.5+00:00"},
+		{"request_id": "c", "consumer": "chat-ui", "status": 200, "prompt_tokens": 100, "ts": "2026-09-29T12:01:00Z"},
+		{"request_id": "d", "consumer": "chat-ui", "status": 200, "prompt_tokens": 7, "ts": "not a time"},
+		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-09-29T12:00:10Z"},
+		{"request_id": "e", "consumer": "", "status": 200, "prompt_tokens": 1000},
+		{"request_id": "f", "consumer": "batch-jobs", "status": 429},
+		{"request_id": "", "consumer": "chat-ui", "status": 200, "prompt_tokens": 1000}
+	]`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+
+	// One charge per consumer and minute; not the duplicate, the event without a consumer, the
+	// one without tokens or the invalid one. A ts that cannot be read is now.
+	want := map[string]int64{"chat-ui@12:00:00": 18, "chat-ui@12:01:00": 100, "chat-ui@12:30:00": 7}
+	if len(c.charges) != len(want) {
+		t.Errorf("charges = %v, want %v", c.charges, want)
+	}
+	for k, v := range want {
+		if c.charges[k] != v {
+			t.Errorf("charges[%s] = %d, want %d (all: %v)", k, c.charges[k], v, c.charges)
+		}
 	}
 }

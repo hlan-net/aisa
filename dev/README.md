@@ -14,7 +14,7 @@ docker compose -f dev/compose.yaml down -v                  # stop and remove ev
 | Service | Host port | What it is |
 |---|---|---|
 | `apisix` | 9080 (gateway), 9091 (Prometheus metrics) | `apache/apisix` in standalone mode, routes from [`apisix/apisix.yaml`](apisix/apisix.yaml) |
-| `aisa` | 8084 | The real aisa, built from the repository's `Dockerfile`: `/v1/decide` with the consumers seeded in Vault. The gateway does not use it yet; it still calls `stub-aisa` until aisa ingests usage events |
+| `aisa` | 8084 | The real aisa, built from the repository's `Dockerfile`: `/v1/decide` with the consumers seeded in Vault and the token quotas of Consul, `/v1/usage` counting tokens in Redis. The gateway does not use it yet; it still calls `stub-aisa` until the APISIX adapter (v0.2.0 PR 5) |
 | `stub-aisa` | 8081 | Stands in for aisa: `POST /v1/decide`, `POST /v1/usage`, `GET`/`DELETE /debug/requests` |
 | `mock-local` | 8082 | Mock OpenAI-compatible backend serving `qwen3` and `llama3.2` (a local Ollama stand-in) |
 | `mock-cloud` | 8083 | Mock OpenAI-compatible backend serving `cloud-large` (a paid provider stand-in) |
@@ -53,7 +53,7 @@ The data follows the paths in [`VAULT.md`](../docs/concepts/VAULT.md) and [`CONS
 | Vault | `secret/aisa/providers/cloud` | `api_key=dev-provider-key` |
 | Consul KV | `aisa/pricing/<model>` | `qwen3` and `llama3.2` free, `cloud-large` priced |
 | Consul KV | `aisa/budgets/<consumer>` | `chat-ui` rejects when exhausted, `batch-jobs` downgrades to `qwen3` |
-| Consul KV | `aisa/quotas/<profile>` | `interactive`, `batch` |
+| Consul KV | `aisa/quotas/<profile>` | `interactive`, `batch`, and `tiny` (100 tokens per hour) for `smoke.sh` |
 | Consul catalog | service `aisa-backend` | `mock-local` and `mock-cloud` with `models` meta and HTTP health checks |
 
 ## Stub aisa

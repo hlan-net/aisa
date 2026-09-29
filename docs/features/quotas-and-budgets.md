@@ -19,8 +19,13 @@ gateway ─▶ usage event ─▶ aisa: cost = tokens × price, then update the 
 
 ## Token quotas (v0.2.0)
 
-- A quota profile (`aisa/quotas/<profile>` in Consul) gives tokens per window, e.g. 200 000 tokens per hour for batch jobs and more for interactive use.
-- Sliding window counters in Redis, keyed by consumer.
+- A consumer names its quota profile in Vault (`quota_profile`, [`VAULT.md`](../concepts/VAULT.md#consumer-credentials)). The profile, `aisa/quotas/<profile>` in Consul, gives the tokens per hour: `{"tokens_per_hour": 200000}` for batch jobs, more for interactive use. `0` allows none. aisa follows the prefix with blocking queries, so a changed profile applies within seconds, without a restart.
+- **Sliding window in Redis**, per consumer: an hour of one-minute buckets. A request's prompt and completion tokens count in the minute the gateway logged it and leave the window 59 to 60 minutes later. The keys are `aisa:quota:{<consumer>}:<minute>`; they expire by themselves, and one consumer's keys share a Redis Cluster slot.
+- **The decision** allows a request while the tokens used in the window are fewer than the limit. Its own tokens are known only after the response, so the last request can take a consumer past the limit, as with budgets. An exhausted quota is answered 429 with `Retry-After`, the seconds until enough tokens leave the window, and counted as `deny_quota`.
+- **Usage events** add their tokens to the window. Events without a consumer (fail-open, [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#adapter-rules-for-the-decision)) and duplicates are not charged, and neither are events older than the window.
+- **A consumer without `quota_profile` has no token quota.**
+- **Failures:** a profile that is missing from Consul or cannot be parsed, or profiles that have not been read yet, deny the consumer's requests with 503 (`quota_unavailable`): fail closed, so a typo does not lift a limit unnoticed. `/readyz` reports `quota_profiles` until the first read. When Redis cannot be read within 250 ms, the request is allowed and counted in `aisa_quota_errors_total{op="check"}`: the credential has been checked, and a quota only limits the rate.
+- Quotas are on when both `CONSUL_HTTP_ADDR` and `AISA_REDIS_ADDR` are set ([`cmd/aisa`](../../cmd/aisa/main.go)).
 - Unit: tokens, not money. For local models this is the right unit, because they have no per-token price, and it protects the hardware from runaway scripts.
 
 Gateway-native quota plugins (e.g. APISIX `ai-rate-limiting`) are **not** used. They would split the enforcement logic between aisa and each gateway.

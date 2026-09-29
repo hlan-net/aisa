@@ -37,9 +37,10 @@ POST /v1/decide            (GET is accepted too, for gateways that cannot send a
        400 no model in the header or the body, or a model name longer than 256 bytes
        401 unknown or invalid credential
        413 no model in the header, and the body is larger than 16 MiB
-       429 quota or budget exhausted
+       429 quota or budget exhausted, with Retry-After in seconds for a token quota
        503 aisa cannot verify credentials: its consumers could not be read from Vault recently
-           enough (fail closed)
+           enough; or it cannot know the consumer's token quota: its quota profile is missing
+           or broken in Consul (fail closed)
        (errors carry an OpenAI-style JSON error body, which the adapter passes to the client)
 ```
 
@@ -54,7 +55,7 @@ Spike S8 showed that these must hold for the decision to be safe and for downgra
 1. **Strip client-supplied `X-Aisa-*` headers** before the decision. Some forward-auth implementations clear them only on a successful answer, so a client could otherwise choose the model itself when aisa is unreachable and the adapter fails open.
 2. **Set `X-Aisa-Requested-Model` from the body**, overwriting any client value, or forward the body.
 3. **Route by `X-Aisa-Model` and forward the request with that model**, not the one the client asked for. A downgrade changes both the backend and the model name in the forwarded body.
-4. **Pass every answer aisa returns to the client unchanged**: 400, 401, 413, 429 and 503. A 503 from aisa is a decision (fail closed: it cannot verify credentials), not an outage, and must never lead to fail-open routing. aisa is *unreachable* only when the gateway gets no answer from it: the connection fails or the request times out. Then the gateway answers 503 itself when the requested model has no backend with `fail_policy = "open"`.
+4. **Pass every answer aisa returns to the client unchanged**: 400, 401, 413, 429 and 503, with `Retry-After` when aisa sets it. A 503 from aisa is a decision (fail closed: it cannot verify credentials or quotas), not an outage, and must never lead to fail-open routing. aisa is *unreachable* only when the gateway gets no answer from it: the connection fails or the request times out. Then the gateway answers 503 itself when the requested model has no backend with `fail_policy = "open"`.
 5. **When aisa is unreachable, route by `X-Aisa-Requested-Model`** (rule 2), and only to the model's backends with `fail_policy = "open"`. Never route by `X-Aisa-Model` then: no decision set it. There is no downgrade, and any credential is accepted, including an unknown one. The usage events of these requests have an empty `consumer`; aisa counts them under the consumer `unknown` and charges no quota or budget.
 
 ## 2. Usage events (after the request)
@@ -151,7 +152,7 @@ aisa exports its own normalized metrics, so the dashboards and alerts work with 
 | `aisa_cost_total` | consumer, model, currency |
 | `aisa_budget_limit`, `aisa_budget_spent` | consumer, period |
 | `aisa_latency_seconds`, `aisa_ttft_seconds` (histograms) | model, backend |
-| `aisa_decisions_total` | consumer, result (`allow`/`deny_auth`/`invalid`/`unavailable`/`deny_quota`/`deny_budget`/`downgrade`); a rejected credential and a 503 count under the consumer `unknown` |
+| `aisa_decisions_total` | consumer, result (`allow`/`deny_auth`/`invalid`/`unavailable`/`deny_quota`/`deny_budget`/`downgrade`); a rejected credential and a 503 before the credential is checked count under the consumer `unknown` |
 | `aisa_usage_events_total` | result (`accepted`/`duplicate`/`rejected`) |
 
 Gateway-native metrics (e.g. `apisix_llm_*`) are still scraped, but they only serve as a cross-check and for gateway internals.
