@@ -10,7 +10,7 @@
 # and leaves for inspection. The backend is a real OpenAI-compatible server that the cluster can
 # reach at OLLAMA_ADDR and that serves MODEL. Everything else comes from public images.
 # The parts are "chart" and "manifests"; without an argument both run. Exits non-zero on any
-# unexpected result. Needs kubectl, helm and jq.
+# unexpected result. Needs kubectl, helm, jq and python3.
 set -euo pipefail
 
 : "${OLLAMA_ADDR:?set OLLAMA_ADDR to host:port of an OpenAI-compatible backend the cluster can reach}"
@@ -270,8 +270,10 @@ part_manifests() {
 
     echo
     echo "== A backend leaves and returns 5 times, under a request loop"
-    # The loop asks for a model that stays served; the reloads must not disturb it. It gets the
-    # decision and the 503 of the no-backend route, which need no backend.
+    # The loop asks for a model that no backend serves. Its route stays in place while the
+    # model's route changes, and the reloads must not disturb it: it gets the decision and the
+    # 503 of the no-backend route. The times below end when consul-template has written the new
+    # file; APISIX reads the file once a second (S9).
     register ollama-2 "$MODEL"
     wait_until 60 in_rotation ollama-2
     in_probe sh -c "rm -f /tmp/loop /tmp/stop; (while [ ! -e /tmp/stop ]; do

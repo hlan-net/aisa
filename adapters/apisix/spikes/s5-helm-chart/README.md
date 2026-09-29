@@ -28,8 +28,8 @@ It uses the current `kubectl` context. The backend is a real OpenAI-compatible s
 | Where `apisix.yaml` comes from | a ConfigMap, mounted at a fixed path | a file that consul-template renders, in a directory in memory |
 | A sidecar that renders the file | not possible: the path is taken by the ConfigMap | yes |
 | Provider keys | in the ConfigMap, which the cluster stores | in memory only |
-| A change reaches APISIX after | 17 to 61 s | 2 to 3 s |
-| Requests that failed during a change | none | none |
+| A change reaches APISIX after | 17 to 61 s, measured through requests | 2 to 3 s to the rendered file, measured through the Kubernetes API; APISIX reads it once a second (S9) |
+| Requests that failed during a change | none | none, for a route that stays in place (routes that change: S9) |
 
 ## Output of the recorded run (2026-09-29, APISIX 3.18.0, chart 2.17.0, consul-template 0.43.0)
 
