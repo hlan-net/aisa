@@ -38,7 +38,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 |----|--------|-------|--------|
 | 1 | `feature/core-skeleton` | `cmd/aisa`, config, health endpoints, `aisa_*` metrics registry, the product `Dockerfile`, CI | Done ([#20](https://github.com/hlan-net/aisa/pull/20)) |
 | 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) | Done ([#23](https://github.com/hlan-net/aisa/pull/23)) |
-| 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | — |
+| 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | In review ([#26](https://github.com/hlan-net/aisa/pull/26)) |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | — |
 | 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, the checked config render ([#18](https://github.com/hlan-net/aisa/issues/18)), explicit `log_format` ([#5](https://github.com/hlan-net/aisa/issues/5)) and upstream timeouts ([#14](https://github.com/hlan-net/aisa/issues/14)), fail-open routes for backends with `fail_policy = "open"` ([#4](https://github.com/hlan-net/aisa/issues/4)), requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | — |
 | 6 | `feature/terraform-module` | Vault mount, policies and roles; Consul ACLs, KV and backend registrations | — |

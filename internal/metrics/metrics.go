@@ -27,6 +27,13 @@ const (
 	ResultDowngrade   = "downgrade"
 )
 
+// Values of the result label of aisa_usage_events_total.
+const (
+	EventAccepted  = "accepted"
+	EventDuplicate = "duplicate"
+	EventRejected  = "rejected"
+)
+
 // ConsumerUnknown is the consumer label of a decision without a known consumer, such as a
 // rejected credential. Usage served without a decision is accounted under it too.
 const ConsumerUnknown = "unknown"
@@ -52,6 +59,8 @@ type Metrics struct {
 	TTFT    *prometheus.HistogramVec
 	// Decisions counts the answers of the decision API by consumer and result.
 	Decisions *prometheus.CounterVec
+	// UsageEvents counts usage events received by result (accepted, duplicate, rejected).
+	UsageEvents *prometheus.CounterVec
 
 	// Consumers, ConsumerKeys and ConsumersUnreadable describe the consumers in memory: how
 	// many can authenticate, how many key hashes they have, and how many Vault listed and aisa
@@ -112,6 +121,10 @@ func New(version string) *Metrics {
 			Name: "aisa_decisions_total",
 			Help: "Answers of the decision API.",
 		}, []string{"consumer", "result"}),
+		UsageEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_usage_events_total",
+			Help: "Usage events received by aisa, by result.",
+		}, []string{"result"}),
 		Consumers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers",
 			Help: "Consumers in memory that can authenticate.",
@@ -145,6 +158,7 @@ func New(version string) *Metrics {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		buildInfo,
 		m.Requests, m.Tokens, m.Cost, m.BudgetLimit, m.BudgetSpent, m.Latency, m.TTFT, m.Decisions,
+		m.UsageEvents,
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 	)
 	return m

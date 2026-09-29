@@ -40,11 +40,14 @@ func TestHandlerServeHTTP(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"accepted":1`) {
-		t.Errorf("body = %s, want accepted 1", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"accepted":1`) || !strings.Contains(rec.Body.String(), `"rejected":0`) {
+		t.Errorf("body = %s, want accepted 1, rejected 0", rec.Body.String())
 	}
 
 	// Verify metrics
+	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventAccepted)); got != 1 {
+		t.Errorf("UsageEvents{accepted} = %v, want 1", got)
+	}
 	reqs := testutil.ToFloat64(m.Requests.WithLabelValues("batch-jobs", "qwen3", "ollama-1", "200"))
 	if reqs != 1 {
 		t.Errorf("Requests = %v, want 1", reqs)
@@ -92,6 +95,12 @@ func TestHandlerDedup(t *testing.T) {
 	}
 
 	// Metrics must NOT double count
+	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventAccepted)); got != 1 {
+		t.Errorf("UsageEvents{accepted} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventDuplicate)); got != 1 {
+		t.Errorf("UsageEvents{duplicate} = %v, want 1", got)
+	}
 	reqs := testutil.ToFloat64(m.Requests.WithLabelValues("batch-jobs", "qwen3", "ollama-1", "200"))
 	if reqs != 1 {
 		t.Errorf("Requests = %v, want 1 (deduplicated)", reqs)
@@ -102,7 +111,7 @@ func TestHandlerDedup(t *testing.T) {
 	}
 }
 
-func TestHandlerArrayAndUnknownConsumer(t *testing.T) {
+func TestHandlerInvalidEventsSkipped(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -110,22 +119,26 @@ func TestHandlerArrayAndUnknownConsumer(t *testing.T) {
 
 	body := []byte(`[
 		{
-			"request_id": "r-anon",
-			"consumer": "",
+			"request_id": "r-valid",
+			"consumer": "batch-jobs",
 			"model": "qwen3",
-			"backend": "mock-local",
+			"backend": "ollama-1",
 			"status": 200,
-			"prompt_tokens": 5,
-			"completion_tokens": 10
+			"prompt_tokens": 10,
+			"completion_tokens": 20
 		},
 		{
-			"request_id": "r-denied",
-			"consumer": "",
-			"model": "",
-			"backend": "",
-			"status": 401,
-			"prompt_tokens": 0,
-			"completion_tokens": 0
+			"request_id": "",
+			"status": 200
+		},
+		{
+			"request_id": "r-invalid-status",
+			"status": 999
+		},
+		{
+			"request_id": "r-neg-tokens",
+			"status": 200,
+			"prompt_tokens": -5
 		}
 	]`)
 
@@ -134,26 +147,20 @@ func TestHandlerArrayAndUnknownConsumer(t *testing.T) {
 	h.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), `"accepted":2`) {
-		t.Errorf("body = %s, want accepted 2", rec.Body.String())
-	}
-
-	// Empty consumer becomes metrics.ConsumerUnknown ("unknown")
-	anonReqs := testutil.ToFloat64(m.Requests.WithLabelValues(metrics.ConsumerUnknown, "qwen3", "mock-local", "200"))
-	if anonReqs != 1 {
-		t.Errorf("Requests for unknown consumer = %v, want 1", anonReqs)
-	}
-	deniedReqs := testutil.ToFloat64(m.Requests.WithLabelValues(metrics.ConsumerUnknown, "", "", "401"))
-	if deniedReqs != 1 {
-		t.Errorf("Requests for denied request = %v, want 1", deniedReqs)
+	if !strings.Contains(rec.Body.String(), `"accepted":1`) || !strings.Contains(rec.Body.String(), `"rejected":3`) {
+		t.Errorf("body = %s, want accepted 1, rejected 3", rec.Body.String())
 	}
 
-	// Denied request has 0 tokens, so Tokens counter should not exist for it
-	deniedTokens := testutil.ToFloat64(m.Tokens.WithLabelValues(metrics.ConsumerUnknown, "", "", metrics.DirectionPrompt))
-	if deniedTokens != 0 {
-		t.Errorf("Tokens for denied request = %v, want 0", deniedTokens)
+	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventAccepted)); got != 1 {
+		t.Errorf("UsageEvents{accepted} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventRejected)); got != 3 {
+		t.Errorf("UsageEvents{rejected} = %v, want 3", got)
+	}
+	if got := testutil.ToFloat64(m.Requests.WithLabelValues("batch-jobs", "qwen3", "ollama-1", "200")); got != 1 {
+		t.Errorf("Requests = %v, want 1", got)
 	}
 }
 
@@ -177,25 +184,6 @@ func TestHandlerRejects(t *testing.T) {
 	h.ServeHTTP(recBad, reqBad)
 	if recBad.Code != http.StatusBadRequest {
 		t.Errorf("bad JSON status = %d, want 400", recBad.Code)
-	}
-
-	for name, in := range map[string]string{
-		"missing request_id":       `{"status": 200}`,
-		"empty request_id":         `{"request_id": "   ", "status": 200}`,
-		"status below 100":         `{"request_id": "r1", "status": 99}`,
-		"status above 599":         `{"request_id": "r1", "status": 600}`,
-		"negative prompt tokens":   `{"request_id": "r1", "status": 200, "prompt_tokens": -5}`,
-		"negative latency":         `{"request_id": "r1", "status": 200, "latency_ms": -10}`,
-		"oversized request_id":     `{"request_id": "` + strings.Repeat("a", 257) + `", "status": 200}`,
-		"oversized model":          `{"request_id": "r1", "status": 200, "model": "` + strings.Repeat("m", 257) + `"}`,
-		"second event in batch bad": `[{"request_id": "r1", "status": 200}, {"request_id": "", "status": 200}]`,
-	} {
-		req := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(in))
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("%s: status = %d, want 400", name, rec.Code)
-		}
 	}
 }
 

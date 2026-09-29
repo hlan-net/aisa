@@ -108,6 +108,11 @@ expect "aisa: usage accepted (batch array)" "200" \
     "$(send_usage "[{\"request_id\":\"$req2\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":\"200\",\"prompt_tokens\":\"5\",\"completion_tokens\":\"15\"}]")"
 expect "aisa: batch tokens incremented" "$((prompt_before + 15))" "$(tokens_metric chat-ui qwen3 prompt)"
 
+req3="${smoke_run_id}-3"
+expect "aisa: partial batch accepted with invalid event skipped" "200" \
+    "$(send_usage "[{\"request_id\":\"$req3\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":\"200\",\"prompt_tokens\":\"2\"},{\"request_id\":\"\",\"status\":200}]")"
+expect "aisa: partial batch valid tokens incremented" "$((prompt_before + 17))" "$(tokens_metric chat-ui qwen3 prompt)"
+
 echo "== gateway → decide → backend"
 out=$(chat dev-key-chat-ui '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}')
 expect "non-streaming: status" "200" "$(head -n1 <<<"$out")"

@@ -59,7 +59,7 @@ Spike S8 showed that these must hold for the decision to be safe and for downgra
 
 ## 2. Usage events (after the request)
 
-The gateway reports each finished request through an access log sink. aisa accepts one normalized schema, over HTTP (primary) or OTLP logs:
+The gateway reports each finished request through an access log sink to `POST /v1/usage`. aisa accepts one normalized schema, over HTTP (primary) or OTLP logs:
 
 ```json
 {
@@ -79,6 +79,8 @@ The gateway reports each finished request through an access log sink. aisa accep
 }
 ```
 
+The endpoint accepts a single event JSON object or a JSON array of up to 10 000 events. The request body is bounded to 16 MiB (`413 Payload Too Large` if exceeded).
+
 Each adapter maps its own log format to this schema: the APISIX `http-logger` with a custom `log_format` (spike S6), LiteLLM callbacks, or Envoy access logs. aisa computes cost from the prices and updates the budget counters, so **cost and budgets never depend on gateway-specific metrics**.
 
 Both contracts carry a `request_id` so a decision and its usage event can be matched: the adapter sends the same value to `/v1/decide` as `X-Request-Id`. aisa also uses it to deduplicate retried log deliveries.
@@ -86,18 +88,22 @@ Both contracts carry a `request_id` so a decision and its usage event can be mat
 | Field | Meaning |
 |---|---|
 | `ts` | when the gateway logged the request (its end), ISO 8601 |
+| `request_id` | **required** non-empty string (max 256 bytes) matching the decision; used for deduplication |
 | `consumer` | `X-Aisa-Consumer` from the decision; empty when aisa denied the request or was not asked |
-| `model`, `requested_model` | the model the backend served (`X-Aisa-Model`) and the one the client asked for; they differ after a downgrade |
-| `backend` | the backend instance's name as registered in Consul, so aisa can look up its provider and prices. `provider` is optional for the same reason |
-| `latency_ms` | time spent at the backend, including the whole stream; empty when no backend was called |
-| `ttft_ms` | time to the first token (for non-streamed responses, to the complete response) |
+| `model`, `requested_model` | the model the backend served (`X-Aisa-Model`) and the one the client asked for; they differ after a downgrade (max 256 bytes) |
+| `backend` | the backend instance's name as registered in Consul, so aisa can look up its provider and prices (max 256 bytes). `provider` is optional for the same reason |
+| `status` | **required** upstream or gateway HTTP status code (100–599) |
+| `prompt_tokens`, `completion_tokens` | non-negative token counts |
+| `latency_ms` | time spent at the backend, including the whole stream; non-negative; empty when no backend was called |
+| `ttft_ms` | time to the first token (for non-streamed responses, to the complete response); non-negative |
 
 What aisa accepts, as found in spike S6:
 
 - **Numbers and booleans may arrive as strings.** A gateway log format substitutes variables as text in some cases (APISIX logs `"0"` and `"true"`), so aisa parses numeric and boolean strings. Missing values may be empty or `null`.
 - **Every request produces an event, including ones aisa denied** (401, 429) and backend errors. They count as requests; only events with token counts change quotas and budgets.
-- **Usage events carry only these fields, never request headers or bodies**, so no credential reaches the usage sink ([#5](https://github.com/hlan-net/aisa/issues/5)). The adapter sets the log sink's format explicitly and never relies on the gateway's default: the default of APISIX's `http-logger` includes the client's request headers, `Authorization` among them. aisa ignores fields it does not know and never logs a raw event body at info level, so a misconfigured sink does not copy a credential into aisa's logs.
+- **Usage events carry only these fields, never request headers or bodies**, so no credential reaches the usage sink ([#5](https://github.com/hlan-net/aisa/issues/5)). The adapter sets the log sink's format explicitly and never relies on the gateway's default: the default of APISIX's `http-logger` includes the client's request headers, `Authorization` among them. aisa ignores fields it does not know and never logs a raw event body at info or warn level, so a misconfigured sink does not copy a credential into aisa's logs.
 - **A successful response without token counts means the gateway did not see the usage**, not that none was used. The counts are then missing or zero, as numbers or as strings. This happens when a backend does not stream usage or the client disconnects before the end of a stream (spike S2). Adapters must ask for streamed usage (`stream_options.include_usage` for OpenAI-compatible backends); how aisa accounts for the remaining cases is an open question ([#12](https://github.com/hlan-net/aisa/issues/12)).
+- **Partial batch acceptance:** Invalid events in a batch (e.g. missing `request_id`, status out of range 100–599, negative tokens) are individually skipped, counted under `rejected`, and logged at `warn` level without their body. Valid events in the same batch are ingested and counted under `accepted`. Duplicates (by `request_id` within the deduplication TTL) are acknowledged and counted as `accepted` so log sinks do not endlessly retry them. The endpoint answers `200 OK` with `{"accepted": n, "rejected": m}`. Only unparseable JSON bodies or unreadable streams answer `400 Bad Request`.
 
 ## 3. Config rendering (gateway configuration)
 
@@ -146,6 +152,7 @@ aisa exports its own normalized metrics, so the dashboards and alerts work with 
 | `aisa_budget_limit`, `aisa_budget_spent` | consumer, period |
 | `aisa_latency_seconds`, `aisa_ttft_seconds` (histograms) | model, backend |
 | `aisa_decisions_total` | consumer, result (`allow`/`deny_auth`/`invalid`/`unavailable`/`deny_quota`/`deny_budget`/`downgrade`); a rejected credential and a 503 count under the consumer `unknown` |
+| `aisa_usage_events_total` | result (`accepted`/`duplicate`/`rejected`) |
 
 Gateway-native metrics (e.g. `apisix_llm_*`) are still scraped, but they only serve as a cross-check and for gateway internals.
 

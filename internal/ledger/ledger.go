@@ -47,31 +47,43 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
+			h.log.Warn("usage request rejected: body too large", "limit_bytes", maxBody)
 			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
 			return
 		}
+		h.log.Warn("usage request rejected: unreadable body", "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
 	events, err := ParseEvents(body)
 	if err != nil {
+		h.log.Warn("usage request rejected: malformed events", "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	for i, ev := range events {
-		if err := validateEvent(ev); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("event %d: %s", i, err.Error())})
-			return
-		}
-	}
-
+	accepted, rejected := 0, 0
 	for _, ev := range events {
+		if err := validateEvent(ev); err != nil {
+			h.metrics.UsageEvents.WithLabelValues(metrics.EventRejected).Inc()
+			h.log.Warn("invalid usage event skipped", "error", err, "request_id", ev.RequestID)
+			rejected++
+			continue
+		}
+		if h.dedup.SeenOrAdd(ev.RequestID) {
+			h.metrics.UsageEvents.WithLabelValues(metrics.EventDuplicate).Inc()
+			h.log.Debug("duplicate usage event skipped", "request_id", ev.RequestID)
+			accepted++
+			continue
+		}
+
+		h.metrics.UsageEvents.WithLabelValues(metrics.EventAccepted).Inc()
 		h.recordEvent(ev)
+		accepted++
 	}
 
-	writeJSON(w, http.StatusOK, map[string]int{"accepted": len(events)})
+	writeJSON(w, http.StatusOK, map[string]int{"accepted": accepted, "rejected": rejected})
 }
 
 // validateEvent verifies that required fields and numeric bounds conform to the usage contract.
@@ -109,13 +121,8 @@ func validateEvent(ev Event) error {
 	return nil
 }
 
-// recordEvent deduplicates by request id and updates the metrics.
+// recordEvent updates the metrics for a valid, non-duplicate event.
 func (h *Handler) recordEvent(ev Event) {
-	if h.dedup.SeenOrAdd(ev.RequestID) {
-		h.log.Debug("duplicate usage event skipped", "request_id", ev.RequestID)
-		return
-	}
-
 	consumer := ev.Consumer
 	if consumer == "" {
 		consumer = metrics.ConsumerUnknown

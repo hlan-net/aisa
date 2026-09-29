@@ -7,7 +7,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 ## [Unreleased]
 
 ### Added
-- **Usage ledger** (`POST /v1/usage`): aisa ingests normalized usage events from gateways, deduplicates retried events by `request_id` using an in-memory bounded LRU cache with TTL (`AISA_LEDGER_DEDUP_CAPACITY`, `AISA_LEDGER_DEDUP_TTL`), and updates `aisa_requests_total`, `aisa_tokens_total`, `aisa_latency_seconds`, and `aisa_ttft_seconds`. It accepts both single JSON event objects and arrays of events, parses numbers and booleans flexibly as numbers, booleans or strings, accounts events without a consumer under `unknown`, and safely ignores unknown fields without logging credentials.
+- **Usage ledger** (`POST /v1/usage`): aisa ingests normalized usage events from gateways, deduplicates retried events by `request_id` using an in-memory bounded LRU cache with TTL (`AISA_LEDGER_DEDUP_CAPACITY`, `AISA_LEDGER_DEDUP_TTL`), and updates `aisa_requests_total`, `aisa_tokens_total`, `aisa_latency_seconds`, `aisa_ttft_seconds`, and `aisa_usage_events_total{result="accepted|duplicate|rejected"}`. It accepts both single JSON event objects and arrays of up to 10 000 events, skips and warns on invalid events without dropping valid ones in the batch (answering `200 OK` with `{"accepted": n, "rejected": m}`), parses numbers and booleans flexibly as numbers, booleans or strings, accounts events without a consumer under `unknown`, and safely ignores unknown fields without logging credentials.
 
 ## [0.1.0] - 2026-09-29
 
