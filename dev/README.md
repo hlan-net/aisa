@@ -14,6 +14,7 @@ docker compose -f dev/compose.yaml down -v                  # stop and remove ev
 | Service | Host port | What it is |
 |---|---|---|
 | `apisix` | 9080 (gateway), 9091 (Prometheus metrics) | `apache/apisix` in standalone mode, routes from [`apisix/apisix.yaml`](apisix/apisix.yaml) |
+| `aisa` | 8084 | The real aisa, built from the repository's `Dockerfile`: `/v1/decide` with the consumers seeded in Vault. The gateway does not use it yet; it still calls `stub-aisa` until aisa ingests usage events |
 | `stub-aisa` | 8081 | Stands in for aisa: `POST /v1/decide`, `POST /v1/usage`, `GET`/`DELETE /debug/requests` |
 | `mock-local` | 8082 | Mock OpenAI-compatible backend serving `qwen3` and `llama3.2` (a local Ollama stand-in) |
 | `mock-cloud` | 8083 | Mock OpenAI-compatible backend serving `cloud-large` (a paid provider stand-in) |

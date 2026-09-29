@@ -8,9 +8,15 @@ import (
 )
 
 func TestRunRejectsBadInput(t *testing.T) {
+	t.Setenv("VAULT_ADDR", "http://127.0.0.1:1")
 	t.Setenv("AISA_ADDR", "no-port")
 	if err := run(nil); err == nil {
 		t.Error("want an error for an invalid AISA_ADDR")
+	}
+	t.Setenv("AISA_ADDR", "")
+	t.Setenv("VAULT_ADDR", "")
+	if err := run(nil); err == nil {
+		t.Error("want an error without VAULT_ADDR")
 	}
 	if err := run([]string{"-no-such-flag"}); err == nil {
 		t.Error("want an error for an unknown flag")

@@ -19,10 +19,16 @@ const (
 // Values of the result label of aisa_decisions_total.
 const (
 	ResultAllow      = "allow"
-	ResultDenyQuota  = "deny_quota"
-	ResultDenyBudget = "deny_budget"
+	ResultDenyAuth   = "deny_auth"   // unknown, invalid or missing credential (401)
+	ResultInvalid    = "invalid"     // no model in the request (400)
+	ResultDenyQuota  = "deny_quota"  // quota exhausted (429)
+	ResultDenyBudget = "deny_budget" // budget exhausted (429)
 	ResultDowngrade  = "downgrade"
 )
+
+// ConsumerUnknown is the consumer label of a decision without a known consumer, such as a
+// rejected credential. Usage served without a decision is accounted under it too.
+const ConsumerUnknown = "unknown"
 
 // Metrics holds aisa's metrics and the registry they are registered in. Each instance has a
 // registry of its own, so tests do not share state.

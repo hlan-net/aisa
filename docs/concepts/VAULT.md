@@ -30,8 +30,10 @@ secret/aisa/consumers/batch-jobs  key_sha256=<hash>  quota_profile=batch
 ```
 - A consumer has no fail policy: when aisa is unreachable the gateway cannot tell who the consumer is, so the policy belongs to the backend ([`CONSUL.md`](./CONSUL.md#backends-consul-catalog)).
 - Vault stores only the **SHA-256 of the key**. The plaintext key is shown once when created and handed to the client.
-- aisa caches the consumer list, refreshing it every 60 s and when a key is not found, so key validation does not call Vault on every request.
-- Rotation: write a second hash, move the client to the new key, then delete the old hash.
+- aisa caches the consumer list, refreshing it every 60 s (`AISA_CONSUMER_REFRESH`) and when a key is not found, so key validation does not call Vault on every request. Unknown keys cause at most one reload per 5 s (`AISA_CONSUMER_MISS_REFRESH`), and a request waits at most 2 s for it, so random keys cannot flood Vault or stall the gateway.
+- When Vault cannot be read, aisa keeps deciding with the consumers it has. After 15 min without a successful reload (`AISA_CONSUMER_MAX_STALE`) it fails closed: `/v1/decide` answers 503 and `/readyz` reports `consumers` as failed, because a key revoked in that time would otherwise still be accepted.
+- Rotation: `key_sha256` holds one hash, or several separated by commas or spaces. Add the new key's hash next to the old one, move the client to the new key, then remove the old hash. A hash that two consumers share authenticates neither, and is logged as an error.
+- aisa logs in with Kubernetes auth (role `aisa`, `AISA_VAULT_K8S_ROLE`). In development `VAULT_TOKEN` replaces the login. The KV mount and the `aisa/` prefix are `AISA_VAULT_KV_MOUNT` and `AISA_VAULT_PREFIX`.
 
 ### Later: Vault-issued JWTs
 Clients authenticate with **JWTs from Vault's identity/OIDC provider** instead of static keys. Pods log in with Kubernetes auth, and people log in through an external identity provider via Vault's OIDC auth method (e.g. Entra ID). aisa validates the JWT against Vault's JWKS and maps a claim to the consumer. No long-lived gateway keys remain, and no gateway change is needed, because authentication happens in aisa.
