@@ -7,13 +7,14 @@ aisa gives every application an identity, a quota and a budget, and keeps the bo
 
 ---
 
-## Current state: early development
+## Current state: v0.1.0 released
 
 - Architecture and the three aisa ↔ gateway contracts are written down ([docs/concepts/](docs/concepts/))
 - Quotas, money budgets and usage metrics are specified ([docs/features/](docs/features/))
-- Open questions are listed as spikes ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S6, S7, S8, S9 and S10 are answered, S2 in part
+- The spikes of v0.1.0 are answered ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S2 in part ([#12](https://github.com/hlan-net/aisa/issues/12))
 - Local dev stack with a mock backend and a stub aisa ([dev/](dev/))
-- aisa is a skeleton: it starts, reports its health and exports metrics, and decides nothing yet ([cmd/aisa/](cmd/aisa/))
+- aisa authenticates consumers against Vault with `/v1/decide` and exports its metrics; it does not enforce quotas or budgets yet ([cmd/aisa/](cmd/aisa/))
+- Each `v*` tag publishes a GitHub release and a multi-arch image on GHCR (`ghcr.io/hlan-net/aisa`)
 
 ---
 
@@ -36,7 +37,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | PR | Branch | Scope | Status |
 |----|--------|-------|--------|
 | 1 | `feature/core-skeleton` | `cmd/aisa`, config, health endpoints, `aisa_*` metrics registry, the product `Dockerfile`, CI | Done ([#20](https://github.com/hlan-net/aisa/pull/20)) |
-| 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) | In review |
+| 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) | Done ([#23](https://github.com/hlan-net/aisa/pull/23)) |
 | 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | — |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | — |
 | 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, the checked config render ([#18](https://github.com/hlan-net/aisa/issues/18)), explicit `log_format` ([#5](https://github.com/hlan-net/aisa/issues/5)) and upstream timeouts ([#14](https://github.com/hlan-net/aisa/issues/14)), fail-open routes for backends with `fail_policy = "open"` ([#4](https://github.com/hlan-net/aisa/issues/4)), requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | — |
