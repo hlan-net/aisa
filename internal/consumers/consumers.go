@@ -99,8 +99,8 @@ func (s *Store) Lookup(ctx context.Context, key string) (Consumer, Result) {
 	if recent {
 		return Consumer{}, Unknown
 	}
-	// The request waits for this reload, and the gateway waits for the request (APISIX
-	// forward-auth: 3 s by default), so a slow Vault must not hold it up for long.
+	// The request waits for this reload, and the gateway waits for the request, often for only
+	// a few seconds, so a slow Vault must not hold it up for long.
 	loadCtx, cancel := context.WithTimeout(ctx, missLoadTimeout)
 	defer cancel()
 	if err := s.Load(loadCtx); err != nil {
