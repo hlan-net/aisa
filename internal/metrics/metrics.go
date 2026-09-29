@@ -34,6 +34,18 @@ const (
 	EventRejected  = "rejected"
 )
 
+// Values of the reason label of aisa_usage_requests_rejected_total: why a whole usage request
+// was rejected, with none of its events read.
+const (
+	UsageRequestMalformed  = "malformed"  // not a JSON object or array of that shape (400)
+	UsageRequestTooLarge   = "too_large"  // body over the limit (413)
+	UsageRequestUnreadable = "unreadable" // the body could not be read (400)
+)
+
+// UsageRequestReasons are all values of the reason label of aisa_usage_requests_rejected_total.
+// Each series starts at 0.
+var UsageRequestReasons = []string{UsageRequestMalformed, UsageRequestTooLarge, UsageRequestUnreadable}
+
 // ConsumerUnknown is the consumer label of a decision without a known consumer, such as a
 // rejected credential. Usage served without a decision is accounted under it too.
 const ConsumerUnknown = "unknown"
@@ -61,6 +73,9 @@ type Metrics struct {
 	Decisions *prometheus.CounterVec
 	// UsageEvents counts usage events received by result (accepted, duplicate, rejected).
 	UsageEvents *prometheus.CounterVec
+	// UsageRequestsRejected counts usage requests rejected as a whole, by reason. Their events
+	// are in no other metric, and the gateway's log sink may drop them after its retries.
+	UsageRequestsRejected *prometheus.CounterVec
 
 	// Consumers, ConsumerKeys and ConsumersUnreadable describe the consumers in memory: how
 	// many can authenticate, how many key hashes they have, and how many Vault listed and aisa
@@ -125,6 +140,10 @@ func New(version string) *Metrics {
 			Name: "aisa_usage_events_total",
 			Help: "Usage events received by aisa, by result.",
 		}, []string{"result"}),
+		UsageRequestsRejected: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_usage_requests_rejected_total",
+			Help: "Usage requests rejected as a whole, with none of their events read, by reason.",
+		}, []string{"reason"}),
 		Consumers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers",
 			Help: "Consumers in memory that can authenticate.",
@@ -158,9 +177,14 @@ func New(version string) *Metrics {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		buildInfo,
 		m.Requests, m.Tokens, m.Cost, m.BudgetLimit, m.BudgetSpent, m.Latency, m.TTFT, m.Decisions,
-		m.UsageEvents,
+		m.UsageEvents, m.UsageRequestsRejected,
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 	)
+	// The reasons are fixed: start each at 0, so the first rejection is an increase that an
+	// alert on increase() or rate() can see.
+	for _, reason := range UsageRequestReasons {
+		m.UsageRequestsRejected.WithLabelValues(reason)
+	}
 	return m
 }
 

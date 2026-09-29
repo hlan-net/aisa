@@ -100,16 +100,21 @@ func run(args []string) error {
 
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout,
 		server.Check{Name: "consumers", Probe: store.Ready})
-	decision := decide.New(store, m, log.With("component", "decide"))
-	srv.Handle("POST /v1/decide", decision)
-	srv.Handle("GET /v1/decide", decision)
-	ledg := ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), log.With("component", "ledger"))
-	srv.Handle("POST /v1/usage", ledg)
+	routes(srv,
+		decide.New(store, m, log.With("component", "decide")),
+		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), log.With("component", "ledger")))
 	if err := srv.Run(ctx, cfg.Addr); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
 	log.Info("stopped")
 	return nil
+}
+
+// routes registers the contract endpoints.
+func routes(srv *server.Server, decision, usage http.Handler) {
+	srv.Handle("POST /v1/decide", decision)
+	srv.Handle("GET /v1/decide", decision)
+	srv.Handle("POST /v1/usage", usage)
 }
 
 // observeLoad puts the result of a load of the consumers into the metrics.
