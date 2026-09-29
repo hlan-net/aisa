@@ -29,14 +29,14 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | Done ([#19](https://github.com/hlan-net/aisa/pull/19)): reloads are clean and take 1 to 2 s; the rendered file needs a guard ([#18](https://github.com/hlan-net/aisa/issues/18)) |
 | 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | Done ([#17](https://github.com/hlan-net/aisa/pull/17)): fits a small node with one nginx worker; `forward-auth` adds 0.3 to 2 ms. Measured on a Raspberry Pi 5 |
 | 6 | `claude/sonarqube-pr-scan-66r8m0` | SonarQube scan with Go coverage for PRs and `main` | Done ([#15](https://github.com/hlan-net/aisa/pull/15)): coverage needs `SONAR_TOKEN` |
-| 7 | `spike/apisix-chart` | S5: APISIX in standalone mode on Kubernetes, the official chart or plain manifests | In review: plain manifests; the chart has no place for the sidecar that renders the config |
+| 7 | `spike/apisix-chart` | S5: APISIX in standalone mode on Kubernetes, the official chart or plain manifests | Done ([#24](https://github.com/hlan-net/aisa/pull/24)): plain manifests; the chart has no place for the sidecar that renders the config |
 
 ## v0.2.0: First version (token quotas)
 
 | PR | Branch | Scope | Status |
 |----|--------|-------|--------|
 | 1 | `feature/core-skeleton` | `cmd/aisa`, config, health endpoints, `aisa_*` metrics registry, the product `Dockerfile`, CI | Done ([#20](https://github.com/hlan-net/aisa/pull/20)) |
-| 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) | — |
+| 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) | In review |
 | 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | — |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | — |
 | 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, the checked config render ([#18](https://github.com/hlan-net/aisa/issues/18)), explicit `log_format` ([#5](https://github.com/hlan-net/aisa/issues/5)) and upstream timeouts ([#14](https://github.com/hlan-net/aisa/issues/14)), fail-open routes for backends with `fail_policy = "open"` ([#4](https://github.com/hlan-net/aisa/issues/4)), requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | — |

@@ -1,6 +1,6 @@
 # aisa — AI Service [Access, Admin, Authority]
 
-> **Status: early development.** The design is written down and its open questions are answered by spikes. aisa itself is a skeleton so far: it starts, reports its health and exports metrics, and decides nothing yet.
+> **Status: early development.** The design is written down and its open questions are answered by spikes. aisa authenticates consumers against Vault in its decision API; quotas, budgets and usage accounting come next.
 
 Pick the A that fits your day:
 - **Access**: decides who may use which model, through a decision API that your gateway asks before every request.

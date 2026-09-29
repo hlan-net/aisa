@@ -1,16 +1,29 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/hlan-net/aisa/internal/consumers"
+	"github.com/hlan-net/aisa/internal/metrics"
 )
 
 func TestRunRejectsBadInput(t *testing.T) {
+	t.Setenv("VAULT_ADDR", "http://127.0.0.1:1")
 	t.Setenv("AISA_ADDR", "no-port")
 	if err := run(nil); err == nil {
 		t.Error("want an error for an invalid AISA_ADDR")
+	}
+	t.Setenv("AISA_ADDR", "")
+	t.Setenv("VAULT_ADDR", "")
+	if err := run(nil); err == nil {
+		t.Error("want an error without VAULT_ADDR")
 	}
 	if err := run([]string{"-no-such-flag"}); err == nil {
 		t.Error("want an error for an unknown flag")
@@ -61,6 +74,26 @@ func TestHealthURL(t *testing.T) {
 	} {
 		if got := healthURL(addr); got != want {
 			t.Errorf("healthURL(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}
+
+func TestObserveLoad(t *testing.T) {
+	m := metrics.New("test")
+	now := time.Unix(1_700_000_000, 0)
+	observeLoad(m, consumers.Stats{Consumers: 3, Keys: 4, Unreadable: 1}, now)
+	observeLoad(m, consumers.Stats{Err: errors.New("vault down"), Consumers: 3, Keys: 4, Unreadable: 1}, now.Add(time.Minute))
+
+	for name, tc := range map[string]struct{ got, want float64 }{
+		"aisa_consumers":                          {testutil.ToFloat64(m.Consumers), 3},
+		"aisa_consumer_keys":                      {testutil.ToFloat64(m.ConsumerKeys), 4},
+		"aisa_consumers_unreadable":               {testutil.ToFloat64(m.ConsumersUnreadable), 1},
+		"aisa_consumer_loads_total{result=ok}":    {testutil.ToFloat64(m.ConsumerLoads.WithLabelValues(metrics.LoadOK)), 1},
+		"aisa_consumer_loads_total{result=error}": {testutil.ToFloat64(m.ConsumerLoads.WithLabelValues(metrics.LoadError)), 1},
+		"aisa_consumers_loaded_timestamp_seconds": {testutil.ToFloat64(m.ConsumersLoaded), 1_700_000_000},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", name, tc.got, tc.want)
 		}
 	}
 }

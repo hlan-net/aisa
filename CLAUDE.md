@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 aisa — **AI Service [Access, Admin, Authority]** — is a Vault- and Consul-native governance layer for LLM traffic. It sits beside an existing AI gateway and adds identities, token quotas, money budgets and normalized usage metrics. It is **not** a gateway: it never proxies model traffic itself. Apache 2.0, public repository `hlan-net/aisa`.
 
-**Status: early development (v0.2.0).** The design lives in `docs/`, and its open questions are answered in `docs/process/SPIKES.md`. aisa is a skeleton (`cmd/aisa`: config, health endpoints, metrics registry); the next steps are the PRs of `ROADMAP.md` v0.2.0.
+**Status: early development (v0.2.0).** The design lives in `docs/`, and its open questions are answered in `docs/process/SPIKES.md`. aisa has config, health endpoints, the metrics registry and the decision API with consumers from Vault (`internal/vault`, `internal/consumers`, `internal/decide`); the next steps are the PRs of `ROADMAP.md` v0.2.0.
 
 ## Where things are
 

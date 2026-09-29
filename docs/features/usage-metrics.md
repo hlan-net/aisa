@@ -11,9 +11,19 @@ Full list in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#4-metrics-o
 - `aisa_requests_total`, `aisa_tokens_total{direction}`, `aisa_cost_total`
 - `aisa_budget_limit`, `aisa_budget_spent`
 - `aisa_latency_seconds`, `aisa_ttft_seconds`
-- `aisa_decisions_total{result}`
+- `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `unavailable` (aisa cannot verify credentials and answers 503, under the consumer `unknown`), `deny_quota`, `deny_budget`, `downgrade`
 
 Cost is computed in aisa from the Consul prices, so no Prometheus rules with hardcoded prices are needed.
+
+aisa also reports on its own state. These are not part of the adapter contract:
+
+| Metric | Meaning |
+|---|---|
+| `aisa_build_info{version}` | The running build |
+| `aisa_consumers`, `aisa_consumer_keys` | Consumers in memory that can authenticate, and their key hashes |
+| `aisa_consumers_unreadable` | Consumers that Vault listed and aisa could not read at the last load |
+| `aisa_consumer_loads_total{result}` | Loads of the consumers from Vault, `ok` or `error` |
+| `aisa_consumers_loaded_timestamp_seconds` | When the consumers were last loaded |
 
 Keep label cardinality in mind: `consumer` × `model` × `backend`. For large deployments, consumers can be aggregated into groups.
 
@@ -47,5 +57,7 @@ Shipped as a `PrometheusRule`:
 | `AisaBudgetExhausted` | a consumer is being denied or downgraded because its budget is used up |
 | `AisaBackendDown` | Consul health check for an `aisa-backend` is critical for more than 10 min |
 | `AisaDown` | aisa's scrape target is down for 2 min (fail policies are now in effect) |
+| `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
+| `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |
 | `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h |
 | `AisaSlowFirstToken` | p95 time to first token > 20 s for 15 min (model too large for the backend, or the backend is swapping) |

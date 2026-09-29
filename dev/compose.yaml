@@ -109,6 +109,27 @@ services:
       timeout: 2s
       retries: 30
 
+  aisa:
+    # The real aisa, built from the repository's Dockerfile. It reads the seeded consumers from
+    # Vault and answers /v1/decide; the gateway still uses stub-aisa until aisa ingests usage.
+    image: aisa:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args: {VERSION: dev}
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root
+      AISA_LOG_LEVEL: debug
+    ports: ["127.0.0.1:8084:8080"]
+    depends_on:
+      seed-vault: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/aisa", "-healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   apisix:
     image: apache/apisix:3.18.0-debian
     volumes:
