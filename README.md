@@ -1,6 +1,6 @@
 # aisa — AI Service [Access, Admin, Authority]
 
-> **Status: design phase.** The documents describe the planned architecture. The only code so far is a local dev stack for the spikes.
+> **Status: early development.** The design is written down and its open questions are answered by spikes. aisa itself is a skeleton so far: it starts, reports its health and exports metrics, and decides nothing yet.
 
 Pick the A that fits your day:
 - **Access**: decides who may use which model, through a decision API that your gateway asks before every request.
@@ -57,9 +57,28 @@ Three contracts connect aisa to a gateway: a **decision API** (forward-auth patt
 | **Process** | |
 | [SPIKES.md](docs/process/SPIKES.md) | Unknowns to verify before implementation |
 
+## Running aisa
+
+```bash
+go run ./cmd/aisa                 # or: docker build -t aisa:local . && docker run -p 8080:8080 aisa:local
+curl localhost:8080/healthz
+```
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `AISA_ADDR` | Address to listen on | `:8080` |
+| `AISA_LOG_LEVEL` | `debug`, `info`, `warn` or `error`; logs are JSON lines on stdout | `info` |
+| `AISA_SHUTDOWN_TIMEOUT` | Time that requests in flight get to finish after SIGTERM | `10s` |
+
+| Endpoint | Meaning |
+|---|---|
+| `GET /healthz` | Answers while the process runs (liveness) |
+| `GET /readyz` | 200 when every dependency can be used, else 503 with the names of those that failed (readiness) |
+| `GET /metrics` | The `aisa_*` metrics of [ADAPTER_CONTRACT.md](docs/concepts/ADAPTER_CONTRACT.md#4-metrics-output-of-aisa), in the Prometheus format |
+
 ## Development
 
-The first milestone is a local dev stack and the spikes ([ROADMAP.md](ROADMAP.md) v0.1.0). The dev stack is described in [dev/README.md](dev/README.md).
+The milestones are in [ROADMAP.md](ROADMAP.md). The dev stack for the spikes and integration tests is described in [dev/README.md](dev/README.md).
 
 ```bash
 docker compose -f dev/compose.yaml up -d --build --wait   # Vault, Consul, Redis, APISIX, mock backends, stub aisa
