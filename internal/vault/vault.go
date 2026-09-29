@@ -145,34 +145,47 @@ func New(o Options) (*Client, error) {
 }
 
 // List returns the keys under a KV v2 path, such as the consumers under "aisa/consumers".
-// Subdirectories end in "/". A path without keys returns ErrNotFound.
+// Subdirectories end in "/". A path without keys returns ErrNotFound. An answer without
+// data.keys is not from Vault and is an error, so it cannot pass for an empty list.
 func (c *Client) List(ctx context.Context, mount, path string) ([]string, error) {
 	var out struct {
-		Data struct {
-			Keys []string `json:"keys"`
+		Data *struct {
+			Keys *[]string `json:"keys"`
 		} `json:"data"`
 	}
 	if err := c.authed(ctx, "LIST", mount+"/metadata/"+path, nil, &out); err != nil {
 		return nil, err
 	}
-	return out.Data.Keys, nil
+	if out.Data == nil || out.Data.Keys == nil {
+		return nil, fmt.Errorf("vault LIST %s/metadata/%s: %w", mount, path, errNoEnvelope)
+	}
+	return *out.Data.Keys, nil
 }
 
+// errNoEnvelope: a successful answer lacks the fields that Vault always sends.
+var errNoEnvelope = errors.New("answer is not a Vault KV v2 answer")
+
 // Read returns the current version of a KV v2 secret's data. A deleted or destroyed version
-// returns ErrNotFound.
+// returns ErrNotFound. Any other answer without data.data is an error.
 func (c *Client) Read(ctx context.Context, mount, path string) (map[string]any, error) {
 	var out struct {
-		Data struct {
-			Data map[string]any `json:"data"`
+		Data *struct {
+			Data     map[string]any   `json:"data"`
+			Metadata *versionMetadata `json:"metadata"`
 		} `json:"data"`
 	}
 	if err := c.authed(ctx, http.MethodGet, mount+"/data/"+path, nil, &out); err != nil {
 		return nil, err
 	}
-	if out.Data.Data == nil {
+	switch {
+	case out.Data == nil:
+		return nil, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
+	case out.Data.Data != nil:
+		return out.Data.Data, nil
+	case out.Data.Metadata.deleted():
 		return nil, ErrNotFound
 	}
-	return out.Data.Data, nil
+	return nil, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
 }
 
 // lookupSelf is allowed to every token by Vault's default policy.
@@ -342,6 +355,11 @@ type versionMetadata struct {
 	Destroyed    bool   `json:"destroyed"`
 }
 
+// deleted reports whether the metadata is that of a deleted or destroyed version.
+func (m *versionMetadata) deleted() bool {
+	return m != nil && (m.DeletionTime != "" || m.Destroyed)
+}
+
 // errorAnswer reads the body of an error from Vault: its errors, and whether it is Vault's way of
 // saying "no data here". That is an empty errors list, or the metadata of a deleted or destroyed
 // version.
@@ -355,8 +373,8 @@ func errorAnswer(data []byte) (errs []string, noData bool) {
 	if e.Errors != nil {
 		return *e.Errors, len(*e.Errors) == 0
 	}
-	if e.Data == nil || e.Data.Metadata == nil {
+	if e.Data == nil {
 		return nil, false
 	}
-	return nil, e.Data.Metadata.DeletionTime != "" || e.Data.Metadata.Destroyed
+	return nil, e.Data.Metadata.deleted()
 }

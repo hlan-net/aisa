@@ -25,7 +25,9 @@ type fakeVault struct {
 	denied map[string]bool
 	// notFound, when set, is the body of a 404 that answers every request for data.
 	notFound string
-	lookups  int
+	// ok, when set, is the body of a 200 that answers every request for data.
+	ok      string
+	lookups int
 }
 
 func newFakeVault(t *testing.T) (*fakeVault, *httptest.Server) {
@@ -57,6 +59,8 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 		writeStatus(w, http.StatusForbidden, `{"errors":["1 error occurred:\n\t* permission denied\n\n"]}`)
 	case f.notFound != "":
 		writeStatus(w, http.StatusNotFound, f.notFound)
+	case f.ok != "":
+		_, _ = w.Write([]byte(f.ok))
 	case r.Method == "LIST" && strings.HasPrefix(path, "secret/metadata/"):
 		f.list(w, strings.TrimPrefix(path, "secret/metadata/"))
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "secret/data/"):
@@ -275,6 +279,39 @@ func TestNotFoundIsOnlyWhatVaultSaysAboutItsData(t *testing.T) {
 		if !tc.notFound && (!errors.As(err, &se) || se.Code != http.StatusNotFound) {
 			t.Errorf("%s: err = %v, want a StatusError with 404", name, err)
 		}
+	}
+}
+
+func TestASuccessWithoutVaultsFieldsIsAnError(t *testing.T) {
+	f, srv := newFakeVault(t)
+	c, err := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, body := range []string{`{}`, `null`, `{"data":null}`, `{"data":{}}`, `{"data":{"keys":null}}`} {
+		f.mu.Lock()
+		f.ok = body
+		f.mu.Unlock()
+		if keys, err := c.List(ctx, "secret", "aisa/consumers"); err == nil || errors.Is(err, ErrNotFound) {
+			t.Errorf("List %s: %v, %v, want an error other than ErrNotFound", body, keys, err)
+		}
+		if data, err := c.Read(ctx, "secret", "aisa/consumers/a"); err == nil || errors.Is(err, ErrNotFound) {
+			t.Errorf("Read %s: %v, %v, want an error other than ErrNotFound", body, data, err)
+		}
+	}
+
+	f.mu.Lock()
+	f.ok = `{"data":{"keys":[]}}`
+	f.mu.Unlock()
+	if keys, err := c.List(ctx, "secret", "aisa/consumers"); err != nil || len(keys) != 0 {
+		t.Errorf("an empty list from Vault: %v, %v", keys, err)
+	}
+	f.mu.Lock()
+	f.ok = `{"data":{"data":null,"metadata":{"deletion_time":"2026-01-01T00:00:00Z"}}}`
+	f.mu.Unlock()
+	if _, err := c.Read(ctx, "secret", "aisa/consumers/a"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a deleted version answered with 200: %v, want ErrNotFound", err)
 	}
 }
 

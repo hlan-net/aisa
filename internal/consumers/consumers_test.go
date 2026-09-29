@@ -404,6 +404,23 @@ func TestLoadGivesUpWaitingWhenItsContextIsDone(t *testing.T) {
 	close(src.release)
 }
 
+func TestConsumersWithOnlyASharedHashAreNotCounted(t *testing.T) {
+	src := &fakeSource{data: map[string]map[string]any{
+		"a": {"key_sha256": hashOf("shared")},
+		"b": {"key_sha256": hashOf("shared") + "," + hashOf("only-b")},
+		"c": {"key_sha256": hashOf("only-c")},
+	}}
+	s, _ := newStore(src)
+	var stats Stats
+	s.opts.OnLoad = func(st Stats) { stats = st }
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stats.Consumers != 2 || stats.Keys != 2 {
+		t.Errorf("stats = %+v, want 2 consumers (b and c) and 2 keys", stats)
+	}
+}
+
 func TestOneUnreadableConsumerDoesNotStopTheOthers(t *testing.T) {
 	src := &fakeSource{data: map[string]map[string]any{
 		"chat-ui":    {"key_sha256": hashOf("chat")},

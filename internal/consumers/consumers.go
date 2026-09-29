@@ -287,7 +287,7 @@ func (s *Store) finish(call *loadCall, err error) {
 	// Counted from the end as well: a load that took long must not be followed by the next one
 	// at once.
 	s.lastAttempt = s.opts.Now()
-	stats := Stats{Err: err, Consumers: countConsumers(s.byName), Keys: len(s.byHash), Unreadable: s.unreadable}
+	stats := Stats{Err: err, Consumers: countConsumers(s.byHash), Keys: len(s.byHash), Unreadable: s.unreadable}
 	s.mu.Unlock()
 
 	call.err = err
@@ -297,14 +297,14 @@ func (s *Store) finish(call *loadCall, err error) {
 	}
 }
 
-func countConsumers(byName map[string]entry) int {
-	n := 0
-	for _, e := range byName {
-		if len(e.hashes) > 0 {
-			n++
-		}
+// countConsumers counts the consumers that can authenticate: those with at least one hash in
+// the index. A consumer whose only hash is shared with another is not among them.
+func countConsumers(byHash map[string]entry) int {
+	names := make(map[string]struct{}, len(byHash))
+	for _, e := range byHash {
+		names[e.consumer.Name] = struct{}{}
 	}
-	return n
+	return len(names)
 }
 
 // load reads the consumers from the source. It fails, and leaves the loaded consumers as they
