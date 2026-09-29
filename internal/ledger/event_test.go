@@ -184,19 +184,30 @@ func TestParseEventsValueErrors(t *testing.T) {
 		"string field a number": `{"request_id": "r", "consumer": 5}`,
 	} {
 		for _, body := range []string{in, "[" + in + "]"} {
-			events, err := ParseEvents([]byte(body))
-			if err != nil || len(events) != 1 {
-				t.Errorf("%s: ParseEvents(%s) = %d events, %v; want 1 event", name, body, len(events), err)
-				continue
-			}
-			if events[0].Err == nil {
-				t.Errorf("%s: event of %s decoded, want an error", name, body)
-			} else if strings.Contains(events[0].Err.Error(), "yes") || strings.Contains(events[0].Err.Error(), "abc") {
-				t.Errorf("%s: error %q quotes the value; it is logged", name, events[0].Err)
-			}
+			checkValueError(t, name, body)
 		}
 	}
+}
 
+// checkValueError checks that body parses to one event that carries a decode error, and that
+// the error does not quote the value.
+func checkValueError(t *testing.T, name, body string) {
+	t.Helper()
+	events, err := ParseEvents([]byte(body))
+	if err != nil || len(events) != 1 {
+		t.Errorf("%s: ParseEvents(%s) = %d events, %v; want 1 event", name, body, len(events), err)
+		return
+	}
+	if events[0].Err == nil {
+		t.Errorf("%s: event of %s decoded, want an error", name, body)
+		return
+	}
+	if msg := events[0].Err.Error(); strings.Contains(msg, "yes") || strings.Contains(msg, "abc") {
+		t.Errorf("%s: error %q quotes the value; it is logged", name, msg)
+	}
+}
+
+func TestParseEventsElementsThatAreNotObjects(t *testing.T) {
 	events, err := ParseEvents([]byte(`[1, "x", {"request_id": "ok", "status": 200}]`))
 	if err != nil || len(events) != 3 {
 		t.Fatalf("array with values that are not objects: %d events, %v; want 3", len(events), err)
