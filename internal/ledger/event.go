@@ -160,38 +160,7 @@ func ParseEvents(body []byte) ([]Event, error) {
 		return nil, errors.New("empty request body")
 	}
 	if trimmed[0] == '[' {
-		dec := json.NewDecoder(bytes.NewReader(trimmed))
-		tok, err := dec.Token()
-		if err != nil {
-			return nil, fmt.Errorf("invalid JSON array: %w", err)
-		}
-		delim, ok := tok.(json.Delim)
-		if !ok || delim != '[' {
-			return nil, errors.New("expected start of JSON array")
-		}
-		var events []Event
-		for dec.More() {
-			if len(events) >= maxBatchEvents {
-				return nil, fmt.Errorf("batch exceeds maximum of %d events", maxBatchEvents)
-			}
-			var ev Event
-			if err := dec.Decode(&ev); err != nil {
-				return nil, fmt.Errorf("event %d: %w", len(events), err)
-			}
-			events = append(events, ev)
-		}
-		tok, err = dec.Token()
-		if err != nil {
-			return nil, fmt.Errorf("invalid JSON array: %w", err)
-		}
-		delim, ok = tok.(json.Delim)
-		if !ok || delim != ']' {
-			return nil, errors.New("expected end of JSON array")
-		}
-		if dec.More() {
-			return nil, errors.New("unexpected trailing data after JSON array")
-		}
-		return events, nil
+		return parseEventArray(trimmed)
 	}
 	if trimmed[0] != '{' {
 		return nil, errors.New("body is not a JSON object or an array of objects")
@@ -205,4 +174,39 @@ func ParseEvents(body []byte) ([]Event, error) {
 		return nil, errors.New("unexpected trailing data after JSON object")
 	}
 	return []Event{ev}, nil
+}
+
+func parseEventArray(trimmed []byte) ([]Event, error) {
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON array: %w", err)
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '[' {
+		return nil, errors.New("expected start of JSON array")
+	}
+	var events []Event
+	for dec.More() {
+		if len(events) >= maxBatchEvents {
+			return nil, fmt.Errorf("batch exceeds maximum of %d events", maxBatchEvents)
+		}
+		var ev Event
+		if err := dec.Decode(&ev); err != nil {
+			return nil, fmt.Errorf("event %d: %w", len(events), err)
+		}
+		events = append(events, ev)
+	}
+	tok, err = dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON array: %w", err)
+	}
+	delim, ok = tok.(json.Delim)
+	if !ok || delim != ']' {
+		return nil, errors.New("expected end of JSON array")
+	}
+	if dec.More() {
+		return nil, errors.New("unexpected trailing data after JSON array")
+	}
+	return events, nil
 }
