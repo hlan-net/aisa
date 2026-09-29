@@ -38,6 +38,7 @@ func New(m *metrics.Metrics, dedup *Dedup, log *slog.Logger) *Handler {
 // ServeHTTP answers POST /v1/usage.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
 		h.rejectRequest(w, http.StatusMethodNotAllowed, metrics.UsageRequestMethod, "method not allowed: want POST")
 		return
 	}

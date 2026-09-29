@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -177,6 +178,9 @@ func TestHandlerRejects(t *testing.T) {
 	if recGet.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET status = %d, want 405", recGet.Code)
 	}
+	if allow := recGet.Header().Get("Allow"); allow != http.MethodPost {
+		t.Errorf("GET Allow = %q, want POST", allow)
+	}
 
 	// Malformed JSON, and an array whose structure is broken after a valid event
 	for _, body := range []string{"bad-json", `[{"request_id":"a","status":200}, invalid]`} {
@@ -253,5 +257,28 @@ func TestHandlerBodyTooLarge(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(metrics.UsageRequestTooLarge)); got != 1 {
 		t.Errorf("aisa_usage_requests_rejected_total{too_large} = %v, want 1", got)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+func TestHandlerUnreadableBody(t *testing.T) {
+	m := metrics.New("test")
+	h := New(m, NewDedup(100, 5*time.Minute), slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/usage", io.MultiReader(strings.NewReader(`[{"request_id":"a",`), failingReader{}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(metrics.UsageRequestUnreadable)); got != 1 {
+		t.Errorf("aisa_usage_requests_rejected_total{reason=\"unreadable\"} = %v, want 1", got)
+	}
+	if n := testutil.CollectAndCount(m.UsageEvents); n != 0 {
+		t.Errorf("aisa_usage_events_total has %d series, want 0: no event was read", n)
 	}
 }
