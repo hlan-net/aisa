@@ -29,11 +29,13 @@ type Event struct {
 	LatencyMS        FlexFloat64 `json:"latency_ms"`
 	TTFTMS           FlexFloat64 `json:"ttft_ms"`
 	Stream           FlexBool    `json:"stream"`
+}
 
-	// parseErr is set when the event is well-formed JSON but a field value cannot be parsed
-	// (e.g. "prompt_tokens":"abc"). Such an event is rejected on its own, like one that fails
-	// validation, and does not reject the other events of its batch.
-	parseErr error
+// Parsed is one event of a usage request, or why it could not be decoded: a value of the wrong
+// type (e.g. "prompt_tokens":"abc") rejects that event only, not the other events of its batch.
+type Parsed struct {
+	Event Event
+	Err   error
 }
 
 // FlexInt64 unmarshals an int64 from a JSON number, a string (e.g. "812"), null or "".
@@ -58,7 +60,7 @@ func (f *FlexInt64) UnmarshalJSON(data []byte) error {
 		}
 		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
-			return fmt.Errorf("invalid int: %q", s)
+			return errors.New("invalid int")
 		}
 		*f = FlexInt64(n)
 		return nil
@@ -106,10 +108,10 @@ func (f *FlexFloat64) UnmarshalJSON(data []byte) error {
 		}
 		fl, err := strconv.ParseFloat(s, 64)
 		if err != nil {
-			return fmt.Errorf("invalid float: %q", s)
+			return errors.New("invalid float")
 		}
 		if math.IsNaN(fl) || math.IsInf(fl, 0) {
-			return fmt.Errorf("invalid float: %q is not finite", s)
+			return errors.New("invalid float: not finite")
 		}
 		*f = FlexFloat64(fl)
 		return nil
@@ -147,7 +149,7 @@ func (f *FlexBool) UnmarshalJSON(data []byte) error {
 		case "true", "1":
 			*f = true
 		default:
-			return fmt.Errorf("invalid bool: %q", s)
+			return errors.New("invalid bool")
 		}
 		return nil
 	}
@@ -159,11 +161,14 @@ func (f *FlexBool) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ParseEvents parses body as either a single JSON object or an array of JSON values. It fails
-// only when the body is not well-formed JSON of that shape or has too many events; an element
-// whose field values cannot be parsed is returned with parseErr set, for the caller to reject
-// that event alone.
-func ParseEvents(body []byte) ([]Event, error) {
+// ParseEvents parses body as either a single JSON object or an array of JSON values, each
+// decoded in one pass. It fails only when the body is not well-formed JSON of that shape or has
+// too many events; an element that is well-formed but cannot be decoded into an Event comes back
+// with its Err set, for the caller to reject that event alone.
+//
+// Error messages never quote a field's value: a misconfigured sink may put a credential in any
+// field, and the errors are logged.
+func ParseEvents(body []byte) ([]Parsed, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
 		return nil, errors.New("empty request body")
@@ -174,18 +179,18 @@ func ParseEvents(body []byte) ([]Event, error) {
 	if trimmed[0] != '{' {
 		return nil, errors.New("body is not a JSON object or an array of objects")
 	}
-	var raw json.RawMessage
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	if err := dec.Decode(&raw); err != nil {
+	p, err := decodeNext(dec)
+	if err != nil {
 		return nil, fmt.Errorf("invalid JSON object: %w", err)
 	}
 	if err := atEnd(dec); err != nil {
 		return nil, fmt.Errorf("after the JSON object: %w", err)
 	}
-	return []Event{decodeEvent(raw)}, nil
+	return []Parsed{p}, nil
 }
 
-func parseEventArray(trimmed []byte) ([]Event, error) {
+func parseEventArray(trimmed []byte) ([]Parsed, error) {
 	dec := json.NewDecoder(bytes.NewReader(trimmed))
 	tok, err := dec.Token()
 	if err != nil {
@@ -195,18 +200,16 @@ func parseEventArray(trimmed []byte) ([]Event, error) {
 	if !ok || delim != '[' {
 		return nil, errors.New("expected start of JSON array")
 	}
-	var events []Event
+	var events []Parsed
 	for dec.More() {
 		if len(events) >= maxBatchEvents {
 			return nil, fmt.Errorf("batch exceeds maximum of %d events", maxBatchEvents)
 		}
-		// The element is checked for well-formed JSON here, and decoded into an Event on its
-		// own, so a value of the wrong type rejects only its event.
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
+		p, err := decodeNext(dec)
+		if err != nil {
 			return nil, fmt.Errorf("event %d: %w", len(events), err)
 		}
-		events = append(events, decodeEvent(raw))
+		events = append(events, p)
 	}
 	tok, err = dec.Token()
 	if err != nil {
@@ -222,6 +225,22 @@ func parseEventArray(trimmed []byte) ([]Event, error) {
 	return events, nil
 }
 
+// decodeNext decodes the next value of dec into an Event. The decoder reads a whole value before
+// it decodes it, so a value that is well-formed but of the wrong type leaves dec after that value:
+// that is the event's own error. Only malformed JSON, which leaves dec stuck, is returned as err.
+func decodeNext(dec *json.Decoder) (p Parsed, err error) {
+	var ev Event
+	derr := dec.Decode(&ev)
+	var syntax *json.SyntaxError
+	if errors.As(derr, &syntax) || errors.Is(derr, io.ErrUnexpectedEOF) || errors.Is(derr, io.EOF) {
+		return Parsed{}, derr
+	}
+	if derr != nil {
+		return Parsed{Err: derr}, nil
+	}
+	return Parsed{Event: ev}, nil
+}
+
 // atEnd returns an error unless dec has read all of its input. dec.More is not enough: it
 // reports false before a stray ] or } too.
 func atEnd(dec *json.Decoder) error {
@@ -229,18 +248,4 @@ func atEnd(dec *json.Decoder) error {
 		return errors.New("unexpected trailing data")
 	}
 	return nil
-}
-
-// decodeEvent decodes one well-formed JSON value into an Event. When it fails, the event
-// carries the error, and its request_id when that could be read, for the log.
-func decodeEvent(raw json.RawMessage) Event {
-	var ev Event
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		var id struct {
-			RequestID string `json:"request_id"`
-		}
-		_ = json.Unmarshal(raw, &id)
-		return Event{RequestID: id.RequestID, parseErr: err}
-	}
-	return ev
 }

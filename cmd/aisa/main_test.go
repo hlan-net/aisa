@@ -102,8 +102,9 @@ func TestObserveLoad(t *testing.T) {
 	}
 }
 
-// A usage request that is not a POST reaches the ledger through the routes and is counted.
-func TestRoutesCountAUsageRequestWithTheWrongMethod(t *testing.T) {
+// The routes answer a usage request that is not a POST with 405 and do not count it as a
+// rejected usage request: a log sink always POSTs, so it is no usage being lost.
+func TestRoutesUsageWrongMethod(t *testing.T) {
 	m := metrics.New("test")
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := server.New(log, m.Handler(), time.Second)
@@ -111,10 +112,12 @@ func TestRoutesCountAUsageRequestWithTheWrongMethod(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/usage", nil))
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("GET /v1/usage: status = %d, want 405", rec.Code)
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") == "" {
+		t.Errorf("GET /v1/usage: %d, Allow %q; want 405 with Allow", rec.Code, rec.Header().Get("Allow"))
 	}
-	if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(metrics.UsageRequestMethod)); got != 1 {
-		t.Errorf("aisa_usage_requests_rejected_total{reason=\"method\"} = %v, want 1", got)
+	for _, reason := range metrics.UsageRequestReasons {
+		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != 0 {
+			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want 0", reason, got)
+		}
 	}
 }

@@ -192,7 +192,7 @@ func TestHandlerRejects(t *testing.T) {
 		}
 	}
 
-	for reason, want := range map[string]float64{metrics.UsageRequestMethod: 1, metrics.UsageRequestMalformed: 2} {
+	for reason, want := range map[string]float64{metrics.UsageRequestMalformed: 2} {
 		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != want {
 			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want %v", reason, got, want)
 		}
@@ -228,8 +228,7 @@ func TestHandlerValueErrorRejectsOnlyItsEvent(t *testing.T) {
 	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventRejected)); got != 4 {
 		t.Errorf("aisa_usage_events_total{rejected} = %v, want 4", got)
 	}
-	for _, reason := range []string{metrics.UsageRequestMalformed, metrics.UsageRequestTooLarge,
-		metrics.UsageRequestUnreadable, metrics.UsageRequestMethod} {
+	for _, reason := range metrics.UsageRequestReasons {
 		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != 0 {
 			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want 0", reason, got)
 		}
@@ -280,5 +279,34 @@ func TestHandlerUnreadableBody(t *testing.T) {
 	}
 	if n := testutil.CollectAndCount(m.UsageEvents); n != 0 {
 		t.Errorf("aisa_usage_events_total has %d series, want 0: no event was read", n)
+	}
+}
+
+// A batch whose events are all wrong writes one warn line, and no field value: a misconfigured
+// sink may put a credential in any field.
+func TestHandlerLogsRejectedEventsOncePerRequest(t *testing.T) {
+	var buf bytes.Buffer
+	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), slog.New(slog.NewTextHandler(&buf, nil)))
+
+	var body strings.Builder
+	body.WriteString("[")
+	for i := range 500 {
+		if i > 0 {
+			body.WriteString(",")
+		}
+		body.WriteString(`{"request_id":"r","status":200,"stream":"Bearer sk-secret"}`)
+	}
+	body.WriteString("]")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body.String())))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if n := strings.Count(buf.String(), "level=WARN"); n != 1 {
+		t.Errorf("%d warn lines for one request, want 1:\n%s", n, buf.String())
+	}
+	if strings.Contains(buf.String(), "sk-secret") {
+		t.Errorf("the log quotes a field value:\n%s", buf.String())
 	}
 }

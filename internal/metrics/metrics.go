@@ -40,8 +40,11 @@ const (
 	UsageRequestMalformed  = "malformed"  // not a JSON object or array of that shape (400)
 	UsageRequestTooLarge   = "too_large"  // body over the limit (413)
 	UsageRequestUnreadable = "unreadable" // the body could not be read (400)
-	UsageRequestMethod     = "method"     // not a POST (405)
 )
+
+// UsageRequestReasons are all values of the reason label of aisa_usage_requests_rejected_total.
+// Each series starts at 0.
+var UsageRequestReasons = []string{UsageRequestMalformed, UsageRequestTooLarge, UsageRequestUnreadable}
 
 // ConsumerUnknown is the consumer label of a decision without a known consumer, such as a
 // rejected credential. Usage served without a decision is accounted under it too.
@@ -179,7 +182,7 @@ func New(version string) *Metrics {
 	)
 	// The reasons are fixed: start each at 0, so the first rejection is an increase that an
 	// alert on increase() or rate() can see.
-	for _, reason := range []string{UsageRequestMalformed, UsageRequestTooLarge, UsageRequestUnreadable, UsageRequestMethod} {
+	for _, reason := range UsageRequestReasons {
 		m.UsageRequestsRejected.WithLabelValues(reason)
 	}
 	return m

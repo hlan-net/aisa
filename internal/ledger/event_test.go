@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -29,7 +30,7 @@ func TestParseEventsSingleObjectNumbers(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("len(events) = %d, want 1", len(events))
 	}
-	ev := events[0]
+	ev := events[0].Event
 	if ev.RequestID != "req-123" {
 		t.Errorf("RequestID = %q, want req-123", ev.RequestID)
 	}
@@ -65,7 +66,7 @@ func TestParseEventsStrings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEvents: %v", err)
 	}
-	ev := events[0]
+	ev := events[0].Event
 	if ev.PromptTokens != 100 || ev.CompletionTokens != 50 {
 		t.Errorf("tokens = %d/%d, want 100/50", ev.PromptTokens, ev.CompletionTokens)
 	}
@@ -94,7 +95,7 @@ func TestParseEventsNullsAndEmptyStrings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEvents: %v", err)
 	}
-	ev := events[0]
+	ev := events[0].Event
 	if ev.PromptTokens != 0 || ev.CompletionTokens != 0 {
 		t.Errorf("tokens = %d/%d, want 0/0", ev.PromptTokens, ev.CompletionTokens)
 	}
@@ -122,11 +123,11 @@ func TestParseEventsArray(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("len(events) = %d, want 2", len(events))
 	}
-	if events[0].RequestID != "r1" || bool(events[0].Stream) {
-		t.Errorf("event 0 mismatch: %+v", events[0])
+	if events[0].Event.RequestID != "r1" || bool(events[0].Event.Stream) {
+		t.Errorf("event 0 mismatch: %+v", events[0].Event)
 	}
-	if events[1].RequestID != "r2" || events[1].Status != 429 || !bool(events[1].Stream) {
-		t.Errorf("event 1 mismatch: %+v", events[1])
+	if events[1].Event.RequestID != "r2" || events[1].Event.Status != 429 || !bool(events[1].Event.Stream) {
+		t.Errorf("event 1 mismatch: %+v", events[1].Event)
 	}
 }
 
@@ -141,8 +142,8 @@ func TestParseEventsIgnoresUnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseEvents: %v", err)
 	}
-	if events[0].RequestID != "r1" {
-		t.Errorf("RequestID = %q, want r1", events[0].RequestID)
+	if events[0].Event.RequestID != "r1" {
+		t.Errorf("RequestID = %q, want r1", events[0].Event.RequestID)
 	}
 }
 
@@ -188,11 +189,10 @@ func TestParseEventsValueErrors(t *testing.T) {
 				t.Errorf("%s: ParseEvents(%s) = %d events, %v; want 1 event", name, body, len(events), err)
 				continue
 			}
-			if err := validateEvent(events[0]); err == nil {
-				t.Errorf("%s: event of %s is valid, want an error", name, body)
-			}
-			if events[0].RequestID != "r" {
-				t.Errorf("%s: request_id = %q, want r for the log", name, events[0].RequestID)
+			if events[0].Err == nil {
+				t.Errorf("%s: event of %s decoded, want an error", name, body)
+			} else if strings.Contains(events[0].Err.Error(), "yes") || strings.Contains(events[0].Err.Error(), "abc") {
+				t.Errorf("%s: error %q quotes the value; it is logged", name, events[0].Err)
 			}
 		}
 	}
@@ -202,7 +202,7 @@ func TestParseEventsValueErrors(t *testing.T) {
 		t.Fatalf("array with values that are not objects: %d events, %v; want 3", len(events), err)
 	}
 	for i, want := range []bool{false, false, true} {
-		if valid := validateEvent(events[i]) == nil; valid != want {
+		if valid := events[i].Err == nil && validateEvent(events[i].Event) == nil; valid != want {
 			t.Errorf("event %d valid = %v, want %v", i, valid, want)
 		}
 	}

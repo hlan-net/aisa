@@ -110,12 +110,11 @@ func run(args []string) error {
 	return nil
 }
 
-// routes registers the contract endpoints. /v1/usage takes every method, so the ledger itself
-// answers and counts a request that is not a POST in aisa_usage_requests_rejected_total.
+// routes registers the contract endpoints.
 func routes(srv *server.Server, decision, usage http.Handler) {
 	srv.Handle("POST /v1/decide", decision)
 	srv.Handle("GET /v1/decide", decision)
-	srv.Handle("/v1/usage", usage)
+	srv.Handle("POST /v1/usage", usage)
 }
 
 // observeLoad puts the result of a load of the consumers into the metrics.

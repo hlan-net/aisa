@@ -38,8 +38,10 @@ func New(m *metrics.Metrics, dedup *Dedup, log *slog.Logger) *Handler {
 // ServeHTTP answers POST /v1/usage.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		// Not counted: a log sink always POSTs, so this is a stray request (a probe, a scanner),
+		// not usage that is being lost.
 		w.Header().Set("Allow", http.MethodPost)
-		h.rejectRequest(w, http.StatusMethodNotAllowed, metrics.UsageRequestMethod, "method not allowed: want POST")
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed: want POST"})
 		return
 	}
 
@@ -65,10 +67,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	accepted, rejected := 0, 0
-	for _, ev := range events {
-		if err := validateEvent(ev); err != nil {
+	var firstErr error
+	firstIndex := -1
+	for i, p := range events {
+		ev := p.Event
+		err := p.Err
+		if err == nil {
+			err = validateEvent(ev)
+		}
+		if err != nil {
 			h.metrics.UsageEvents.WithLabelValues(metrics.EventRejected).Inc()
-			h.log.Warn("invalid usage event skipped", "error", err, "request_id", ev.RequestID)
+			if firstErr == nil {
+				firstErr, firstIndex = err, i
+			}
 			rejected++
 			continue
 		}
@@ -84,6 +95,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		accepted++
 	}
 
+	if rejected > 0 {
+		// One line per request, not per event: a sink with a systematic mistake sends every event
+		// of every batch wrong, up to 10 000 per request.
+		h.log.Warn("invalid usage events skipped",
+			"rejected", rejected, "events", len(events), "first_index", firstIndex, "first_error", firstErr)
+	}
 	writeJSON(w, http.StatusOK, map[string]int{"accepted": accepted, "rejected": rejected})
 }
 
@@ -96,9 +113,6 @@ func (h *Handler) rejectRequest(w http.ResponseWriter, status int, reason, msg s
 
 // validateEvent verifies that required fields and numeric bounds conform to the usage contract.
 func validateEvent(ev Event) error {
-	if ev.parseErr != nil {
-		return ev.parseErr
-	}
 	if strings.TrimSpace(ev.RequestID) == "" {
 		return errors.New("missing request_id")
 	}
