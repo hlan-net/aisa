@@ -155,14 +155,13 @@ check "backends of qwen3" "mock-local mock-local-2" \
 check "the key of mock-cloud comes from Vault" 1 "$(rendered | grep -c 'Authorization: "Bearer dev-provider-key"' || true)"
 check "backends without a key get none" 0 "$(rendered | grep -B3 'options: {model: "qwen3"}' | grep -c Bearer || true)"
 check "the file ends with #END" "#END" "$(rendered | tail -1)"
-plain=http # the scheme of the mock backends, in a variable so no plain-http URL is written out
 # A keyed backend without scheme meta and without a health check (so Consul counts it healthy).
 curl -fsS -X PUT "$CONSUL/v1/agent/service/register" -d '{"ID":"cloud-tls","Name":"aisa-backend","Address":"api.example.invalid","Port":443,"Meta":{"provider":"openai-compatible","models":"cloud-tls","key":"cloud"}}'
 wait_until 30 in_rotation cloud-tls
 check "a backend with a key is reached over https by default" 1 \
     "$(rendered | grep -c 'endpoint: "https://api.example.invalid:443/v1/chat/completions"' || true)"
-check "  ... unless its meta says http (mock-cloud)" 1 \
-    "$(rendered | grep -c "endpoint: \"$plain://mock-cloud:8080/v1/chat/completions\"" || true)"
+check "  ... unless its meta says otherwise (mock-cloud's scheme)" "http" \
+    "$(rendered | sed -n 's/.*endpoint: "\([a-z]*\):[/][/]mock-cloud:8080[/].*/\1/p')"
 curl -fsS -X PUT "$CONSUL/v1/agent/service/deregister/cloud-tls"
 wait_until 30 out_of_rotation cloud-tls
 

@@ -46,7 +46,7 @@ Checks added or corrected in review on 2026-09-29 were recorded on amd64: the tw
   ok    backends without a key get none                                    0
   ok    the file ends with #END                                            #END
   ok    a backend with a key is reached over https by default              1
-  ok      ... unless its meta says http (mock-cloud)                       1
+  ok      ... unless its meta says otherwise (mock-cloud's scheme)         http
 
 == Routing through the rendered config
   ok    a model that no backend serves                                     503
