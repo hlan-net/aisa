@@ -22,7 +22,7 @@ PARTS=${1:-"chart manifests"}
 here=$(cd "$(dirname "$0")" && pwd)
 s9=$(cd "$here/../s9-config-rendering" && pwd)
 K=(kubectl -n "$NAMESPACE")
-GATEWAY=http://apisix-gateway
+GATEWAY=apisix-gateway # without a scheme: curl uses http, which is what the cluster serves
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -87,7 +87,7 @@ if ! "${K[@]}" get pod probe >/dev/null 2>&1; then
 fi
 "${K[@]}" wait --for=condition=Ready pod/probe --timeout=180s >/dev/null
 check "the backend answers from the cluster" 200 \
-    "$(in_probe curl -s -o /dev/null -m 10 -w '%{http_code}' "http://$OLLAMA_ADDR/v1/models" || true)"
+    "$(in_probe curl -s -o /dev/null -m 10 -w '%{http_code}' "$OLLAMA_ADDR/v1/models" || true)"
 
 # remove_gateway removes the gateway of an earlier run or part, and waits until its pods are
 # gone: they would answer in place of the new ones.
