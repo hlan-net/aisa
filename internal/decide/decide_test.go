@@ -183,6 +183,28 @@ func TestBodySize(t *testing.T) {
 	}
 }
 
+func TestBodySizeCountsWhatFollowsTheObject(t *testing.T) {
+	// The model comes first; the scan could stop right after it.
+	const obj = `{"model":"qwen3"}`
+	for name, tc := range map[string]struct {
+		body       string
+		wantStatus int
+	}{
+		"white space up to the limit": {obj + strings.Repeat(" ", maxBody-len(obj)), 200},
+		"white space over the limit":  {obj + strings.Repeat(" ", maxBody), 413},
+		"not JSON over the limit":     {`[` + strings.Repeat("x", maxBody), 413},
+	} {
+		h, _ := newHandler(false)
+		req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(tc.body))
+		req.Header.Set("Authorization", "Bearer key-chat")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tc.wantStatus {
+			t.Errorf("%s: status = %d, want %d", name, rec.Code, tc.wantStatus)
+		}
+	}
+}
+
 func TestLargeBodyWithTheHeaderIsNotRead(t *testing.T) {
 	h, _ := newHandler(false)
 	body := &countingReader{r: strings.NewReader(strings.Repeat("x", 1<<20))}

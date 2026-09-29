@@ -101,7 +101,7 @@ type Store struct {
 	log  *slog.Logger
 
 	mu          sync.RWMutex
-	byHash      map[string]Consumer
+	byHash      map[string]entry
 	byName      map[string]entry // replaced as a whole by every load, never changed in place
 	unreadable  int              // consumers that the last successful load could not read
 	loadedAt    time.Time        // last successful load
@@ -133,20 +133,20 @@ func (s *Store) Lookup(ctx context.Context, key string) (Consumer, Result) {
 	if res != Unknown {
 		return c, res
 	}
-	s.mu.RLock()
-	recent := s.opts.Now().Sub(s.lastAttempt) < s.opts.MissRefresh
-	s.mu.RUnlock()
-	if recent {
+	if !s.reloadFor(ctx) {
 		return Consumer{}, Unknown
 	}
-	s.reloadFor(ctx)
 	return s.find(hash)
 }
 
-// reloadFor reloads the consumers for a request with an unknown key, or joins the load in
-// progress, and waits for it no longer than MissTimeout.
-func (s *Store) reloadFor(ctx context.Context) {
-	call, started := s.begin()
+// reloadFor joins the load in progress or, when none began or ended within MissRefresh, starts
+// one, for a request with an unknown key. It waits for that load no longer than MissTimeout,
+// and returns false when there was no load to wait for.
+func (s *Store) reloadFor(ctx context.Context) bool {
+	call, started := s.beginMiss()
+	if call == nil {
+		return false
+	}
 	if started {
 		// Not tied to the request: other requests wait for this load too, and it must not end
 		// because this client went away.
@@ -167,6 +167,7 @@ func (s *Store) reloadFor(ctx context.Context) {
 	case <-t.C:
 	case <-ctx.Done():
 	}
+	return true
 }
 
 func (s *Store) find(hash string) (Consumer, Result) {
@@ -175,8 +176,10 @@ func (s *Store) find(hash string) (Consumer, Result) {
 	if s.loadedAt.IsZero() || s.opts.Now().Sub(s.loadedAt) > s.opts.MaxStale {
 		return Consumer{}, Unavailable
 	}
-	if c, ok := s.byHash[hash]; ok {
-		return c, Found
+	// A consumer that could not be read in the last load has its keys from an earlier one, and
+	// only until they are MaxStale old, also between loads.
+	if e, ok := s.byHash[hash]; ok && s.opts.Now().Sub(e.readAt) <= s.opts.MaxStale {
+		return e.consumer, Found
 	}
 	return Consumer{}, Unknown
 }
@@ -206,7 +209,7 @@ func (s *Store) Run(ctx context.Context) {
 				return
 			}
 			wait = min(retry, s.opts.Refresh)
-			retry *= 2
+			retry = nextRetry(retry, s.opts.Refresh)
 			s.log.Error("loading consumers failed; keeping the ones loaded before",
 				"error", err, "retry_in", wait.String())
 		} else {
@@ -220,6 +223,12 @@ func (s *Store) Run(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// nextRetry doubles the wait after a failed load, up to refresh. It stops doubling there, so
+// a Vault that stays down cannot make the wait overflow.
+func nextRetry(retry, refresh time.Duration) time.Duration {
+	return min(retry*2, refresh)
 }
 
 // Load reads all consumers and replaces the loaded ones, or waits for the load in progress and
@@ -245,9 +254,30 @@ func (s *Store) begin() (call *loadCall, started bool) {
 	if s.inflight != nil {
 		return s.inflight, false
 	}
+	return s.startLocked(), true
+}
+
+// beginMiss is begin for a request with an unknown key: it joins the load in progress, and
+// starts a new one only when the last began or ended at least MissRefresh ago. It returns nil
+// when there is no load to wait for. Both happen under one lock, so a request never misses a
+// load that another one has just started.
+func (s *Store) beginMiss() (call *loadCall, started bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inflight != nil {
+		return s.inflight, false
+	}
+	if s.opts.Now().Sub(s.lastAttempt) < s.opts.MissRefresh {
+		return nil, false
+	}
+	return s.startLocked(), true
+}
+
+// startLocked registers a new load; s.mu must be held.
+func (s *Store) startLocked() *loadCall {
 	s.inflight = &loadCall{done: make(chan struct{})}
 	s.lastAttempt = s.opts.Now()
-	return s.inflight, true
+	return s.inflight
 }
 
 func (s *Store) finish(call *loadCall, err error) {
@@ -340,18 +370,18 @@ func (s *Store) load(ctx context.Context) error {
 
 // index maps the key hashes to their consumers. A hash that two consumers have belongs to
 // neither.
-func (s *Store) index(byName map[string]entry) map[string]Consumer {
-	byHash := make(map[string]Consumer)
+func (s *Store) index(byName map[string]entry) map[string]entry {
+	byHash := make(map[string]entry)
 	dup := make(map[string]bool)
 	for name, e := range byName {
 		for _, h := range e.hashes {
-			if other, ok := byHash[h]; ok && other.Name != name {
+			if other, ok := byHash[h]; ok && other.consumer.Name != name {
 				dup[h] = true
 				s.log.Error("two consumers have the same key hash; neither can use it",
-					"consumer", name, "other", other.Name)
+					"consumer", name, "other", other.consumer.Name)
 				continue
 			}
-			byHash[h] = e.consumer
+			byHash[h] = e
 		}
 	}
 	for h := range dup {

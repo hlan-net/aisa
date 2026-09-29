@@ -287,7 +287,7 @@ const missTimeout = 100 * time.Millisecond
 func newLoadedStore(src Source, o Options) *Store {
 	s := New(src, quiet(), o)
 	s.mu.Lock()
-	s.byHash, s.loadedAt = map[string]Consumer{}, time.Now()
+	s.byHash, s.loadedAt = map[string]entry{}, time.Now()
 	s.mu.Unlock()
 	time.Sleep(2 * time.Millisecond) // past MissRefresh
 	return s
@@ -555,5 +555,77 @@ func TestParseHashes(t *testing.T) {
 		if strings.Join(got, " ") != strings.Join(tc.want, " ") || bad != tc.bad {
 			t.Errorf("%s: %v, %d bad; want %v, %d bad", name, got, bad, tc.want, tc.bad)
 		}
+	}
+}
+
+func TestUnknownKeyJoinsALoadThatHasJustBegun(t *testing.T) {
+	src := &blockingSource{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	src.data = map[string]map[string]any{}
+	s := newLoadedStore(src, Options{
+		Refresh: time.Minute, MissRefresh: time.Hour, MissTimeout: 5 * time.Second, MaxStale: time.Minute,
+	})
+
+	// A load begins, well within MissRefresh of the lookup below, and finds a new consumer.
+	loaded := make(chan error, 1)
+	go func() { loaded <- s.Load(context.Background()) }()
+	<-src.entered
+	src.mu.Lock()
+	src.data["new-app"] = map[string]any{"key_sha256": hashOf("new")}
+	src.mu.Unlock()
+
+	found := make(chan Result, 1)
+	go func() {
+		_, res := s.Lookup(context.Background(), "new")
+		found <- res
+	}()
+	time.Sleep(20 * time.Millisecond) // the lookup is waiting for the load by now
+	close(src.release)
+	if res := <-found; res != Found {
+		t.Errorf("a key that the load in progress finds: %v, want Found", res)
+	}
+	if err := <-loaded; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKeysOfAnUnreadableConsumerExpireBetweenLoads(t *testing.T) {
+	src := &fakeSource{data: map[string]map[string]any{
+		"chat-ui":    {"key_sha256": hashOf("chat")},
+		"batch-jobs": {"key_sha256": hashOf("batch")},
+	}}
+	s, clk := newStore(src)
+	s.opts.MissRefresh = time.Hour // no reload on a miss: the expiry is the lookup's own
+	ctx := context.Background()
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	src.mu.Lock()
+	src.failRead = map[string]error{"batch-jobs": errors.New("permission denied")}
+	src.mu.Unlock()
+	clk.advance(time.Minute)
+	if err := s.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 15 min 1 s after batch-jobs was read, 14 min 1 s after the last load.
+	clk.advance(14*time.Minute + time.Second)
+	if _, res := s.Lookup(ctx, "batch"); res != Unknown {
+		t.Errorf("keys read more than MaxStale ago: %v, want Unknown", res)
+	}
+	if _, res := s.Lookup(ctx, "chat"); res != Found {
+		t.Errorf("the readable consumer: %v, want Found", res)
+	}
+}
+
+func TestRetryStopsDoublingAtRefresh(t *testing.T) {
+	retry := time.Second
+	for range 100 {
+		retry = nextRetry(retry, time.Minute)
+		if retry <= 0 || retry > time.Minute {
+			t.Fatalf("retry = %s, want within (0, 1m]", retry)
+		}
+	}
+	if retry != time.Minute {
+		t.Errorf("retry = %s after 100 failures, want 1m", retry)
 	}
 }

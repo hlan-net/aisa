@@ -145,6 +145,10 @@ func requestedModel(r *http.Request) (string, error) {
 	}
 	body := &limited{r: r.Body, left: maxBody}
 	model, err := modelOf(body)
+	// The scan stops at the end of the object or at an error. Whatever follows still counts
+	// towards the limit, or a body of any size would pass with a short object at its start.
+	// It is discarded, not kept.
+	_, _ = io.Copy(io.Discard, body)
 	if body.exceeded {
 		return "", errBodyTooLarge
 	}
