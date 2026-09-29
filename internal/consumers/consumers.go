@@ -167,37 +167,22 @@ func (s *Store) Load(ctx context.Context) error {
 		return fmt.Errorf("list consumers: %w", err)
 	}
 	byHash := make(map[string]Consumer)
-	owner := make(map[string]string) // hash → consumer name, to find a hash used twice
 	dup := make(map[string]bool)
 	for _, name := range names {
 		if strings.HasSuffix(name, "/") {
 			continue // a subdirectory, not a consumer
 		}
-		data, err := s.src.Read(ctx, name)
-		if errors.Is(err, ErrGone) {
-			continue
-		}
+		c, hashes, err := s.readConsumer(ctx, name)
 		if err != nil {
-			return fmt.Errorf("read consumer %s: %w", name, err)
-		}
-		c := Consumer{Name: name, QuotaProfile: stringField(data, "quota_profile")}
-		hashes, bad := parseHashes(stringField(data, "key_sha256"))
-		if bad > 0 {
-			s.log.Warn("consumer has key_sha256 values that are not SHA-256 hex digests; they are ignored",
-				"consumer", name, "ignored", bad)
-		}
-		if len(hashes) == 0 {
-			s.log.Warn("consumer has no valid key_sha256 and cannot authenticate", "consumer", name)
-			continue
+			return err
 		}
 		for _, h := range hashes {
-			if other, ok := owner[h]; ok && other != name {
+			if other, ok := byHash[h]; ok && other.Name != name {
 				dup[h] = true
 				s.log.Error("two consumers have the same key hash; neither can use it",
-					"consumer", name, "other", other)
+					"consumer", name, "other", other.Name)
 				continue
 			}
-			owner[h] = name
 			byHash[h] = c
 		}
 	}
@@ -211,6 +196,27 @@ func (s *Store) Load(ctx context.Context) error {
 	s.mu.Unlock()
 	s.log.Debug("consumers loaded", "keys", len(byHash))
 	return nil
+}
+
+// readConsumer reads one consumer and its valid key hashes. A consumer deleted in the meantime,
+// or one without a valid hash, has no hashes; only a failed read is an error.
+func (s *Store) readConsumer(ctx context.Context, name string) (Consumer, []string, error) {
+	data, err := s.src.Read(ctx, name)
+	if errors.Is(err, ErrGone) {
+		return Consumer{}, nil, nil
+	}
+	if err != nil {
+		return Consumer{}, nil, fmt.Errorf("read consumer %s: %w", name, err)
+	}
+	hashes, bad := parseHashes(stringField(data, "key_sha256"))
+	if bad > 0 {
+		s.log.Warn("consumer has key_sha256 values that are not SHA-256 hex digests; they are ignored",
+			"consumer", name, "ignored", bad)
+	}
+	if len(hashes) == 0 {
+		s.log.Warn("consumer has no valid key_sha256 and cannot authenticate", "consumer", name)
+	}
+	return Consumer{Name: name, QuotaProfile: stringField(data, "quota_profile")}, hashes, nil
 }
 
 // parseHashes splits a key_sha256 value into hashes. It holds one hash, or several separated by

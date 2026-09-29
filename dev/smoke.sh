@@ -57,7 +57,7 @@ expect "redis: ping" "PONG" "$("${COMPOSE[@]}" exec -T redis redis-cli ping | tr
 
 echo "== aisa: /v1/decide with the consumers in Vault"
 for _ in $(seq 1 30); do
-    [ "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")" = 200 ] && break
+    [[ "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")" == 200 ]] && break
     sleep 1
 done
 expect "aisa: ready (consumers loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
@@ -71,13 +71,14 @@ decide() {
                     tolower($1) == "x-aisa-consumer" { c = $2 } tolower($1) == "x-aisa-model" { m = $2 }
                     END { gsub(/\r/, "", c); gsub(/\r/, "", m); print status, c, m }'
 }
+allowed() { curl -fsS "$AISA/metrics" | awk '$1 == "aisa_decisions_total{consumer=\"chat-ui\",result=\"allow\"}" { n = $2 } END { print n + 0 }'; }
+allowed_before=$(allowed)
 expect "aisa: known key, model from the body" "200 chat-ui qwen3" "$(decide dev-key-chat-ui '{"model":"qwen3"}')"
 expect "aisa: model from X-Aisa-Requested-Model" "200 batch-jobs llama3.2" \
     "$(decide dev-key-batch-jobs '{}' -H 'X-Aisa-Requested-Model: llama3.2')"
 expect "aisa: unknown key" "401  " "$(decide dev-key-nobody '{"model":"qwen3"}')"
 expect "aisa: no model" "400  " "$(decide dev-key-chat-ui '{"messages":[]}')"
-expect "aisa: decisions counted" "1" \
-    "$(curl -fsS "$AISA/metrics" | awk '$1 == "aisa_decisions_total{consumer=\"chat-ui\",result=\"allow\"}" { print $2 }')"
+expect "aisa: decisions counted" "$((allowed_before + 1))" "$(allowed)"
 
 echo "== gateway → decide → backend"
 out=$(chat dev-key-chat-ui '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}')

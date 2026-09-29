@@ -37,53 +37,66 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/")
 
 	if path == "auth/kubernetes/login" && r.Method == http.MethodPost {
-		var in struct{ Role, JWT string }
-		_ = json.NewDecoder(r.Body).Decode(&in)
-		if in.Role != "aisa" || in.JWT != "sa-jwt" {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
-			return
-		}
-		f.logins++
-		f.lastJWT = in.JWT
-		token := "k8s-token-" + string(rune('a'+f.logins))
-		f.valid[token] = true
-		_ = json.NewEncoder(w).Encode(map[string]any{"auth": map[string]any{"client_token": token, "lease_duration": 3600}})
+		f.login(w, r)
 		return
 	}
 	if !f.valid[r.Header.Get("X-Vault-Token")] {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"errors":["permission denied"]}`))
+		writeStatus(w, http.StatusForbidden, `{"errors":["permission denied"]}`)
 		return
 	}
 	switch {
 	case path == "auth/token/lookup-self":
 		_, _ = w.Write([]byte(`{"data":{}}`))
 	case r.Method == "LIST" && strings.HasPrefix(path, "secret/metadata/"):
-		prefix := "secret/" + strings.TrimPrefix(path, "secret/metadata/") + "/"
-		var keys []string
-		for k := range f.secrets {
-			if name, ok := strings.CutPrefix(k, prefix); ok {
-				keys = append(keys, name)
-			}
-		}
-		if len(keys) == 0 {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"errors":[]}`))
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"keys": keys}})
+		f.list(w, strings.TrimPrefix(path, "secret/metadata/"))
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "secret/data/"):
-		data, ok := f.secrets["secret/"+strings.TrimPrefix(path, "secret/data/")]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"errors":[]}`))
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"data": data}})
+		f.read(w, strings.TrimPrefix(path, "secret/data/"))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func (f *fakeVault) login(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Role, JWT string }
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	if in.Role != "aisa" || in.JWT != "sa-jwt" {
+		writeStatus(w, http.StatusBadRequest, `{"errors":["permission denied"]}`)
+		return
+	}
+	f.logins++
+	f.lastJWT = in.JWT
+	token := "k8s-token-" + string(rune('a'+f.logins))
+	f.valid[token] = true
+	_ = json.NewEncoder(w).Encode(map[string]any{"auth": map[string]any{"client_token": token, "lease_duration": 3600}})
+}
+
+func (f *fakeVault) list(w http.ResponseWriter, path string) {
+	prefix := "secret/" + path + "/"
+	var keys []string
+	for k := range f.secrets {
+		if name, ok := strings.CutPrefix(k, prefix); ok {
+			keys = append(keys, name)
+		}
+	}
+	if len(keys) == 0 {
+		writeStatus(w, http.StatusNotFound, `{"errors":[]}`)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"keys": keys}})
+}
+
+func (f *fakeVault) read(w http.ResponseWriter, path string) {
+	data, ok := f.secrets["secret/"+path]
+	if !ok {
+		writeStatus(w, http.StatusNotFound, `{"errors":[]}`)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"data": data}})
+}
+
+func writeStatus(w http.ResponseWriter, status int, body string) {
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
 }
 
 func TestTokenAuthListAndRead(t *testing.T) {

@@ -53,8 +53,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	key, ok := bearer(r.Header.Get("Authorization"))
 	if !ok {
-		h.deny(w, log, http.StatusUnauthorized, metrics.ConsumerUnknown, metrics.ResultDenyAuth,
-			"invalid_request_error", "invalid_api_key", "missing or malformed credential: want Authorization: Bearer <key>")
+		h.deny(w, log, metrics.ConsumerUnknown, denyAuth("missing or malformed credential: want Authorization: Bearer <key>"))
 		return
 	}
 	consumer, res := h.consumers.Lookup(r.Context(), key)
@@ -66,15 +65,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"aisa cannot verify credentials at the moment")
 		return
 	case consumers.Unknown:
-		h.deny(w, log, http.StatusUnauthorized, metrics.ConsumerUnknown, metrics.ResultDenyAuth,
-			"invalid_request_error", "invalid_api_key", "unknown or invalid consumer key")
+		h.deny(w, log, metrics.ConsumerUnknown, denyAuth("unknown or invalid consumer key"))
 		return
 	}
 
 	model := requestedModel(r)
 	if model == "" {
-		h.deny(w, log, http.StatusBadRequest, consumer.Name, metrics.ResultInvalid,
-			"invalid_request_error", "missing_model", "the requested model could not be determined")
+		h.deny(w, log, consumer.Name, denial{
+			status: http.StatusBadRequest, result: metrics.ResultInvalid,
+			typ: "invalid_request_error", code: "missing_model", msg: "the requested model could not be determined",
+		})
 		return
 	}
 
@@ -85,10 +85,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Debug("allow", "consumer", consumer.Name, "model", model)
 }
 
-func (h *Handler) deny(w http.ResponseWriter, log *slog.Logger, status int, consumer, result, typ, code, msg string) {
-	h.metrics.Decisions.WithLabelValues(consumer, result).Inc()
-	log.Info("deny", "status", status, "consumer", consumer, "result", result, "reason", code)
-	writeError(w, status, typ, code, msg)
+// denial is a negative answer: its status, its aisa_decisions_total result and its error body.
+type denial struct {
+	status         int
+	result         string
+	typ, code, msg string
+}
+
+func denyAuth(msg string) denial {
+	return denial{
+		status: http.StatusUnauthorized, result: metrics.ResultDenyAuth,
+		typ: "invalid_request_error", code: "invalid_api_key", msg: msg,
+	}
+}
+
+func (h *Handler) deny(w http.ResponseWriter, log *slog.Logger, consumer string, d denial) {
+	h.metrics.Decisions.WithLabelValues(consumer, d.result).Inc()
+	log.Info("deny", "status", d.status, "consumer", consumer, "result", d.result, "reason", d.code)
+	writeError(w, d.status, d.typ, d.code, d.msg)
 }
 
 // bearer extracts the key from an Authorization header. The scheme is case-insensitive.
