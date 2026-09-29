@@ -1,0 +1,50 @@
+# Spike S9: consul-template renders apisix.yaml into a volume that APISIX reads.
+#   docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s9-config-rendering/compose.override.yaml ...
+# Paths are relative to dev/, the directory of the first compose file.
+services:
+  # A second backend for qwen3, so that one of them can leave the rotation.
+  mock-local-2:
+    image: aisa-dev-tools:local
+    entrypoint: ["/usr/local/bin/mockbackend"]
+    environment:
+      MOCK_NAME: mock-local-2
+      MOCK_MODELS: qwen3
+      MOCK_TTFT: 50ms
+      MOCK_TOKEN_DELAY: 20ms
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/mockbackend", "-healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  consul-template:
+    image: hashicorp/consul-template:0.43.0
+    # The volume belongs to root. On Kubernetes an emptyDir with fsGroup does the same.
+    user: "0"
+    command: ["-config=/spike/consul-template.hcl"]
+    volumes:
+      - ../adapters/apisix/spikes/s9-config-rendering:/spike:ro
+      - rendered:/rendered
+    depends_on:
+      seed-consul: {condition: service_healthy}
+      seed-vault: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "test", "-s", "/rendered/apisix.yaml"]
+      interval: 1s
+      timeout: 1s
+      retries: 60
+
+  apisix:
+    # consul-template replaces the file by renaming a new one over it. A bind mount of the file
+    # itself would keep showing the old one, so the directory is mounted and the config path is
+    # a link into it.
+    entrypoint: ["sh", "-c", "ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start"]
+    volumes: !override
+      - ../adapters/apisix/spikes/s9-config-rendering/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - rendered:/rendered:ro
+    depends_on:
+      consul-template: {condition: service_healthy}
+      mock-local-2: {condition: service_healthy}
+
+volumes:
+  rendered:

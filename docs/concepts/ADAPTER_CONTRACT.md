@@ -105,6 +105,18 @@ Backends (Consul catalog), provider keys (Vault) and model routing live in aisa'
 | LiteLLM (planned second adapter) | `config.yaml` `model_list` | restart or config API |
 | Envoy AI Gateway / Agent Router (possible) | `AIServiceBackend` / `AIGatewayRoute` resources | apply to the cluster |
 
+What a template does, as found in spike S9:
+
+- **Only healthy backends are rendered**, grouped by the models in their service meta. A model without a healthy backend gets an answer from the gateway itself: 503 with an error body, not a missing route.
+- **A backend names its provider key** with the service meta `key`: the name of the secret under `secret/aisa/providers/`. A backend without it gets no key, and **no backend gets the client's `Authorization`**: APISIX's `ai-proxy-multi` forwards the client's headers, so the internal route removes it.
+- **A second hop keeps the request's id.** The internal route of APISIX is a new request with an id of its own, so the client-facing route passes the id it sent to the decision along, and the usage event carries that one.
+- **A request aisa denied is reported by the client-facing route**, because it never reaches the internal one. Its logger runs only for requests without `X-Aisa-Consumer`, so an allowed request still has one event.
+- **A backend is named by its Consul service ID**, which must be unique in the catalog, and **reached over `https` when it has a key**, unless its meta `scheme` says `http` ([`CONSUL.md`](./CONSUL.md#backends-consul-catalog)).
+- **Values from Consul and Vault are rendered as quoted strings**, so a name cannot change the structure of the config.
+- **The rendered file is shared as a directory.** consul-template replaces the file by renaming a new one over it, which a mount of the single file does not show.
+- **The template sets how often secrets are read again** (`default_lease_duration`); it is the time a rotated key takes to reach the gateway.
+- **Nothing checks the rendered config yet** before the gateway loads it; what the adapter must check is an open question ([#18](https://github.com/hlan-net/aisa/issues/18)).
+
 Rendering replaces gateway-specific discovery and secret integrations. APISIX's Vault limitations (KV v1 only, static token) and the question of Consul discovery in `ai-proxy-multi` stop mattering, because the gateway never talks to Vault or Consul itself.
 
 ## 4. Metrics (output of aisa)

@@ -1,0 +1,52 @@
+[
+  {
+    "ID": "mock-local",
+    "Name": "aisa-backend",
+    "Address": "mock-local",
+    "Port": 8080,
+    "Meta": {
+      "provider": "openai-compatible",
+      "models": "qwen3, llama3.2"
+    },
+    "Check": {
+      "CheckID": "service:mock-local",
+      "HTTP": "http://mock-local:8080/healthz",
+      "Interval": "2s",
+      "Timeout": "1s"
+    }
+  },
+  {
+    "ID": "mock-local-2",
+    "Name": "aisa-backend",
+    "Address": "mock-local-2",
+    "Port": 8080,
+    "Meta": {
+      "provider": "openai-compatible",
+      "models": "qwen3"
+    },
+    "Check": {
+      "CheckID": "service:mock-local-2",
+      "HTTP": "http://mock-local-2:8080/healthz",
+      "Interval": "2s",
+      "Timeout": "1s"
+    }
+  },
+  {
+    "ID": "mock-cloud",
+    "Name": "aisa-backend",
+    "Address": "mock-cloud",
+    "Port": 8080,
+    "Meta": {
+      "provider": "openai-compatible",
+      "models": "cloud-large",
+      "key": "cloud",
+      "scheme": "http"
+    },
+    "Check": {
+      "CheckID": "service:mock-cloud",
+      "HTTP": "http://mock-cloud:8080/healthz",
+      "Interval": "2s",
+      "Timeout": "1s"
+    }
+  }
+]

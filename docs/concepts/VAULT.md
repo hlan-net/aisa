@@ -40,7 +40,7 @@ Clients authenticate with **JWTs from Vault's identity/OIDC provider** instead o
 ```
 secret/aisa/providers/openai   api_key=<key>
 ```
-consul-template renders these into the gateway config (for APISIX, the `ai-proxy-multi` `auth.header`) inside the pod. The rendered file is on an in-memory `emptyDir` and never written to disk.
+A backend in Consul names its secret with the service meta `key` (`key = "openai"` for the one above). consul-template renders these into the gateway config (for APISIX, the `ai-proxy-multi` `auth.header`) inside the pod. It reads a secret again after `default_lease_duration`, which the template sets: a rotated key reaches the gateway within that time (spike S9). The rendered file is on an in-memory `emptyDir` and never written to disk.
 
 Where the provider supports it, dynamic credentials are better than static keys, e.g. Azure OpenAI through Vault's Azure secrets engine.
 

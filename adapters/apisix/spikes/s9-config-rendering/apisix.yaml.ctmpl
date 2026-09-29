@@ -1,0 +1,155 @@
+# Rendered by consul-template from the Consul catalog (service aisa-backend) and Vault
+# (secret/aisa/providers/*). Do not edit: the next render replaces this file.
+#
+#   client           the client-facing route: pre-step, forward-auth, then the internal listener
+#   model-<name>     one per model that a healthy backend serves, on the internal listener
+#   no-backend       answers 503 for every other model
+{{- range service "aisa-backend" }}
+  {{- range (index .ServiceMeta "models" | split ",") }}
+    {{- $model := . | trimSpace }}
+    {{- if $model }}{{ scratch.MapSet "models" $model $model }}{{ end }}
+  {{- end }}
+{{- end }}
+
+routes:
+  - id: client
+    uri: /v1/chat/completions
+    methods: [POST]
+    vars: [["server_port", "==", "9080"]]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              -- Adapter rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+              local model
+              local body = core.request.get_body()
+              if body then
+                local t = core.json.decode(body)
+                if type(t) == "table" and type(t.model) == "string" then
+                  model = t.model
+                end
+              end
+              core.request.set_header(ctx, "X-Aisa-Requested-Model", model)
+              -- The internal hop is a new request with an id of its own; its usage event carries this one,
+              -- the id sent to the decision.
+              core.request.set_header(ctx, "X-Aisa-Request-Id", ctx.var.apisix_request_id)
+            end
+      forward-auth:
+        uri: http://stub-aisa:8080/v1/decide
+        request_method: GET
+        request_headers: [Authorization, X-Aisa-Requested-Model]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type]
+        extra_headers:
+          X-Request-Id: $apisix_request_id
+        status_on_error: 503
+      # A request aisa denied (or could not decide) ends here, so this route reports it. The
+      # filter is true only without X-Aisa-Consumer, which forward-auth sets on an allowed request,
+      # whose event comes from the internal route.
+      http-logger:
+        _meta:
+          filter: [["http_x_aisa_consumer", "!", "~~", "."]]
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format:
+          ts: $time_iso8601
+          request_id: $apisix_request_id
+          consumer: $http_x_aisa_consumer
+          requested_model: $http_x_aisa_requested_model
+          status: $status
+    upstream:
+      type: roundrobin
+      # The default 60 s read timeout would end a slow stream on the internal hop.
+      timeout: {connect: 5, send: 600, read: 600}
+      nodes:
+        "127.0.0.1:9081": 1
+{{ range scratch.MapValues "models" }}{{ $model := . }}
+  - id: {{ printf "model-%s" $model | toJSON }}
+    uri: /v1/chat/completions
+    methods: [POST]
+    priority: 10
+    vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "==", {{ $model | toJSON }}]]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              -- ai-proxy-multi forwards the client's headers and only overlays auth.header, so the
+              -- client's credential would reach every backend without a provider key.
+              require("apisix.core").request.set_header(ctx, "Authorization", nil)
+            end
+      ai-proxy-multi:
+        timeout: 600000
+        instances:
+        {{- range service "aisa-backend" }}
+          {{- $serves := false }}
+          {{- range (index .ServiceMeta "models" | split ",") }}{{ if eq (. | trimSpace) $model }}{{ $serves = true }}{{ end }}{{ end }}
+          {{- if $serves }}
+          - name: {{ .ID | toJSON }}
+            provider: {{ index .ServiceMeta "provider" | toJSON }}
+            weight: 1
+            {{- if index .ServiceMeta "key" }}
+            {{- with secret (printf "secret/data/aisa/providers/%s" (index .ServiceMeta "key")) }}
+            auth: {header: {Authorization: {{ printf "Bearer %s" .Data.data.api_key | toJSON }}}}
+            {{- end }}
+            {{- else }}
+            # ai-proxy-multi requires auth; this backend needs none.
+            auth: {header: {X-Aisa-No-Key: "1"}}
+            {{- end }}
+            options: {model: {{ $model | toJSON }}}
+            {{- /* A backend with a key is a remote provider: https unless its meta says otherwise. */}}
+            {{- $scheme := "http" }}
+            {{- if index .ServiceMeta "key" }}{{ $scheme = "https" }}{{ end }}
+            {{- with index .ServiceMeta "scheme" }}{{ if eq . "http" "https" }}{{ $scheme = . }}{{ end }}{{ end }}
+            override: {endpoint: {{ printf "%s://%s:%d/v1/chat/completions" $scheme .Address .Port | toJSON }}}
+          {{- end }}
+        {{- end }}
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format:
+          ts: $time_iso8601
+          request_id: $http_x_aisa_request_id
+          consumer: $http_x_aisa_consumer
+          model: $llm_model
+          requested_model: $request_llm_model
+          backend: $balancer_ip
+          prompt_tokens: $llm_prompt_tokens
+          completion_tokens: $llm_completion_tokens
+          status: $status
+          latency_ms: $apisix_upstream_response_time
+          ttft_ms: $llm_time_to_first_token
+          stream: $llm_stream
+{{ end }}
+  - id: no-backend
+    uri: /v1/chat/completions
+    methods: [POST]
+    priority: 0
+    vars: [["server_port", "==", "9081"]]
+    plugins:
+      fault-injection:
+        abort:
+          http_status: 503
+          body: '{"error":{"message":"no healthy backend serves this model","type":"no_backend"}}'
+      http-logger:
+        uri: http://stub-aisa:8080/v1/usage
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format:
+          ts: $time_iso8601
+          request_id: $http_x_aisa_request_id
+          consumer: $http_x_aisa_consumer
+          requested_model: $http_x_aisa_requested_model
+          status: $status
+#END

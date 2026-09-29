@@ -10,7 +10,8 @@ Model backends are registered as Consul services. Many of them run outside Kuber
 
 ```hcl
 resource "consul_service" "ollama_1" {
-  name = "aisa-backend"
+  name       = "aisa-backend"
+  service_id = "ollama-1"   # unique in the catalog: the backend's name in usage events
   node = consul_node.gpu_box.name
   port = 11434
   tags = ["ollama", "local"]
@@ -18,6 +19,8 @@ resource "consul_service" "ollama_1" {
     provider = "openai-compatible"
     models   = "qwen3,phi4-reasoning,qwen2.5-coder"
     priority = "1"
+    # key    = "openai"   for a backend that needs an API key: the secret's name in Vault
+    # scheme = "https"    http or https; https by default for a backend with a key, else http
   }
   check {
     name     = "ollama"
@@ -31,7 +34,10 @@ resource "consul_service" "ollama_1" {
 
 - All backends use one service name (`aisa-backend`), and **service meta** describes each one. The adapter template turns them into gateway routes (for APISIX, `ai-proxy-multi` instances grouped by model).
 - Cloud providers are registered the same way (an external node such as `api.openai.com`), so every backend is discoverable in one place.
-- A failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically.
+- Each backend has a **service ID that is unique in the whole catalog**, not only on its node: it is the backend's name in the rendered config and in usage events, where aisa looks up its provider and prices. The Terraform provider defaults the ID to the service name, which all backends share, so the module must set `service_id`.
+- The meta `scheme` says how the gateway reaches a backend, `http` or `https`. It defaults to `https` for a backend with a key, so a provider key is not sent in the clear by accident, and to `http` for the others.
+- A backend that needs an API key names it with the meta `key`: the secret `secret/aisa/providers/<key>` in Vault ([`VAULT.md`](./VAULT.md#provider-keys)).
+- A failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically. Until then, requests sent to it fail. That window is the check's interval and timeout, plus the template's quiet period and the gateway's reload: with a 2 s interval it was about 3 s (spike S9). Requests already sent to the backend can wait until the gateway's timeout.
 
 ## Prices and budgets: Consul KV
 
