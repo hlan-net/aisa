@@ -7,6 +7,7 @@
 //	STUB_KEYS      key=consumer pairs, comma-separated          dev-key-chat=chat-ui,dev-key-batch=batch-jobs
 //	STUB_REWRITES  consumer:from=to rules, comma-separated     batch-jobs:cloud-large=qwen3
 //	STUB_DENY      consumers that get 429, comma-separated     blocked
+//	STUB_CAPACITY  requests kept for /debug/requests           1000 (the default)
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/hlan-net/aisa/dev/internal/devutil"
@@ -68,6 +70,13 @@ func configFromEnv() (Config, error) {
 		cfg.Rewrites[consumer][from] = to
 	}
 	cfg.Deny = splitList(os.Getenv("STUB_DENY"))
+	if v := os.Getenv("STUB_CAPACITY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return cfg, fmt.Errorf("STUB_CAPACITY: want a positive integer, got %q", v)
+		}
+		cfg.Capacity = n
+	}
 	return cfg, nil
 }
 

@@ -1,0 +1,51 @@
+# Spikes S7 + S10: two more mock backends and a consul-template next to APISIX and the stub aisa.
+#   docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s7-s10-footprint/compose.override.yaml ...
+# Paths are relative to dev/, the directory of the first compose file.
+services:
+  # Streams like a model: 200 ms to the first token, then 50 tokens a second.
+  mock-stream:
+    image: aisa-dev-tools:local
+    entrypoint: ["/usr/local/bin/mockbackend"]
+    environment:
+      MOCK_NAME: mock-stream
+      MOCK_MODELS: qwen3
+      MOCK_TTFT: 200ms
+      MOCK_TOKEN_DELAY: 20ms
+    healthcheck: &tool-health
+      test: ["CMD", "/usr/local/bin/mockbackend", "-healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # Answers at once, so the latency that is left is the gateway's.
+  mock-fast:
+    image: aisa-dev-tools:local
+    entrypoint: ["/usr/local/bin/mockbackend"]
+    environment:
+      MOCK_NAME: mock-fast
+      MOCK_MODELS: llama3.2
+      MOCK_TTFT: 0s
+      MOCK_TOKEN_DELAY: 0s
+    healthcheck: *tool-health
+
+  consul-template:
+    image: hashicorp/consul-template:0.43.0
+    command:
+      - -consul-addr=consul:8500
+      - -template=/spike/backends.ctmpl:/tmp/backends.yaml
+    volumes:
+      - ../adapters/apisix/spikes/s7-s10-footprint/backends.ctmpl:/spike/backends.ctmpl:ro
+    depends_on:
+      seed-consul: {condition: service_healthy}
+
+  stub-aisa:
+    environment:
+      # Keep every request of a load phase, so run.sh can count the usage events.
+      STUB_CAPACITY: "20000"
+
+  apisix:
+    environment:
+      APISIX_WORKERS: ${APISIX_WORKERS:-auto}
+    depends_on:
+      mock-stream: {condition: service_healthy}
+      mock-fast: {condition: service_healthy}

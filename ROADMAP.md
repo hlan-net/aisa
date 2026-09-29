@@ -7,12 +7,13 @@ aisa gives every application an identity, a quota and a budget, and keeps the bo
 
 ---
 
-## Current state: design phase
+## Current state: early development
 
 - Architecture and the three aisa ↔ gateway contracts are written down ([docs/concepts/](docs/concepts/))
 - Quotas, money budgets and usage metrics are specified ([docs/features/](docs/features/))
-- Open questions are listed as spikes ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S8 and S6 are answered, S2 in part
+- Open questions are listed as spikes ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S6, S7, S8, S9 and S10 are answered, S2 in part
 - Local dev stack with a mock backend and a stub aisa ([dev/](dev/))
+- aisa is a skeleton: it starts, reports its health and exports metrics, and decides nothing yet ([cmd/aisa/](cmd/aisa/))
 
 ---
 
@@ -25,19 +26,19 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 1 | `feature/dev-environment` | Docker Compose dev stack, mock backend, stub aisa that logs what it receives | Done ([#7](https://github.com/hlan-net/aisa/pull/7)) |
 | 2 | `spike/forward-auth-model` | S8: model name to `/v1/decide`, routing by `X-Aisa-Model` | Done ([#8](https://github.com/hlan-net/aisa/pull/8)): works with an internal hop |
 | 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | Done ([#13](https://github.com/hlan-net/aisa/pull/13)): S6 yes; S2 exact only when usage is streamed ([#12](https://github.com/hlan-net/aisa/issues/12)), confirmed against a real Ollama |
-| 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | In review: reloads are clean and take 1 to 2 s; the rendered file needs a guard ([#18](https://github.com/hlan-net/aisa/issues/18)) |
-| 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | — |
-| 6 | `claude/sonarqube-pr-scan-66r8m0` | SonarQube scan with Go coverage for PRs and `main` | In review ([#15](https://github.com/hlan-net/aisa/pull/15)): coverage needs `SONAR_TOKEN` |
+| 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | In review ([#19](https://github.com/hlan-net/aisa/pull/19)): reloads are clean and take 1 to 2 s; the rendered file needs a guard ([#18](https://github.com/hlan-net/aisa/issues/18)) |
+| 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | Done ([#17](https://github.com/hlan-net/aisa/pull/17)): fits a small node with one nginx worker; `forward-auth` adds 0.3 to 2 ms. Measured on a Raspberry Pi 5 |
+| 6 | `claude/sonarqube-pr-scan-66r8m0` | SonarQube scan with Go coverage for PRs and `main` | Done ([#15](https://github.com/hlan-net/aisa/pull/15)): coverage needs `SONAR_TOKEN` |
 
 ## v0.2.0: First version (token quotas)
 
 | PR | Branch | Scope | Status |
 |----|--------|-------|--------|
-| 1 | `feature/core-skeleton` | `cmd/aisa`, config, health endpoints, `aisa_*` metrics registry, CI | — |
+| 1 | `feature/core-skeleton` | `cmd/aisa`, config, health endpoints, `aisa_*` metrics registry, the product `Dockerfile`, CI | Done ([#20](https://github.com/hlan-net/aisa/pull/20)) |
 | 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) and fail policies | — |
 | 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | — |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | — |
-| 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend | — |
+| 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | — |
 | 6 | `feature/terraform-module` | Vault mount, policies and roles; Consul ACLs, KV and backend registrations | — |
 | 7 | `feature/dashboard` | Grafana dashboard and alert rules | — |
 

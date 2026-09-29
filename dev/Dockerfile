@@ -1,6 +1,6 @@
 # Image with the dev stack tools (mockbackend, stubaisa). Built for linux/amd64 and linux/arm64:
 # the Go build runs on the build platform and cross-compiles, so no emulation is needed.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
