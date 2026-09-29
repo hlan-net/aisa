@@ -154,16 +154,51 @@ func TestParseEventsRejects(t *testing.T) {
 		"number":              `123`,
 		"boolean":             `true`,
 		"invalid json":        `{not json`,
-		"array of non-object":   `[1, 2, 3]`,
-		"array invalid json":    `[{"r": 1}, invalid]`,
-		"fractional string int": `{"prompt_tokens": "1.9"}`,
-		"fractional json int":   `{"prompt_tokens": 1.9}`,
-		"float +Inf":            `{"latency_ms": "+Inf"}`,
-		"float -Inf":            `{"latency_ms": "-Inf"}`,
-		"float NaN":             `{"latency_ms": "NaN"}`,
+		"array invalid json":  `[{"r": 1}, invalid]`,
+		"array trailing data": `[{"r": 1}] {}`,
+		"array unterminated":  `[{"r": 1},`,
 	} {
 		if _, err := ParseEvents([]byte(in)); err == nil {
 			t.Errorf("%s: want error for %q", name, in)
+		}
+	}
+}
+
+// A well-formed event with a value that cannot be parsed is returned with its error, so that
+// only that event is rejected.
+func TestParseEventsValueErrors(t *testing.T) {
+	for name, in := range map[string]string{
+		"fractional string int": `{"request_id": "r", "prompt_tokens": "1.9"}`,
+		"fractional json int":   `{"request_id": "r", "prompt_tokens": 1.9}`,
+		"not a number":          `{"request_id": "r", "prompt_tokens": "abc"}`,
+		"float +Inf":            `{"request_id": "r", "latency_ms": "+Inf"}`,
+		"float -Inf":            `{"request_id": "r", "latency_ms": "-Inf"}`,
+		"float NaN":             `{"request_id": "r", "latency_ms": "NaN"}`,
+		"invalid bool":          `{"request_id": "r", "stream": "yes"}`,
+		"string field a number": `{"request_id": "r", "consumer": 5}`,
+	} {
+		for _, body := range []string{in, "[" + in + "]"} {
+			events, err := ParseEvents([]byte(body))
+			if err != nil || len(events) != 1 {
+				t.Errorf("%s: ParseEvents(%s) = %d events, %v; want 1 event", name, body, len(events), err)
+				continue
+			}
+			if err := validateEvent(events[0]); err == nil {
+				t.Errorf("%s: event of %s is valid, want an error", name, body)
+			}
+			if events[0].RequestID != "r" {
+				t.Errorf("%s: request_id = %q, want r for the log", name, events[0].RequestID)
+			}
+		}
+	}
+
+	events, err := ParseEvents([]byte(`[1, "x", {"request_id": "ok", "status": 200}]`))
+	if err != nil || len(events) != 3 {
+		t.Fatalf("array with values that are not objects: %d events, %v; want 3", len(events), err)
+	}
+	for i, want := range []bool{false, false, true} {
+		if valid := validateEvent(events[i]) == nil; valid != want {
+			t.Errorf("event %d valid = %v, want %v", i, valid, want)
 		}
 	}
 }

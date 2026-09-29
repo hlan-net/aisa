@@ -11,6 +11,7 @@ Full list in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#4-metrics-o
 - `aisa_requests_total`, `aisa_tokens_total{direction}`, `aisa_cost_total`
 - `aisa_budget_limit`, `aisa_budget_spent`
 - `aisa_latency_seconds`, `aisa_ttft_seconds`
+- `aisa_usage_events_total{result}` (`accepted`, `duplicate`, `rejected`) and `aisa_usage_requests_rejected_total{reason}` for usage requests rejected as a whole (`malformed`, `too_large`, `unreadable`, `method`)
 - `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `unavailable` (aisa cannot verify credentials and answers 503, under the consumer `unknown`), `deny_quota`, `deny_budget`, `downgrade`
 
 Cost is computed in aisa from the Consul prices, so no Prometheus rules with hardcoded prices are needed.
@@ -60,4 +61,5 @@ Shipped as a `PrometheusRule`:
 | `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |
 | `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h |
+| `AisaUsageRequestsRejected` | `aisa_usage_requests_rejected_total` increases: the adapter sends usage aisa cannot read, and the log sink drops it after its retries |
 | `AisaSlowFirstToken` | p95 time to first token > 20 s for 15 min (model too large for the backend, or the backend is swapping) |

@@ -38,7 +38,7 @@ func New(m *metrics.Metrics, dedup *Dedup, log *slog.Logger) *Handler {
 // ServeHTTP answers POST /v1/usage.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed: want POST"})
+		h.rejectRequest(w, http.StatusMethodNotAllowed, metrics.UsageRequestMethod, "method not allowed: want POST")
 		return
 	}
 
@@ -48,18 +48,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			h.log.Warn("usage request rejected: body too large", "limit_bytes", maxBody)
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+			h.rejectRequest(w, http.StatusRequestEntityTooLarge, metrics.UsageRequestTooLarge, "request body too large")
 			return
 		}
 		h.log.Warn("usage request rejected: unreadable body", "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		h.rejectRequest(w, http.StatusBadRequest, metrics.UsageRequestUnreadable, err.Error())
 		return
 	}
 
 	events, err := ParseEvents(body)
 	if err != nil {
 		h.log.Warn("usage request rejected: malformed events", "error", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		h.rejectRequest(w, http.StatusBadRequest, metrics.UsageRequestMalformed, err.Error())
 		return
 	}
 
@@ -86,8 +86,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]int{"accepted": accepted, "rejected": rejected})
 }
 
+// rejectRequest answers a usage request that is rejected as a whole, and counts it: none of its
+// events reach aisa_usage_events_total.
+func (h *Handler) rejectRequest(w http.ResponseWriter, status int, reason, msg string) {
+	h.metrics.UsageRequestsRejected.WithLabelValues(reason).Inc()
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
 // validateEvent verifies that required fields and numeric bounds conform to the usage contract.
 func validateEvent(ev Event) error {
+	if ev.parseErr != nil {
+		return ev.parseErr
+	}
 	if strings.TrimSpace(ev.RequestID) == "" {
 		return errors.New("missing request_id")
 	}

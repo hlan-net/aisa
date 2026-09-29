@@ -178,12 +178,54 @@ func TestHandlerRejects(t *testing.T) {
 		t.Errorf("GET status = %d, want 405", recGet.Code)
 	}
 
-	// Malformed JSON
-	reqBad := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader("bad-json"))
-	recBad := httptest.NewRecorder()
-	h.ServeHTTP(recBad, reqBad)
-	if recBad.Code != http.StatusBadRequest {
-		t.Errorf("bad JSON status = %d, want 400", recBad.Code)
+	// Malformed JSON, and an array whose structure is broken after a valid event
+	for _, body := range []string{"bad-json", `[{"request_id":"a","status":200}, invalid]`} {
+		reqBad := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body))
+		recBad := httptest.NewRecorder()
+		h.ServeHTTP(recBad, reqBad)
+		if recBad.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", body, recBad.Code)
+		}
+	}
+
+	for reason, want := range map[string]float64{metrics.UsageRequestMethod: 1, metrics.UsageRequestMalformed: 2} {
+		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != want {
+			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want %v", reason, got, want)
+		}
+	}
+	if n := testutil.CollectAndCount(m.UsageEvents); n != 0 {
+		t.Errorf("aisa_usage_events_total has %d series, want 0: no event was read", n)
+	}
+}
+
+// An event with a value that cannot be parsed is rejected alone; the rest of its batch is
+// recorded (#27).
+func TestHandlerValueErrorRejectsOnlyItsEvent(t *testing.T) {
+	m := metrics.New("test")
+	h := New(m, NewDedup(100, 5*time.Minute), slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	body := `[
+		{"request_id":"a","consumer":"chat-ui","model":"qwen3","backend":"ollama-1","status":200,"prompt_tokens":7},
+		{"request_id":"b","status":200,"prompt_tokens":"abc"},
+		{"request_id":"c","status":200,"latency_ms":"NaN"},
+		{"request_id":"d","status":200,"stream":"yes"},
+		{"request_id":"e","status":200,"prompt_tokens":1.9}
+	]`
+	req := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"accepted":1,"rejected":4}` {
+		t.Fatalf("answer = %d %s, want 200 {\"accepted\":1,\"rejected\":4}", rec.Code, rec.Body)
+	}
+	if got := testutil.ToFloat64(m.Tokens.WithLabelValues("chat-ui", "qwen3", "ollama-1", metrics.DirectionPrompt)); got != 7 {
+		t.Errorf("prompt tokens of the valid event = %v, want 7", got)
+	}
+	if got := testutil.ToFloat64(m.UsageEvents.WithLabelValues(metrics.EventRejected)); got != 4 {
+		t.Errorf("aisa_usage_events_total{rejected} = %v, want 4", got)
+	}
+	if n := testutil.CollectAndCount(m.UsageRequestsRejected); n != 0 {
+		t.Errorf("aisa_usage_requests_rejected_total has %d series, want 0", n)
 	}
 }
 
@@ -205,5 +247,8 @@ func TestHandlerBodyTooLarge(t *testing.T) {
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 413", rec.Code)
+	}
+	if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(metrics.UsageRequestTooLarge)); got != 1 {
+		t.Errorf("aisa_usage_requests_rejected_total{too_large} = %v, want 1", got)
 	}
 }

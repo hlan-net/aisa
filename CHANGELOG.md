@@ -9,6 +9,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 ### Added
 - **Usage ledger** (`POST /v1/usage`): aisa ingests normalized usage events from gateways, deduplicates retried events by `request_id` using an in-memory bounded LRU cache with TTL (`AISA_LEDGER_DEDUP_CAPACITY`, `AISA_LEDGER_DEDUP_TTL`), and updates `aisa_requests_total`, `aisa_tokens_total`, `aisa_latency_seconds`, `aisa_ttft_seconds`, and `aisa_usage_events_total{result="accepted|duplicate|rejected"}`. It accepts both single JSON event objects and arrays of up to 10 000 events, skips and warns on invalid events without dropping valid ones in the batch (answering `200 OK` with `{"accepted": n, "rejected": m}`), parses numbers and booleans flexibly as numbers, booleans or strings, accounts events without a consumer under `unknown`, and safely ignores unknown fields without logging credentials.
 
+### Fixed
+- **Usage ledger:** an event whose field value cannot be parsed (e.g. `"prompt_tokens": "abc"`, `"latency_ms": "NaN"`, `"stream": "yes"`) is now rejected on its own, like an event that fails validation, instead of rejecting its whole batch with 400; the valid events of the batch are recorded ([#27](https://github.com/hlan-net/aisa/issues/27)). Usage requests rejected as a whole (400, 405, 413) are counted in the new metric `aisa_usage_requests_rejected_total{reason}`.
+
 ## [0.1.0] - 2026-09-29
 
 The first release: the design, the answered spikes, the dev stack and the start of aisa itself. The image `ghcr.io/hlan-net/aisa:v0.1.0` authenticates consumers with the decision API; quotas and budgets are not enforced yet.
