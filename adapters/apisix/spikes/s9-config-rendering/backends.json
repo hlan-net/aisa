@@ -39,7 +39,8 @@
     "Meta": {
       "provider": "openai-compatible",
       "models": "cloud-large",
-      "key": "cloud"
+      "key": "cloud",
+      "scheme": "http"
     },
     "Check": {
       "CheckID": "service:mock-cloud",

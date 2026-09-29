@@ -20,10 +20,11 @@ docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s9-config-rendering
 
 | Source | Used for |
 |---|---|
-| Consul service `aisa-backend`, healthy instances only | One `ai-proxy-multi` instance per backend and model |
+| Consul service `aisa-backend`, healthy instances only | One `ai-proxy-multi` instance per backend and model, named by the service ID |
 | Service meta `models` | The models of a backend, comma-separated; spaces around the names are ignored |
 | Service meta `provider` | The instance's `provider` |
 | Service meta `key`, optional | The name of the Vault secret `secret/aisa/providers/<key>`, whose `api_key` becomes the instance's `Authorization` header |
+| Service meta `scheme`, optional | `http` or `https` for the endpoint; `https` by default for a backend with a key, else `http`. The mock-cloud backend sets `http` |
 
 Every value from Consul or Vault is written with `toJSON`, so a name with a quote or a colon in it cannot change the structure of the file.
 
@@ -35,7 +36,7 @@ consul-template writes a new file and renames it over the old one. A bind mount 
 
 ## Output of the recorded run (2026-09-28, APISIX 3.18.0, consul-template 0.43.0, arm64)
 
-The five checks after "who served what" were added on 2026-09-29 and recorded on amd64.
+Checks added or corrected in review on 2026-09-29 were recorded on amd64: the two about `https`, the five after "who served what", and "no routes at all". The first recording of that one said APISIX kept its routes; it was wrong, because consul-template wrote the good file back within seconds and the script did not count failures in that section. The broken files are now written with consul-template paused.
 
 ```
 == Rendering: backends from the Consul catalog, the provider key from Vault
@@ -44,6 +45,8 @@ The five checks after "who served what" were added on 2026-09-29 and recorded on
   ok    the key of mock-cloud comes from Vault                             1
   ok    backends without a key get none                                    0
   ok    the file ends with #END                                            #END
+  ok    a backend with a key is reached over https by default              1
+  ok      ... unless its meta says http (mock-cloud)                       1
 
 == Routing through the rendered config
   ok    a model that no backend serves                                     503
@@ -96,7 +99,7 @@ The five checks after "who served what" were added on 2026-09-29 and recorded on
 == A broken file: what APISIX does with it
   ok    invalid YAML: request for qwen3                                    200
   ok    no #END at the end (a file cut short): request for qwen3           200
-  ok    no routes at all (APISIX keeps the ones it has): request for qwen3 200
+  ok    no routes at all: loaded, every request 404: request for qwen3     404
   ok    one route invalid (the client route): request for qwen3            404
   ok    the good file again: request for qwen3                             200
 

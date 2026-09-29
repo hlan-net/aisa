@@ -107,7 +107,11 @@ routes:
             auth: {header: {X-Aisa-No-Key: "1"}}
             {{- end }}
             options: {model: {{ $model | toJSON }}}
-            override: {endpoint: {{ printf "http://%s:%d/v1/chat/completions" .Address .Port | toJSON }}}
+            {{- /* A backend with a key is a remote provider: https unless its meta says otherwise. */}}
+            {{- $scheme := "http" }}
+            {{- if index .ServiceMeta "key" }}{{ $scheme = "https" }}{{ end }}
+            {{- with index .ServiceMeta "scheme" }}{{ if eq . "http" "https" }}{{ $scheme = . }}{{ end }}{{ end }}
+            override: {endpoint: {{ printf "%s://%s:%d/v1/chat/completions" $scheme .Address .Port | toJSON }}}
           {{- end }}
         {{- end }}
       http-logger:

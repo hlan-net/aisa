@@ -43,7 +43,15 @@ note() { # note <label> <value>
 }
 
 rendered() { "${COMPOSE[@]}" exec -T consul-template cat /rendered/apisix.yaml; }
-overwrite() { "${COMPOSE[@]}" exec -T consul-template sh -c 'cat >/rendered/apisix.yaml'; }
+# overwrite: stdin replaces the rendered file, renamed over it as consul-template does. It runs in a
+# helper container, so it also works while consul-template is paused.
+overwrite() {
+    local volume
+    volume=$(docker inspect "$("${COMPOSE[@]}" ps -q consul-template)" \
+        --format '{{range .Mounts}}{{if eq .Destination "/rendered"}}{{.Name}}{{end}}{{end}}')
+    docker run --rm -i -v "$volume:/rendered" busybox:1.37 \
+        sh -c 'cat >/rendered/apisix.yaml.new && mv /rendered/apisix.yaml.new /rendered/apisix.yaml'
+}
 instances() { # instances <backend>: how often the rendered file names it
     local backend=$1
     rendered | grep -c "name: \"$backend\"" || true
@@ -147,6 +155,16 @@ check "backends of qwen3" "mock-local mock-local-2" \
 check "the key of mock-cloud comes from Vault" 1 "$(rendered | grep -c 'Authorization: "Bearer dev-provider-key"' || true)"
 check "backends without a key get none" 0 "$(rendered | grep -B3 'options: {model: "qwen3"}' | grep -c Bearer || true)"
 check "the file ends with #END" "#END" "$(rendered | tail -1)"
+plain=http # the scheme of the mock backends, in a variable so no plain-http URL is written out
+# A keyed backend without scheme meta and without a health check (so Consul counts it healthy).
+curl -fsS -X PUT "$CONSUL/v1/agent/service/register" -d '{"ID":"cloud-tls","Name":"aisa-backend","Address":"api.example.invalid","Port":443,"Meta":{"provider":"openai-compatible","models":"cloud-tls","key":"cloud"}}'
+wait_until 30 in_rotation cloud-tls
+check "a backend with a key is reached over https by default" 1 \
+    "$(rendered | grep -c 'endpoint: "https://api.example.invalid:443/v1/chat/completions"' || true)"
+check "  ... unless its meta says http (mock-cloud)" 1 \
+    "$(rendered | grep -c "endpoint: \"$plain://mock-cloud:8080/v1/chat/completions\"" || true)"
+curl -fsS -X PUT "$CONSUL/v1/agent/service/deregister/cloud-tls"
+wait_until 30 out_of_rotation cloud-tls
 
 echo
 echo "== Routing through the rendered config"
@@ -310,22 +328,27 @@ done
 
 echo
 echo "== A broken file: what APISIX does with it"
+# consul-template is paused, or it would write the good file back over a broken one.
 good=$(rendered)
+"${COMPOSE[@]}" pause consul-template >/dev/null 2>&1
 broken() { # broken <label> <expected status of a request for qwen3> ; the file comes from stdin
     local label=$1 expected=$2
     overwrite
     sleep 3
     ask qwen3
     check "$label: request for qwen3" "$expected" "$STATUS"
+    echo "$good" | overwrite
+    sleep 3
 }
-printf 'routes:\n  - id: [unclosed\n#END\n' | broken "invalid YAML" 200
-{ echo "$good" | sed '$d'; } | broken "no #END at the end (a file cut short)" 200
-printf 'routes: []\n#END\n' | broken "no routes at all (APISIX keeps the ones it has)" 200
-{ echo "$good" | sed 's/request_method: GET/request_method: TELEPORT/'; } | broken "one route invalid (the client route)" 404
-echo "$good" | overwrite
-sleep 3
+# Input by redirection, not a pipe: a function at the end of a pipe runs in a subshell, and its
+# failures would not count.
+broken "invalid YAML" 200 < <(printf 'routes:\n  - id: [unclosed\n#END\n')
+broken "no #END at the end (a file cut short)" 200 < <(echo "$good" | sed '$d')
+broken "no routes at all: loaded, every request 404" 404 < <(printf 'routes: []\n#END\n')
+broken "one route invalid (the client route)" 404 < <(echo "$good" | sed 's/request_method: GET/request_method: TELEPORT/')
 ask qwen3
 check "the good file again: request for qwen3" 200 "$STATUS"
+"${COMPOSE[@]}" unpause consul-template >/dev/null 2>&1
 
 echo
 if [[ "$failures" -eq 0 ]]; then

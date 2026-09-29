@@ -130,13 +130,13 @@ What was verified:
 3. **A change reaches the gateway in 1 to 2 s**: consul-template's quiet period of 1 s, and APISIX looks at the file once a second. After that nothing is sent to a backend that left.
 4. **A rotated provider key arrives after `default_lease_duration`**: 9 s with the 10 s set in the spike. The default is 5 minutes, since a KV secret has no lease.
 5. **When Consul or Vault cannot be reached, the last config stays** and consul-template keeps running and retrying.
-6. **A broken file is partly caught.** APISIX keeps its routes when the file is invalid YAML, lacks the final `#END` or has no routes at all. **But a file with one invalid route is loaded without that route**, with an error in the log only: an invalid client-facing route meant 404 for every request.
+6. **A broken file is partly caught.** APISIX keeps its routes when the file is invalid YAML or lacks the final `#END`. **But a file with no routes at all is loaded, and so is a file with one invalid route, without that route**, with an error in the log only: both meant 404 for every request. (The first recording said APISIX kept its routes for an empty file; consul-template had written the good file back before the request.)
 7. **The file must be shared as a directory.** consul-template renames a new file over the old one, and a mount of the file itself keeps showing the old one. APISIX's config path is a link into the shared directory.
 
 Also observed, about backends rather than rendering:
 
 - **A backend that dies takes requests with it until Consul notices.** With a health check every 2 s the config changed about 3 s after the container stopped. The requests sent to it in between failed, 18 of 155, and streams in flight on it ended incomplete.
-- **Those requests hung for more than 60 s.** `ai-proxy-multi` has one `timeout` for connecting and for reading. The 10 minutes that slow models need ([#14](https://github.com/hlan-net/aisa/issues/14)) are then also the time a request waits for a backend that is gone.
+- **Some of those requests were still waiting when the client gave up at 60 s** (`curl -m 60` in `run.sh`); how long the gateway would have held them was not measured. `ai-proxy-multi` has one `timeout` for connecting and for reading, 600 s in the spike, so the 10 minutes that slow models need ([#14](https://github.com/hlan-net/aisa/issues/14)) are expected to be also the time a request can wait for a backend that is gone.
 
 Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#3-config-rendering-gateway-configuration), [`CONSUL.md`](../concepts/CONSUL.md) and [`VAULT.md`](../concepts/VAULT.md):
 
@@ -145,4 +145,4 @@ Consequences, reflected in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.
 - How long requests fail after a backend dies is its health check's interval and timeout, plus the template's quiet period and the gateway's reload; 30 s in the example of `CONSUL.md` means more than half a minute of failures for a share of the requests. Requests already sent to it can wait until the gateway's timeout.
 - The template must set `default_lease_duration`, or a rotated key takes 5 minutes to arrive.
 - Found in review: `ai-proxy-multi` forwards the client's `Authorization` to a backend without a key, the internal hop has a request id of its own, and a denied request never reaches the internal route's logger. The template removes the header, passes the decision's id along and logs denials on the client route.
-- Open: nothing checks the rendered file before the gateway loads it, and a catalog that comes back empty renders a config without backends. Both need a guard in the adapter ([#18](https://github.com/hlan-net/aisa/issues/18)).
+- Open: nothing checks the rendered file before the gateway loads it, a file without routes takes every route away, and a catalog that comes back empty renders a config without backends. Both need a guard in the adapter ([#18](https://github.com/hlan-net/aisa/issues/18)).
