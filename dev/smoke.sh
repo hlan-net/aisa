@@ -120,6 +120,16 @@ expect "aisa: an unparseable value rejects only its event" "200" \
     "$(send_usage "[{\"request_id\":\"$req4\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":200,\"prompt_tokens\":3},{\"request_id\":\"${req4}-bad\",\"status\":200,\"prompt_tokens\":\"abc\"}]")"
 expect "aisa: the batch's valid tokens incremented" "$((prompt_before + 20))" "$(tokens_metric chat-ui qwen3 prompt)"
 
+missing_metric() {
+    curl -fsS "$AISA/metrics" | awk '
+        $1 ~ "^aisa_usage_missing_total{" && $1 ~ "consumer=\"chat-ui\"" && $1 ~ "model=\"qwen3\"" && $1 ~ "backend=\"mock-local\"" { print $2 + 0 }' | head -n1
+}
+missing_before=$(missing_metric)
+missing_before=${missing_before:-0}
+expect "aisa: usage without token counts accepted" "200" \
+    "$(send_usage "{\"request_id\":\"${smoke_run_id}-5\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":\"200\",\"prompt_tokens\":\"0\",\"completion_tokens\":\"0\",\"stream\":\"true\"}")"
+expect "aisa: missing usage counted" "$((missing_before + 1))" "$(missing_metric)"
+
 echo "== aisa: token quotas"
 # A new consumer for each run, so a window left by an earlier run does not matter.
 quota_consumer="quota-${smoke_run_id}"

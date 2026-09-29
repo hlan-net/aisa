@@ -376,3 +376,49 @@ func TestHandlerChargesSaturate(t *testing.T) {
 		t.Errorf("charged %d, want the saturated %d", got, int64(math.MaxInt64))
 	}
 }
+
+func TestHandlerCountsMissingUsage(t *testing.T) {
+	tests := []struct {
+		name  string
+		event string
+		want  float64
+	}{
+		{"zeros as strings, as APISIX logs a lost stream", `"status":"200","prompt_tokens":"0","completion_tokens":"0"`, 1},
+		{"zeros as numbers, as a backend without usage", `"status":200,"prompt_tokens":0,"completion_tokens":0`, 1},
+		{"no counts at all", `"status":200`, 1},
+		{"empty and null counts", `"status":201,"prompt_tokens":"","completion_tokens":null`, 1},
+		{"counted usage", `"status":200,"prompt_tokens":5,"completion_tokens":7`, 0},
+		{"only completion tokens", `"status":200,"completion_tokens":7`, 0},
+		{"a denied request", `"status":429`, 0},
+		{"a backend error", `"status":502,"prompt_tokens":"0","completion_tokens":"0"`, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := metrics.New("test")
+			h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			body := `{"request_id":"r1","consumer":"chat-ui","model":"qwen3","backend":"ollama-1",` + tt.event + `}`
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"accepted":1`) {
+				t.Fatalf("answer = %d %s, want 200 with the event accepted", rec.Code, rec.Body.String())
+			}
+			if got := testutil.ToFloat64(m.UsageMissing.WithLabelValues("chat-ui", "qwen3", "ollama-1")); got != tt.want {
+				t.Errorf("UsageMissing = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandlerCountsMissingUsageOnce(t *testing.T) {
+	m := metrics.New("test")
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	body := `[{"request_id":"r1","model":"qwen3","status":200},{"request_id":"r1","model":"qwen3","status":200}]`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := testutil.ToFloat64(m.UsageMissing.WithLabelValues(metrics.ConsumerUnknown, "qwen3", "")); got != 1 {
+		t.Errorf("UsageMissing = %v, want 1: a retried event is counted once", got)
+	}
+}

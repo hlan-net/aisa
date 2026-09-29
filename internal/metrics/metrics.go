@@ -82,6 +82,9 @@ type Metrics struct {
 	// UsageRequestsRejected counts usage requests rejected as a whole, by reason. Their events
 	// are in no other metric, and the gateway's log sink may drop them after its retries.
 	UsageRequestsRejected *prometheus.CounterVec
+	// UsageMissing counts successful requests whose event has no token counts, by consumer,
+	// model and backend: usage the gateway did not see, which aisa has not accounted.
+	UsageMissing *prometheus.CounterVec
 
 	// Consumers, ConsumerKeys and ConsumersUnreadable describe the consumers in memory: how
 	// many can authenticate, how many key hashes they have, and how many Vault listed and aisa
@@ -159,6 +162,10 @@ func New(version string) *Metrics {
 			Name: "aisa_usage_requests_rejected_total",
 			Help: "Usage requests rejected as a whole, with none of their events read, by reason.",
 		}, []string{"reason"}),
+		UsageMissing: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_usage_missing_total",
+			Help: "Successful requests reported without token counts: the gateway did not see their usage.",
+		}, []string{"consumer", "model", "backend"}),
 		Consumers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers",
 			Help: "Consumers in memory that can authenticate.",
@@ -208,7 +215,7 @@ func New(version string) *Metrics {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		buildInfo,
 		m.Requests, m.Tokens, m.Cost, m.BudgetLimit, m.BudgetSpent, m.Latency, m.TTFT, m.Decisions,
-		m.UsageEvents, m.UsageRequestsRejected,
+		m.UsageEvents, m.UsageRequestsRejected, m.UsageMissing,
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 		m.QuotaProfiles, m.QuotaProfilesInvalid, m.QuotaProfileLoads, m.QuotaErrors,
 	)
