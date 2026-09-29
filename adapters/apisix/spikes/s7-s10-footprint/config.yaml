@@ -1,0 +1,28 @@
+# Spikes S7 + S10: the S8 config (internal listener on 127.0.0.1:9081 for the two-hop route) with
+# a configurable number of workers. nginx starts one worker per core by default, and each worker
+# has its own Lua VM, so the worker count decides most of the memory use.
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+apisix:
+  node_listen:
+    - 9080
+    - ip: 127.0.0.1
+      port: 9081
+  enable_admin: false
+  # Docker networks often have no IPv6; listening on [::] would then fail at startup.
+  enable_ipv6: false
+  # Re-resolve service names quickly: containers get new addresses when they are recreated.
+  dns_resolver_valid: 1
+
+nginx_config:
+  error_log_level: warn
+  worker_processes: ${{APISIX_WORKERS:=auto}}
+
+plugin_attr:
+  prometheus:
+    export_addr:
+      ip: 0.0.0.0
+      port: 9091

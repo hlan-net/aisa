@@ -1,0 +1,10 @@
+# Rendered by consul-template from the Consul catalog: the healthy instances of aisa-backend.
+# S7 needs a consul-template that watches what the adapter's template will watch; rendering the
+# real apisix.yaml and reloading APISIX is spike S9.
+backends:
+{{- range service "aisa-backend" }}
+  - name: {{ .ID }}
+    address: {{ .Address }}:{{ .Port }}
+    provider: {{ index .ServiceMeta "provider" }}
+    models: [{{ index .ServiceMeta "models" }}]
+{{- end }}

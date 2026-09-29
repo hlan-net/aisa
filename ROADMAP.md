@@ -27,7 +27,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 2 | `spike/forward-auth-model` | S8: model name to `/v1/decide`, routing by `X-Aisa-Model` | Done ([#8](https://github.com/hlan-net/aisa/pull/8)): works with an internal hop |
 | 3 | `spike/usage-events` | S2 + S6: streaming token counts, `http-logger` → usage event schema | Done ([#13](https://github.com/hlan-net/aisa/pull/13)): S6 yes; S2 exact only when usage is streamed ([#12](https://github.com/hlan-net/aisa/issues/12)), confirmed against a real Ollama |
 | 4 | `spike/config-rendering` | S9: consul-template → standalone `apisix.yaml` reload | — |
-| 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | — |
+| 5 | `spike/footprint` | S7 + S10: resources on arm64, forward-auth latency | In review: fits a small node with one nginx worker; `forward-auth` adds 0.3 to 2 ms. Measured on a Raspberry Pi 5 |
 | 6 | `claude/sonarqube-pr-scan-66r8m0` | SonarQube scan with Go coverage for PRs and `main` | In review ([#15](https://github.com/hlan-net/aisa/pull/15)): coverage needs `SONAR_TOKEN` |
 
 ## v0.2.0: First version (token quotas)
@@ -38,7 +38,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) and fail policies | — |
 | 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | — |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | — |
-| 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend | — |
+| 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | — |
 | 6 | `feature/terraform-module` | Vault mount, policies and roles; Consul ACLs, KV and backend registrations | — |
 | 7 | `feature/dashboard` | Grafana dashboard and alert rules | — |
 

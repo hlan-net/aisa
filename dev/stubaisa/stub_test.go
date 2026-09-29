@@ -184,6 +184,24 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnvCapacity(t *testing.T) {
+	t.Setenv("STUB_CAPACITY", "5000")
+	cfg, err := configFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Capacity != 5000 {
+		t.Errorf("Capacity = %d, want 5000", cfg.Capacity)
+	}
+
+	for _, v := range []string{"0", "-1", "many"} {
+		t.Setenv("STUB_CAPACITY", v)
+		if _, err := configFromEnv(); err == nil {
+			t.Errorf("STUB_CAPACITY=%s: want an error", v)
+		}
+	}
+}
+
 func TestUsageRejectsNonObjects(t *testing.T) {
 	srv := newTestStub(t)
 	for _, body := range []string{`null`, `true`, `"event"`, `[{"a":1}, 2]`, `[]` + "x"} {
