@@ -1,8 +1,73 @@
 # Concept: Architecture
 
-aisa is split into a gateway-agnostic **core** and a replaceable **AI gateway** connected through an adapter. This document describes the reference deployment: the core with the APISIX adapter on Kubernetes, with Vault and Consul already in place.
+aisa offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, while the models run somewhere else. This document says what aisa is, what it consists of and how the reference deployment looks: aisa with APISIX as its proxy on Kubernetes, with Vault and Consul already in place.
+
+Who it is for is in [`../process/USER_STORIES.md`](../process/USER_STORIES.md).
 
 Related: [`ADAPTER_CONTRACT.md`](./ADAPTER_CONTRACT.md), [`VAULT.md`](./VAULT.md), [`CONSUL.md`](./CONSUL.md), [`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md), [`../features/usage-metrics.md`](../features/usage-metrics.md).
+
+## What aisa is
+
+Three roles, and aisa is the one in the middle:
+
+```
+ 1. CONSUMER              3. AISA                          2. PROVIDER
+ ┌────────────┐      ┌───────────────────────┐      ┌───────────────────┐
+ │ application│ ───▶ │ a Kubernetes-native   │ ───▶ │ solves the        │
+ │ in the     │      │ inference service     │      │ inference         │
+ │ cluster    │ ◀─── │                       │ ◀─── │ (Ollama, a cloud) │
+ └────────────┘      │ solves nothing itself │      └───────────────────┘
+  its own identity   └───────────────────────┘       the holder's account
+```
+
+1. A **consumer** is an application that sends inference requests.
+2. A **provider** is a service that answers them.
+3. **aisa** gives the cluster a Kubernetes-native inference service for the consumers. It solves no request itself: it decides whether a request may pass, passes it to a provider with the holder's credentials, and keeps the books. A consumer manages no provider key and no provider login; aisa maintains them and follows their use.
+
+Everything below is the inside of the third box.
+
+### Parts and terms
+
+| Term | Meaning | How many |
+|---|---|---|
+| **aisa** | The control side: decides, accounts, manages. A Go binary. It never carries model traffic. | one |
+| **proxy** | The data side: carries the requests and answers between consumers and providers. The muscle comes from outside, an existing AI gateway (APISIX first), because proxying, streaming and its performance are solved problems that aisa does not re-solve. | one |
+| **adapter** | What is specific to one kind of provider: how to authenticate to it, where its credential comes from, what it reports as usage, which headers carry its account. Today there is one, `openai-compatible`, selected by a backend's `provider`. | one per kind of provider |
+| **holder** | The person who holds the contracts with the providers and operates aisa. | |
+
+The proxy is aisa's own part, not somebody else's system: **aisa installs and removes it**, and decides its configuration. At run time it works as independently of aisa as it can: it renders its own configuration and keeps serving `fail_policy = "open"` backends while aisa is down. Seen from the cluster it is the egress of inference traffic, so it must be the only way from an application to a provider ([Exposure](#exposure)).
+
+A gateway that already exists and belongs to someone else can still be connected through the same contracts, but aisa is not designed around that case first: no user story asks for it yet.
+
+> **Names in transition.** The texts and paths still use the older words: "gateway" for the proxy, and "adapter" (`adapters/apisix/`, `ADAPTER_CONTRACT.md`) for what connects aisa to a specific proxy. They are to become `proxies/apisix/` and `PROXY_CONTRACT.md`, and "adapter" then means only the provider-specific part of the table above.
+
+### Where things are written, and what aisa makes of them
+
+```
+ holder ──▶ aisa's admin ──▶ Consul  everything that is not a secret ─┐
+            (or directly)──▶ Vault   the secrets ─────────────────────┴─▶ aisa ──▶ Kubernetes objects ──▶ consumers
+```
+
+- **Consul holds everything except secrets; Vault holds the secrets.** They are the only sources of truth. aisa has no database of its own.
+- **Kubernetes objects are aisa's output, never its input.** aisa creates them from Consul and Vault, and restores one that is changed by hand. The model is KubeAI's `Model` objects: a consumer finds the models on offer with a query to the Kubernetes API and maps its tasks to them.
+- **The holder need not use Consul or Vault directly.** aisa's admin interface sits in between; Vault can authenticate the holder. Direct use, and Terraform, stay possible, because the truth is in Consul and Vault either way.
+
+### State of this direction
+
+The sections after this one describe what is designed and, where the status says so, built. The direction above adds the following, decided on 2026-10-01:
+
+| Part | State |
+|---|---|
+| Decision API, usage ledger, token quotas | Built |
+| The proxy rendering its own configuration (consul-template next to APISIX) | Designed, in progress (`ROADMAP.md` v0.2.0 PR 5) |
+| aisa installing and removing the proxy with its own chart | Decided. Today the proxy is installed separately ([Packaging](#packaging-and-deployment)) |
+| `Model` objects for consumers | Decided, not designed. An existing standard is checked first (Gateway API Inference Extension) |
+| A consumer's credential as a Kubernetes object | Decided in principle, [#32](https://github.com/hlan-net/aisa/issues/32) |
+| The non-secret part of a consumer (name, quota profile) in Consul instead of Vault | Decided, follows from the rule above. Today the whole consumer is in Vault ([`VAULT.md`](./VAULT.md)) |
+| Admin interface | Decided, not designed (US-3) |
+| Provider adapters beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains itself can be used | Decided, not designed |
+| No way around the proxy | Decided, not designed |
+| The renaming above | Decided, not done |
 
 ## Traffic path
 
@@ -69,11 +134,13 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> \
 
 - **Own namespace.** aisa, the gateway and Redis run together in a dedicated namespace (`aisa` by default), not in `kube-system`. Vault's Kubernetes auth binds roles to a namespace and service account, so aisa's Vault access stays separate from other workloads, and NetworkPolicies, resource quotas and upgrades apply to aisa alone.
 - **Shared service.** Applications in other namespaces use the gateway's Service as an OpenAI-compatible endpoint (e.g. `http://<gateway-service>.aisa.svc.cluster.local/v1`); clients outside the cluster come in through an internal ingress (see [Exposure](#exposure)). A namespace is not an identity: each application authenticates with its own consumer credential ([`VAULT.md`](./VAULT.md)).
-- **Gateway.** The gateway is installed separately, with the files in `adapters/<gateway>/`. For APISIX these are manifests of its own and not the upstream chart, which has no place for the sidecar that renders the config (spike S5). aisa's chart does not bundle it.
+- **Proxy.** Today the proxy is installed separately, with the files in `adapters/<gateway>/`. For APISIX these are manifests of its own and not the upstream chart, which has no place for the sidecar that renders the config (spike S5). The direction is that aisa's chart installs and removes it ([What aisa is](#what-aisa-is)).
 
 ## Exposure
 
 Keep the gateway endpoint internal: behind an IP allowlist or on an internal-only ingress. A leaked consumer key on a public endpoint means unmetered use of paid providers until the key is revoked. aisa's decision and ingest endpoints are cluster-internal only (ClusterIP plus a NetworkPolicy that allows only the gateway pods).
+
+The proxy is the egress of inference traffic, and a quota holds only if nothing goes around it. A paid provider is safe without further measures, because no application has its key. A backend without a key is not: an application that knows the address of a local Ollama can call it directly, past the quotas and the books. That path must be closed in the network, with a NetworkPolicy that denies applications the backends or a firewall on the backend's host. This is not designed yet.
 
 ## Failure modes
 
@@ -87,6 +154,7 @@ Keep the gateway endpoint internal: behind an IP allowlist or on an internal-onl
 
 ## Non-goals (for now)
 
+- Proxying in aisa itself. The proxy is an existing AI gateway; aisa decides and accounts.
 - Prompt caching, guardrails, PII masking. Gateways already have plugins for these, and they stay gateway-side features.
 - Multi-replica HA for aisa itself.
 - End-user management. Consumers are applications or people with API keys, not users of a chat UI.

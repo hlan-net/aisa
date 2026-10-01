@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-aisa — **AI Service [Access, Admin, Authority]** — is a Vault- and Consul-native governance layer for LLM traffic. It sits beside an existing AI gateway and adds identities, token quotas, money budgets and normalized usage metrics. It is **not** a gateway: it never proxies model traffic itself. Apache 2.0, public repository `hlan-net/aisa`.
+aisa — **AI Service [Access, Admin, Authority]** — offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, with Vault and Consul as its sources of truth. It stands between the applications (consumers) and the model providers: it decides whether a request may pass, passes it on with the holder's credentials and keeps the books (identities, token quotas, money budgets, normalized usage metrics). It is **not** a gateway: it never proxies model traffic itself. An existing AI gateway is its **proxy**, which aisa installs, configures and removes. Apache 2.0, public repository `hlan-net/aisa`.
 
 **Status: early development (v0.2.0).** The design lives in `docs/`, and its open questions are answered in `docs/process/SPIKES.md`. aisa has config, health endpoints, the metrics registry, the decision API with consumers from Vault (`internal/vault`, `internal/consumers`, `internal/decide`), the usage ledger (`internal/ledger`) and token quotas from Consul with counters in Redis (`internal/consul`, `internal/quotas`); the next steps are the PRs of `ROADMAP.md` v0.2.0.
 
@@ -14,7 +14,7 @@ aisa — **AI Service [Access, Admin, Authority]** — is a Vault- and Consul-na
 |---|---|
 | `docs/concepts/` | The core design: `ARCHITECTURE.md`, `ADAPTER_CONTRACT.md` (the three aisa ↔ gateway contracts), `VAULT.md`, `CONSUL.md` |
 | `docs/features/` | User-facing capabilities: `quotas-and-budgets.md`, `usage-metrics.md` |
-| `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes), `USER_STORIES.md` (who aisa is built for, with acceptance criteria and gaps) |
+| `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes), `USER_STORIES.md` (who aisa is built for, US-1 to US-3, with acceptance criteria and gaps) |
 | `cmd/aisa/`, `internal/` | aisa itself: `config` (environment variables), `server` (HTTP, health), `metrics` (the `aisa_*` registry), `vault`, `consumers`, `decide`, `ledger`, `consul`, `quotas`, `version` |
 | `Dockerfile` | The product image: a static binary in a distroless image, amd64 and arm64 |
 | `dev/` | Docker Compose dev stack (Vault, Consul, Redis, APISIX standalone, mock backends, stub aisa) and `smoke.sh`; see `dev/README.md` |
@@ -58,9 +58,10 @@ Skip the pre-push hook with `SKIP_PRE_PUSH_TESTS=1 git push`.
 
 Read `docs/concepts/ARCHITECTURE.md` and `docs/concepts/ADAPTER_CONTRACT.md` before any structural change. The rules that must hold:
 
+- **Three roles.** A consumer sends inference requests, a provider answers them, and aisa is the Kubernetes-native service between them. `docs/concepts/ARCHITECTURE.md` (What aisa is) has the terms: **aisa** (control), **proxy** (carries the traffic; APISIX first), **adapter** (what is specific to a kind of provider), **holder** (operates aisa). The paths still use the older names, `adapters/apisix/` and `ADAPTER_CONTRACT.md`, for the proxy; they are to be renamed.
 - **Core vs adapters.** The core (`cmd/`, `internal/`) has no knowledge of any specific gateway. Everything gateway-specific lives under `adapters/<name>/`. If a change to the core mentions APISIX (or any other gateway) by name, it is in the wrong place.
 - **Three contracts connect a gateway:** the decision API (`POST /v1/decide`, forward-auth pattern), usage events (normalized JSON from an access log sink) and config rendering (consul-template). A change to a contract is versioned (`/v1/` → `/v2/`) and documented in `ADAPTER_CONTRACT.md` in the same PR.
-- **Sources of truth:** identities and provider keys in Vault; backends, prices, budgets and quota profiles in Consul; hot counters in Redis, persisted to Consul KV once a minute. Gateways never talk to Vault or Consul directly.
+- **Sources of truth:** everything that is not a secret in Consul (backends, prices, budgets, quota profiles), secrets in Vault (provider keys; today also the consumers, whose non-secret part is to move to Consul); hot counters in Redis, persisted to Consul KV once a minute. Kubernetes objects are what aisa creates from these for the consumers, never where aisa reads from. The holder may work through aisa's admin interface instead of Consul and Vault directly.
 - **Rules live only in aisa.** No quota or budget logic in gateway plugins. A gateway-side cache of decisions is allowed as an optimisation.
 - **Metrics:** aisa's own `aisa_*` metrics are the primary ones. Dashboards and alerts must not depend only on gateway-native metrics.
 

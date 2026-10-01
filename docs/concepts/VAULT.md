@@ -23,6 +23,8 @@ Each role can only read its own paths.
 
 ## Consumer credentials
 
+> **Direction** ([`ARCHITECTURE.md`](./ARCHITECTURE.md#where-things-are-written-and-what-aisa-makes-of-them)): Vault holds secrets only. The part of a consumer that is not a secret, its name and quota profile, is to move to Consul, and a consumer is to get its credential as a Kubernetes object ([#32](https://github.com/hlan-net/aisa/issues/32)). What follows describes what is built.
+
 ### First version: consumer keys
 ```
 secret/aisa/consumers/chat-ui     key_sha256=<hash>  quota_profile=interactive
@@ -51,6 +53,8 @@ secret/aisa/providers/openai   api_key=<key>
 A backend in Consul names its secret with the service meta `key` (`key = "openai"` for the one above). consul-template renders these into the gateway config (for APISIX, the `ai-proxy-multi` `auth.header`) inside the pod. It reads a secret again after `default_lease_duration`, which the template sets: a rotated key reaches the gateway within that time (spike S9). The rendered file is on an in-memory `emptyDir` and never written to disk.
 
 Where the provider supports it, dynamic credentials are better than static keys, e.g. Azure OpenAI through Vault's Azure secrets engine.
+
+> **Direction** (US-3 in [`USER_STORIES.md`](../process/USER_STORIES.md)): a backend's key becomes a reference to any Vault path and field, so that a secret Vault issues and rotates itself can be used as well as one entered by hand. A key entered by hand carries what identifies it at the provider and its expiry date as metadata of the secret, readable without the secret's value.
 
 ## APISIX's own Vault support
 

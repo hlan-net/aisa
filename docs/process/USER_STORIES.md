@@ -24,6 +24,8 @@ Kubernetes-native describes the **applications that consume inference**, not the
 5. **Fails safe.** When aisa is unreachable, backends that cost money fail closed. Only backends with `fail_policy = "open"` stay reachable.
 6. **Visible.** The operator sees usage and cost per application from the `aisa_*` metrics.
 7. **Explains itself.** The service tells an application developer how to use it: the endpoint, how to get a credential, which models are offered, and what a denied or downgraded request looks like. Existing applications are not assumed to know any Kubernetes-native inference service; most call a provider directly with a base URL and an API key, or a provider SDK with no base URL at all. The instructions cover moving such an application over, and no other source is needed.
+8. **Models are found through Kubernetes.** The models on offer are objects in the cluster, in the manner of KubeAI's `Model`. An application lists them with a query to the Kubernetes API, by what they can do, and maps its own tasks to them. An application that does not talk to the Kubernetes API finds the same list at `/v1/models`.
+9. **No way around.** An application reaches a model only through the service. It cannot call a backend directly, past the quota and the books.
 
 ### Gaps
 
@@ -34,6 +36,8 @@ Kubernetes-native describes the **applications that consume inference**, not the
 | 5 | In progress. | `ROADMAP.md` v0.2.0 PR 5 ([#4](https://github.com/hlan-net/aisa/issues/4)) |
 | 6 | In part. Token metrics exist; cost metrics and the dashboard do not. | `ROADMAP.md` v0.2.0 PR 7, v0.3.0 |
 | 7 | Open. The docs describe aisa for the operator and the adapter author; nothing is written for the developer of a consuming application. Where the instructions live (a feature doc, the chart's install notes, an endpoint of the service) is undecided, and so is what is offered to an application that speaks a provider's own API instead of the OpenAI-compatible one. The gateway serves `/v1/chat/completions` only; `/v1/models` is missing. | [#34](https://github.com/hlan-net/aisa/issues/34) |
+| 8 | Open. aisa creates no Kubernetes objects yet and does not talk to the Kubernetes API. The shape of the object is undecided; an existing standard is checked first. | Needs a design ([`ARCHITECTURE.md`](../concepts/ARCHITECTURE.md#state-of-this-direction)) |
+| 9 | Open. A backend without a key, such as a local Ollama, answers anyone who knows its address. | Needs a design ([`ARCHITECTURE.md`](../concepts/ARCHITECTURE.md#exposure)) |
 
 ## US-2: The provider accounts stay mine
 
@@ -59,3 +63,28 @@ This was implicit in the design from the start (provider keys in Vault, rendered
 | 3 | Open. The internal route strips `Authorization` only; every other request header goes to the provider, `OpenAI-Organization` and `OpenAI-Project` among them. The contract rule covers the credential, not the headers that choose how the account is used. | [#35](https://github.com/hlan-net/aisa/issues/35) |
 | 4 | Met by design ([`CONSUL.md`](../concepts/CONSUL.md#backends-consul-catalog)); the routes are in progress. | `ROADMAP.md` v0.2.0 PR 5 ([#4](https://github.com/hlan-net/aisa/issues/4)) |
 | 5 | Met for credentials ([#5](https://github.com/hlan-net/aisa/issues/5)): usage events carry explicit fields only and aisa never logs a raw event. | — |
+
+## US-3: The holder manages aisa through aisa
+
+> **As the** holder, who operates aisa and holds the provider contracts,
+> **I want to** manage consumers, models, limits and provider credentials in aisa's own admin interface,
+> **so that** I work with the things I care about, not with keys and paths in Consul and Vault, and can still trace every credential to where it came from.
+
+aisa stands between the holder and its sources of truth, as it stands between the consumers and the providers. Consul and Vault stay the truth: the admin interface writes there and keeps nothing of its own, so using them directly, or through Terraform, stays possible.
+
+### Acceptance criteria
+
+1. **One place.** The holder creates and changes consumers, quota profiles, prices, budgets, backends and provider credentials in aisa's admin interface, without opening Consul or Vault.
+2. **Vault knows the holder.** The holder logs in through Vault, and who may change what is decided by Vault's policies, not by a list of users in aisa.
+3. **A secret goes in and does not come out.** The holder enters a provider credential; the interface never shows its value again.
+4. **A credential can be traced.** Next to the secret the holder records what identifies it at the provider and when it ends: for example the id of an Azure app registration's client secret and its expiry date, where it was created, and a note. aisa adds who changed it and when. When a provider announces that a secret is about to expire, the holder finds by its id which credential to renew.
+5. **Expiry is not a surprise.** aisa warns before a credential expires, from the recorded date or from the lease of a secret that Vault maintains.
+6. **Secrets that Vault maintains can be used.** A provider credential may be one that Vault issues and rotates itself. The interface then shows it as managed by Vault, with its validity, and asks for no value.
+
+### Gaps
+
+| Criterion | State | Where |
+|---|---|---|
+| 1, 2, 3 | Open. There is no admin interface and no admin API; the holder writes to Consul and Vault with Terraform. aisa only reads Vault, and writes to Consul nothing but the persisted spend. Proposed: aisa makes the holder's changes with the holder's own Vault token, so aisa's service account stays a reader and Vault's audit log names the person. | Needs a design |
+| 4, 5 | Open. Proposed: the identifying data in the custom metadata of the KV v2 secret, which a policy can make readable without the secret's value. Nothing from a provider's account goes into a metric label (US-2). | Needs a design |
+| 6 | Open. A backend names its key by a short name that implies the path `secret/aisa/providers/<name>` and the field `api_key` ([`CONSUL.md`](../concepts/CONSUL.md#backends-consul-catalog)). A secret that Vault maintains lives at another path, in other fields and with a lease. The key must become a reference to a path and a field; some providers also need a step from the issued credential to a token, which belongs to that provider's adapter. | Needs a design |
