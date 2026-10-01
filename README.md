@@ -7,12 +7,12 @@ Pick the A that fits your day:
 - **Admin**: quotas, money budgets, prices and model backends, managed in one place.
 - **Authority**: the single source of truth for usage. It keeps the books, and your gateway just proxies.
 
-**aisa** is a governance layer for LLM traffic on HashiCorp-based infrastructure. It sits beside the AI gateway you already run and adds:
+**aisa** offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, on HashiCorp-based infrastructure. It stands between the applications and the model providers, with an existing AI gateway as its proxy, and adds:
 
 - **identities and provider keys from Vault**, and **backends, prices and budgets from Consul**
 - **token quotas and money budgets** per client, with optional downgrade to a local model when a budget runs out
 - **normalized usage metrics** per client and model, with a Grafana dashboard and alert rules
-- **adapters** for existing AI gateways. [Apache APISIX](https://apisix.apache.org/) is the reference adapter.
+- **a proxy it does not write itself**: an existing AI gateway carries the traffic. [Apache APISIX](https://apisix.apache.org/) is the first.
 
 The name is Finnish: an *aisa* is the shaft that hitches a cart to the horse pulling it, and *pitää aisoissa* means "to keep in check". aisa connects your applications to models and keeps their use in check.
 
@@ -22,7 +22,9 @@ Proxying requests and translating between providers are solved problems. What is
 - is **native to Vault and Consul**. LiteLLM and Bifrost only offer Vault in their paid tiers, and none of the open source gateways integrates with Consul.
 - is **not tied to one gateway**. In existing gateways, budgets and usage accounting live inside the gateway itself.
 
-aisa is not a gateway. Your gateway keeps proxying, streaming and translating between providers; aisa decides who may use what and accounts for it.
+aisa is not a gateway. A gateway keeps proxying, streaming and translating between providers; aisa decides who may use what, hands the request the holder's credentials and accounts for it. An application manages no provider key.
+
+What aisa is, its parts and the direction it is taking are in [docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#what-aisa-is).
 
 ## How it fits together
 
@@ -56,7 +58,7 @@ Three contracts connect aisa to a gateway: a **decision API** (forward-auth patt
 | [usage-metrics.md](docs/features/usage-metrics.md) | Metrics, dashboard and alerts |
 | **Process** | |
 | [SPIKES.md](docs/process/SPIKES.md) | Unknowns to verify before implementation |
-| [USER_STORIES.md](docs/process/USER_STORIES.md) | Who aisa is built for, with acceptance criteria and gaps |
+| [USER_STORIES.md](docs/process/USER_STORIES.md) | Who aisa is built for (US-1 to US-3), with acceptance criteria and gaps |
 
 ## Running aisa
 

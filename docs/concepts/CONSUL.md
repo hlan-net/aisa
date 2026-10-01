@@ -4,6 +4,8 @@ Consul holds three things for aisa: **where the model backends are**, **what mod
 
 Related: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`VAULT.md`](./VAULT.md), [`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md).
 
+The rule is that **Consul holds everything that is not a secret**, and Vault the secrets ([`ARCHITECTURE.md`](./ARCHITECTURE.md#where-things-are-written-and-what-aisa-makes-of-them)). From the two, aisa creates the Kubernetes objects that consumers see; Consul is where the holder, or aisa's admin interface for the holder, writes.
+
 ## Backends: Consul catalog
 
 Model backends are registered as Consul services. Many of them run outside Kubernetes (a workstation with a GPU, a Mac mini, a vLLM box), so the Terraform module registers them statically:
