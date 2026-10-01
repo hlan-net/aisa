@@ -5,6 +5,8 @@
 Keep LLM usage in check without replacing the gateway you already run.
 aisa gives every application an identity, a quota and a budget, and keeps the books, using the Vault and Consul you already operate.
 
+Who it is for, and what must be true for them, is in the user stories ([docs/process/USER_STORIES.md](docs/process/USER_STORIES.md)): US-1, inference that looks Kubernetes-native to the applications and is safe in cost, and US-2, provider accounts that stay with their holder.
+
 ---
 
 ## Current state: v0.1.0 released
@@ -41,9 +43,11 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | Done ([#26](https://github.com/hlan-net/aisa/pull/26)) |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | Done ([#28](https://github.com/hlan-net/aisa/pull/28)) |
 | 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, the checked config render ([#18](https://github.com/hlan-net/aisa/issues/18)), explicit `log_format` ([#5](https://github.com/hlan-net/aisa/issues/5)) and upstream timeouts ([#14](https://github.com/hlan-net/aisa/issues/14)), fail-open routes for backends with `fail_policy = "open"` ([#4](https://github.com/hlan-net/aisa/issues/4)), requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | — |
-| 6 | `feature/terraform-module` | Vault mount, policies and roles; Consul ACLs, KV and backend registrations | — |
+| 6 | `feature/terraform-module` | Vault mount, policies and roles; Consul ACLs, KV and backend registrations; how a consumer's credential reaches its application through a Kubernetes primitive ([#32](https://github.com/hlan-net/aisa/issues/32), US-1) | — |
 | 7 | `feature/dashboard` | Grafana dashboard and alert rules | — |
 | 8 | `feature/helm-chart` | `deploy/helm/aisa`: aisa with optional Redis, published with the image as an OCI chart on GHCR; `helm lint`, kubeconform and a kind/k3d install test on amd64 and arm64 ([#6](https://github.com/hlan-net/aisa/issues/6)) | — |
+| 9 | `feature/account-isolation` | Adapter rules for what passes between an application and a provider: an allowlist of forwarded request headers, no provider response headers or error bodies to the client ([#35](https://github.com/hlan-net/aisa/issues/35), US-2); in `ADAPTER_CONTRACT.md` and the APISIX template | — |
+| 10 | `feature/application-guide` | Instructions for the developer of a consuming application, and `/v1/models` through the gateway ([#34](https://github.com/hlan-net/aisa/issues/34), US-1) | — |
 
 ## v0.3.0: Money budgets
 
@@ -52,14 +56,15 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | Pricing | Prices per model in Consul KV, `aisa_cost_total` | — |
 | Monthly budgets | Calendar-month budgets, soft limit, persisted totals | — |
 | Downgrade | `on_exhausted: downgrade` → local model via `X-Aisa-Model` | — |
+| Safe defaults and a ceiling | A consumer without limits cannot use a backend with a key; a budget per provider account above the consumers ([#33](https://github.com/hlan-net/aisa/issues/33), US-1) | — |
 
 ## v0.4.0: Second adapter
 
-Prove the contract with a second gateway. **LiteLLM** is the most likely: its open source proxy supports custom auth and callbacks, which map to the decision API and usage events. The contract is marked stable only after this. Later candidates: Envoy AI Gateway / Agent Router, API7 AISIX.
+Prove the contract with a second gateway. **LiteLLM** is the most likely: its open source proxy supports custom auth and callbacks, which map to the decision API and usage events. The contract is marked stable only after this, so the rules that the user stories add to it ([#35](https://github.com/hlan-net/aisa/issues/35), and the client-facing paths of [#34](https://github.com/hlan-net/aisa/issues/34)) must be in the contract before the second adapter is written; otherwise it proves an incomplete contract. Later candidates: Envoy AI Gateway / Agent Router, API7 AISIX.
 
 ## Later
 
-- **Vault-issued JWTs** instead of static consumer keys ([docs/concepts/VAULT.md](docs/concepts/VAULT.md))
+- **Vault-issued JWTs** instead of static consumer keys ([docs/concepts/VAULT.md](docs/concepts/VAULT.md)). As designed, a pod logs in to Vault to get one, which US-1 rules out for applications; [#32](https://github.com/hlan-net/aisa/issues/32) settles how the two fit
 - Dynamic provider credentials where supported (e.g. Azure OpenAI through Vault)
 
 ---
@@ -79,3 +84,4 @@ Improvements that belong in the gateways rather than in aisa:
 - aisa has no knowledge of any specific gateway. Adapter code lives only under `adapters/<name>/`.
 - aisa never proxies model traffic itself. That is the gateway's job.
 - The Terraform module takes Vault and Consul addresses and mount names as variables and assumes nothing about a specific environment.
+- An application sees an OpenAI-compatible Service and nothing of Vault, Consul or the provider accounts behind it.
