@@ -4,7 +4,7 @@ aisa offers inference to the applications of a Kubernetes cluster as a service o
 
 Who it is for is in [`../process/USER_STORIES.md`](../process/USER_STORIES.md).
 
-Related: [`ADAPTER_CONTRACT.md`](./ADAPTER_CONTRACT.md), [`VAULT.md`](./VAULT.md), [`CONSUL.md`](./CONSUL.md), [`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md), [`../features/usage-metrics.md`](../features/usage-metrics.md).
+Related: [`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md), [`VAULT.md`](./VAULT.md), [`CONSUL.md`](./CONSUL.md), [`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md), [`../features/usage-metrics.md`](../features/usage-metrics.md).
 
 ## What aisa is
 
@@ -39,7 +39,7 @@ The proxy is aisa's own part, not somebody else's system: **aisa installs and re
 
 A gateway that already exists and belongs to someone else can still be connected through the same contracts, but aisa is not designed around that case first: no user story asks for it yet.
 
-> **Names in transition.** The texts and paths still use the older words: "gateway" for the proxy, and "adapter" (`adapters/apisix/`, `ADAPTER_CONTRACT.md`) for what connects aisa to a specific proxy. They are to become `proxies/apisix/` and `PROXY_CONTRACT.md`, and "adapter" then means only the provider-specific part of the table above.
+> **On the words.** "Gateway" in these documents is the product that serves as the proxy, such as APISIX. What makes a gateway work as aisa's proxy lives in `proxies/<name>/`, and the contract between aisa and its proxy is [`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md). Until 2026-10 these were called adapters (`adapters/apisix/`, `ADAPTER_CONTRACT.md`); the spike files under `proxies/apisix/spikes/` and the released entries of `CHANGELOG.md` keep that word. "Adapter" now means only the provider-specific part of the table above.
 
 ### Where things are written, and what aisa makes of them
 
@@ -67,7 +67,6 @@ The sections after this one describe what is designed and, where the status says
 | Admin interface | Decided, not designed (US-3) |
 | Provider adapters beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains itself can be used | Decided, not designed |
 | No way around the proxy | Decided, not designed |
-| The renaming above | Decided, not done |
 
 ## Traffic path
 
@@ -96,7 +95,7 @@ backends                                                                │ /met
 |---|---|
 | **aisa** | Go, a single static binary (amd64 and arm64). Decision API, usage ingestion, budgets and metrics. Reads Vault (Kubernetes auth) and Consul (ACL token from Vault's Consul secrets engine). One replica to start. |
 | Redis | Hot counters for quotas and budgets. Monthly totals are also persisted to Consul KV once a minute, so they survive a Redis loss with at most a minute of drift. |
-| **APISIX adapter** | `apache/apisix` 3.18+ in standalone mode. Routes and plugins come from the rendered `apisix.yaml`. No etcd, no Admin API writes, and no Vault or Consul access of its own. Routing by `X-Aisa-Model` needs a second hop inside APISIX, because routes are matched before `forward-auth` runs (spike S8). |
+| **APISIX proxy** | `apache/apisix` 3.18+ in standalone mode. Routes and plugins come from the rendered `apisix.yaml`. No etcd, no Admin API writes, and no Vault or Consul access of its own. Routing by `X-Aisa-Model` needs a second hop inside APISIX, because routes are matched before `forward-auth` runs (spike S8). |
 | consul-template | Sidecar next to the gateway. Renders the gateway config from the Consul catalog (backends) and Vault (provider keys, KV v2) and triggers the reload. |
 | ServiceMonitors | aisa's `/metrics` (primary) and the gateway's own metrics (cross-check). |
 
@@ -106,7 +105,7 @@ backends                                                                │ /met
 aisa/
 ├── cmd/aisa/                 # main
 ├── internal/                 # decide, ledger, budget, pricing, vault, consul, metrics
-├── adapters/
+├── proxies/
 │   └── apisix/
 │       ├── apisix.yaml.ctmpl # consul-template template
 │       ├── helm-values.yaml  # standalone mode
@@ -134,7 +133,7 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> \
 
 - **Own namespace.** aisa, the gateway and Redis run together in a dedicated namespace (`aisa` by default), not in `kube-system`. Vault's Kubernetes auth binds roles to a namespace and service account, so aisa's Vault access stays separate from other workloads, and NetworkPolicies, resource quotas and upgrades apply to aisa alone.
 - **Shared service.** Applications in other namespaces use the gateway's Service as an OpenAI-compatible endpoint (e.g. `http://<gateway-service>.aisa.svc.cluster.local/v1`); clients outside the cluster come in through an internal ingress (see [Exposure](#exposure)). A namespace is not an identity: each application authenticates with its own consumer credential ([`VAULT.md`](./VAULT.md)).
-- **Proxy.** Today the proxy is installed separately, with the files in `adapters/<gateway>/`. For APISIX these are manifests of its own and not the upstream chart, which has no place for the sidecar that renders the config (spike S5). The direction is that aisa's chart installs and removes it ([What aisa is](#what-aisa-is)).
+- **Proxy.** Today the proxy is installed separately, with the files in `proxies/<name>/`. For APISIX these are manifests of its own and not the upstream chart, which has no place for the sidecar that renders the config (spike S5). The direction is that aisa's chart installs and removes it ([What aisa is](#what-aisa-is)).
 
 ## Exposure
 

@@ -2,7 +2,7 @@
 # Spike S2 + S6: sends one request per scenario through the dev stack and checks the usage event
 # http-logger delivered for it against the mock backend's deterministic token counts.
 #
-#   ./adapters/apisix/spikes/s2-s6-usage-events/run.sh
+#   ./proxies/apisix/spikes/s2-s6-usage-events/run.sh
 #
 # Checks marked GAP assert today's known-wrong behaviour (see SPIKES.md), so a gateway upgrade that
 # changes it shows up as a failure. Exits non-zero on any unexpected result. Needs curl and jq.

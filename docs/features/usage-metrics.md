@@ -2,11 +2,11 @@
 
 ## Concept
 
-aisa keeps the books: every request is accounted per consumer, model and backend, as tokens and as cost. It exports normalized metrics, so dashboards and alerts are the **same for every gateway adapter**.
+aisa keeps the books: every request is accounted per consumer, model and backend, as tokens and as cost. It exports normalized metrics, so dashboards and alerts are the **same for every proxy**.
 
 ## Primary metrics: aisa (`aisa_*`)
 
-Full list in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#4-metrics-output-of-aisa):
+Full list in [`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md#4-metrics-output-of-aisa):
 
 - `aisa_requests_total`, `aisa_tokens_total{direction}`, `aisa_cost_total`
 - `aisa_budget_limit`, `aisa_budget_spent`
@@ -17,7 +17,7 @@ Full list in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#4-metrics-o
 
 Cost is computed in aisa from the Consul prices, so no Prometheus rules with hardcoded prices are needed.
 
-aisa also reports on its own state. These are not part of the adapter contract:
+aisa also reports on its own state. These are not part of the proxy contract:
 
 | Metric | Meaning |
 |---|---|
@@ -38,7 +38,7 @@ APISIX's [prometheus plugin](https://apisix.apache.org/docs/apisix/plugins/prome
 - a **cross-check**: gateway token counts vs aisa's ledger. A mismatch means lost usage events.
 - gateway internals: active streams and upstream errors.
 
-No dashboard panel or alert depends only on gateway metrics, so swapping the adapter does not break monitoring.
+No dashboard panel or alert depends only on gateway metrics, so swapping the proxy does not break monitoring.
 
 ## Grafana dashboard
 
@@ -48,7 +48,7 @@ Shipped as JSON in `dashboards/`:
 2. **Requests and decisions**: allow, deny_quota, deny_budget and downgrade over time
 3. **Latency**: p50/p95 total and time to first token per model and backend
 4. **Cost this month** per consumer, against the budget and what remains
-5. **Backends**: Consul health of each `aisa-backend` and, from the adapter, active streams
+5. **Backends**: Consul health of each `aisa-backend` and, from the proxy, active streams
 6. **Ledger consistency**: aisa tokens vs gateway tokens (should be about 1.0), and the share of successful requests with missing usage per backend
 7. **Top consumers** table: tokens, cost, and the local vs cloud share
 
@@ -68,6 +68,6 @@ Shipped as a `PrometheusRule`:
 | `AisaQuotaCountersFailing` | `aisa_quota_errors_total` increases for 5 min: Redis is unreachable and token quotas are not enforced |
 | `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h |
 | `AisaUsageMissing` | `aisa_usage_missing_total` increases for 15 min on a backend: its requests are not counted towards quotas. The gateway's own token metrics miss the same usage, so `AisaUsageEventsLost` cannot see it |
-| `AisaUsageEventsRejected` | `aisa_usage_events_total{result="rejected"}` increases for 15 min: the adapter sends events aisa cannot use. They are answered 200, so the log sink does not retry them and they are lost |
-| `AisaUsageRequestsRejected` | `aisa_usage_requests_rejected_total` increases: the adapter sends usage aisa cannot read, and the log sink drops it after its retries |
+| `AisaUsageEventsRejected` | `aisa_usage_events_total{result="rejected"}` increases for 15 min: the proxy sends events aisa cannot use. They are answered 200, so the log sink does not retry them and they are lost |
+| `AisaUsageRequestsRejected` | `aisa_usage_requests_rejected_total` increases: the proxy sends usage aisa cannot read, and the log sink drops it after its retries |
 | `AisaSlowFirstToken` | p95 time to first token > 20 s for 15 min (model too large for the backend, or the backend is swapping) |

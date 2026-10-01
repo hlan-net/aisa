@@ -3,9 +3,9 @@
 The questions and outcomes are recorded in [`docs/process/SPIKES.md`](../../../../docs/process/SPIKES.md#s7--s10-footprint-and-added-latency). This directory holds what they are based on, so they can be re-run on other hardware or against a newer APISIX.
 
 ```bash
-./adapters/apisix/spikes/s7-s10-footprint/run.sh                      # one nginx worker per core
-APISIX_WORKERS=1 ./adapters/apisix/spikes/s7-s10-footprint/run.sh     # one worker
-docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s7-s10-footprint/compose.override.yaml down -v
+./proxies/apisix/spikes/s7-s10-footprint/run.sh                      # one nginx worker per core
+APISIX_WORKERS=1 ./proxies/apisix/spikes/s7-s10-footprint/run.sh     # one worker
+docker compose -f dev/compose.yaml -f proxies/apisix/spikes/s7-s10-footprint/compose.override.yaml down -v
 ```
 
 `STREAMS`, `DURATION`, `TOKENS` and `REQUESTS` change the load; see the top of `run.sh`.

@@ -3,7 +3,7 @@
 The question and the outcome are recorded in [`docs/process/SPIKES.md`](../../../../docs/process/SPIKES.md#s8-forward-auth-and-model-routing-on-apisix). This directory holds what the outcome is based on, so it can be re-run against a newer APISIX.
 
 ```bash
-./adapters/apisix/spikes/s8-forward-auth-model/run.sh   # starts the dev stack with this config
+./proxies/apisix/spikes/s8-forward-auth-model/run.sh   # starts the dev stack with this config
 docker compose -f dev/compose.yaml down -v              # afterwards
 ```
 
@@ -25,7 +25,7 @@ docker compose -f dev/compose.yaml down -v              # afterwards
 | f1 | as a | as d, with `allow_degradation: true` | **unsafe**: with aisa unreachable, a client-supplied `X-Aisa-Model` reaches the paid backend |
 | f2 | as a | as f1, the pre-step strips client `X-Aisa-*` headers | safe: no header, no inner route, 404 |
 
-The pre-steps of b, d and f2 strip every client-supplied `X-Aisa-*` header, d's `forward-auth` sets `status_on_error: 503`, and every `http-logger` has an explicit `log_format` without request headers, as the adapter rules in `ADAPTER_CONTRACT.md` require. f1 keeps the unsafe configuration on purpose.
+The pre-steps of b, d and f2 strip every client-supplied `X-Aisa-*` header, d's `forward-auth` sets `status_on_error: 503`, and every `http-logger` has an explicit `log_format` without request headers, as the adapter rules in `PROXY_CONTRACT.md` require. f1 keeps the unsafe configuration on purpose.
 
 ## Output of the recorded run (2026-09-28, APISIX 3.18.0, amd64)
 

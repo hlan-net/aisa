@@ -3,8 +3,8 @@
 The question and outcome are recorded in [`docs/process/SPIKES.md`](../../../../docs/process/SPIKES.md#s9-config-rendering-with-consul-template). This directory holds what they are based on, so they can be re-run against a newer APISIX or consul-template.
 
 ```bash
-./adapters/apisix/spikes/s9-config-rendering/run.sh
-docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s9-config-rendering/compose.override.yaml down -v
+./proxies/apisix/spikes/s9-config-rendering/run.sh
+docker compose -f dev/compose.yaml -f proxies/apisix/spikes/s9-config-rendering/compose.override.yaml down -v
 ```
 
 | File | Contents |

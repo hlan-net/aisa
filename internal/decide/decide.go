@@ -1,4 +1,4 @@
-// Package decide is the decision API, contract 1 in docs/concepts/ADAPTER_CONTRACT.md: the
+// Package decide is the decision API, contract 1 in docs/concepts/PROXY_CONTRACT.md: the
 // gateway asks POST /v1/decide before it proxies a request, and applies the answer.
 //
 // This version authenticates the consumer, checks its token quota and passes the requested
@@ -33,7 +33,7 @@ const (
 )
 
 // maxBody bounds the request body aisa reads to find the model. The gateway may forward the
-// whole client request, prompt and images included. An adapter that sets
+// whole client request, prompt and images included. A proxy that sets
 // X-Aisa-Requested-Model spares aisa the body.
 const maxBody = 16 << 20
 
@@ -191,10 +191,10 @@ var errBodyTooLarge = errors.New("request body too large")
 var errModelTooLong = fmt.Errorf("model name longer than %d bytes", maxModel)
 
 // requestedModel reads the model from X-Aisa-Requested-Model or, when absent, from the JSON
-// request body. The header takes precedence: the adapter sets it from the body and overwrites
-// any client value (adapter rule 2). A request without a model, or with a body that is not a
+// request body. The header takes precedence: the proxy sets it from the body and overwrites
+// any client value (proxy rule 2). A request without a model, or with a body that is not a
 // JSON object, has the model "". A model longer than maxModel is errModelTooLong, from either
-// source, so an adapter's choice between the header and the body does not change the answer.
+// source, so a proxy's choice between the header and the body does not change the answer.
 func requestedModel(r *http.Request) (string, error) {
 	if m := strings.TrimSpace(r.Header.Get(HeaderRequestedModel)); m != "" {
 		if len(m) > maxModel {

@@ -3,10 +3,10 @@
 The questions and outcomes are recorded in [`docs/process/SPIKES.md`](../../../../docs/process/SPIKES.md#s2--s6-usage-events-from-apisix). This directory holds what they are based on, so they can be re-run against a newer APISIX or a real Ollama.
 
 ```bash
-./adapters/apisix/spikes/s2-s6-usage-events/run.sh      # against the mock backends
+./proxies/apisix/spikes/s2-s6-usage-events/run.sh      # against the mock backends
 OLLAMA_URL=http://gpu-box.internal:11434 MODEL=qwen3 \
-  ./adapters/apisix/spikes/s2-s6-usage-events/ollama.sh # against a real Ollama
-docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s2-s6-usage-events/compose.override.yaml down -v
+  ./proxies/apisix/spikes/s2-s6-usage-events/ollama.sh # against a real Ollama
+docker compose -f dev/compose.yaml -f proxies/apisix/spikes/s2-s6-usage-events/compose.override.yaml down -v
 ```
 
 | File | Contents |

@@ -2,7 +2,7 @@
 
 ## Concept
 
-Every consumer gets a token quota, and optionally a monthly money budget. Both are enforced by **aisa**, not by the gateway, so they work the same with any adapter. The gateway only calls `/v1/decide` before the request and reports usage afterwards ([`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md)).
+Every consumer gets a token quota, and optionally a monthly money budget. Both are enforced by **aisa**, not by the gateway, so they work the same with any proxy. The gateway only calls `/v1/decide` before the request and reports usage afterwards ([`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md)).
 
 ## Flow
 
@@ -22,7 +22,7 @@ gateway ─▶ usage event ─▶ aisa: cost = tokens × price, then update the 
 - A consumer names its quota profile in Vault (`quota_profile`, [`VAULT.md`](../concepts/VAULT.md#consumer-credentials)). The profile, `aisa/quotas/<profile>` in Consul, gives the tokens per hour: `{"tokens_per_hour": 200000}` for batch jobs, more for interactive use. `0` allows none. aisa follows the prefix with blocking queries, so a changed profile applies within seconds, without a restart.
 - **Sliding window in Redis**, per consumer: an hour of one-minute buckets. A request's prompt and completion tokens count in the minute the gateway logged it and leave the window 59 to 60 minutes later. The keys are `aisa:quota:{<consumer>}:<minute>`; they expire by themselves, and one consumer's keys share a Redis Cluster slot.
 - **The decision** allows a request while the tokens used in the window are fewer than the limit. Its own tokens are known only after the response, so the last request can take a consumer past the limit, as with budgets. An exhausted quota is answered 429 with `Retry-After`, the seconds until enough tokens leave the window, and counted as `deny_quota`.
-- **Usage events** add their tokens to the window. Events without a consumer (fail-open, [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md#adapter-rules-for-the-decision)) and duplicates are not charged, and neither are events older than the window.
+- **Usage events** add their tokens to the window. Events without a consumer (fail-open, [`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md#proxy-rules-for-the-decision)) and duplicates are not charged, and neither are events older than the window.
 - **A consumer without `quota_profile` has no token quota.**
 - **Failures:** a profile that is missing from Consul or cannot be parsed, or profiles that have not been read yet, deny the consumer's requests with 503 (`quota_unavailable`): fail closed, so a typo does not lift a limit unnoticed. `/readyz` reports `quota_profiles` until the first read. When Redis cannot be read within 250 ms, the request is allowed and counted in `aisa_quota_errors_total{op="check"}`: the credential has been checked, and a quota only limits the rate.
 - Quotas are on when both `CONSUL_HTTP_ADDR` and `AISA_REDIS_ADDR` are set ([`cmd/aisa`](../../cmd/aisa/main.go)).
@@ -37,13 +37,13 @@ Gateway-native quota plugins (e.g. APISIX `ai-rate-limiting`) are **not** used. 
 - **Soft limit** (e.g. 80 %): the request is allowed, the response gets `X-Aisa-Budget-Remaining`, and an alert fires.
 - **Exhausted**, depending on `on_exhausted`:
   - `reject`: 429 with an OpenAI-style error body
-  - `downgrade`: allow the request, but set `X-Aisa-Model` to the configured local model. The adapter routes by that header, so when the cloud budget runs out, work continues on local models.
+  - `downgrade`: allow the request, but set `X-Aisa-Model` to the configured local model. The proxy routes by that header, so when the cloud budget runs out, work continues on local models.
 
 ## Design notes
 
 - **Accuracy:** cost is only known after the response, so the last request of a month can overshoot the budget. This is acceptable and documented. Reserving an estimate up front would add complexity for little gain.
-- **Streaming:** token usage arrives at the end of the stream. The adapter must make sure the usage event contains it (for Ollama's OpenAI endpoint via `stream_options.include_usage`; spike S2).
+- **Streaming:** token usage arrives at the end of the stream. The proxy must make sure the usage event contains it (for Ollama's OpenAI endpoint via `stream_options.include_usage`; spike S2).
 - **Idempotency:** usage events are deduplicated by `request_id`, because log sinks retry.
 - **Persistence:** Redis holds the hot counters, and monthly totals are copied to Consul KV every minute.
-- **Downgrade needs the adapter to honour `X-Aisa-Model`.** This is part of the adapter contract: the gateway routes by that header and forwards the request with that model. For APISIX, an internal route per model matches the header and its `ai-proxy-multi` instances pin the model name (spike S8).
+- **Downgrade needs the proxy to honour `X-Aisa-Model`.** This is part of the proxy contract: the gateway routes by that header and forwards the request with that model. For APISIX, an internal route per model matches the header and its `ai-proxy-multi` instances pin the model name (spike S8).
 - **No budget logic in gateway plugins.** If the extra hop to aisa ever becomes a latency problem, a gateway plugin can cache aisa's decisions as an *optimisation*. aisa stays the only place where the rules live.

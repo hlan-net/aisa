@@ -8,7 +8,7 @@ Related: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`CONSUL.md`](./CONSUL.md), [`.
 - Provider keys (OpenAI and others) live in Vault. Clients never see them.
 - Consumer credentials live in Vault and can be rotated there.
 - Every component authenticates to Vault with short-lived credentials (Kubernetes auth), never a static token.
-- **Gateways never talk to Vault directly.** That keeps adapters simple and avoids depending on each gateway's own Vault support.
+- **Gateways never talk to Vault directly.** That keeps proxies simple and avoids depending on each gateway's own Vault support.
 
 ## Who reads what
 

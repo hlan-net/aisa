@@ -46,7 +46,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 6 | `feature/terraform-module` | Vault mount, policies and roles; Consul ACLs, KV and backend registrations; how a consumer's credential reaches its application through a Kubernetes primitive ([#32](https://github.com/hlan-net/aisa/issues/32), US-1) | — |
 | 7 | `feature/dashboard` | Grafana dashboard and alert rules | — |
 | 8 | `feature/helm-chart` | `deploy/helm/aisa`: aisa with optional Redis, published with the image as an OCI chart on GHCR; `helm lint`, kubeconform and a kind/k3d install test on amd64 and arm64 ([#6](https://github.com/hlan-net/aisa/issues/6)). The chart is also to install and remove the proxy, which is installed separately today | — |
-| 9 | `feature/account-isolation` | Adapter rules for what passes between an application and a provider: an allowlist of forwarded request headers, no provider response headers or error bodies to the client ([#35](https://github.com/hlan-net/aisa/issues/35), US-2); in `ADAPTER_CONTRACT.md` and the APISIX template | — |
+| 9 | `feature/account-isolation` | Proxy rules for what passes between an application and a provider: an allowlist of forwarded request headers, no provider response headers or error bodies to the client ([#35](https://github.com/hlan-net/aisa/issues/35), US-2); in `PROXY_CONTRACT.md` and the APISIX template | — |
 | 10 | `feature/application-guide` | Instructions for the developer of a consuming application, and `/v1/models` through the gateway ([#34](https://github.com/hlan-net/aisa/issues/34), US-1) | — |
 
 ## v0.3.0: Money budgets
@@ -69,14 +69,13 @@ Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/conc
 | No way around the proxy | Applications cannot reach a backend directly | US-1 |
 | Admin interface | An admin API and a UI on it; login through Vault; credentials with traceable metadata and expiry warnings | US-3 |
 | Provider adapters | What is specific to a kind of provider, beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains can be used | US-2, US-3 |
-| Renaming | `adapters/apisix/` → `proxies/apisix/`, `ADAPTER_CONTRACT.md` → `PROXY_CONTRACT.md`; "adapter" then means the provider-specific part only | — |
 | Rendering without consul-template | A renderer in Go next to the proxy, which also logs in to Vault itself, in place of the template and the Vault Agent. It must follow leases as consul-template does | — |
 
 ## v0.4.0: Second proxy
 
 Under review: with aisa bringing its own proxy, a second one proves the contract for a gateway that already exists and belongs to someone else, a case no user story asks for yet.
 
-Prove the contract with a second gateway. **LiteLLM** is the most likely: its open source proxy supports custom auth and callbacks, which map to the decision API and usage events. The contract is marked stable only after this, so the rules that the user stories add to it ([#35](https://github.com/hlan-net/aisa/issues/35), and the client-facing paths of [#34](https://github.com/hlan-net/aisa/issues/34)) must be in the contract before the second adapter is written; otherwise it proves an incomplete contract. Later candidates: Envoy AI Gateway / Agent Router, API7 AISIX.
+Prove the contract with a second gateway. **LiteLLM** is the most likely: its open source proxy supports custom auth and callbacks, which map to the decision API and usage events. The contract is marked stable only after this, so the rules that the user stories add to it ([#35](https://github.com/hlan-net/aisa/issues/35), and the client-facing paths of [#34](https://github.com/hlan-net/aisa/issues/34)) must be in the contract before the second proxy is written; otherwise it proves an incomplete contract. Later candidates: Envoy AI Gateway / Agent Router, API7 AISIX.
 
 ## Later
 
@@ -91,13 +90,13 @@ Improvements that belong in the gateways rather than in aisa:
 1. APISIX Vault secret manager: KV v2 support
 2. APISIX Vault secret manager: Kubernetes auth
 3. `ai-proxy`: count streamed tokens when the backend sends no usage, and log partial usage (and 499) when the client disconnects (spikes S2/S6, [#12](https://github.com/hlan-net/aisa/issues/12))
-4. `ai-proxy-multi`: select the instance by model or by a request header, which would remove the internal hop the adapter needs today (spike S8)
+4. `ai-proxy-multi`: select the instance by model or by a request header, which would remove the internal hop the proxy needs today (spike S8)
 5. `forward-auth`: clear the `upstream_headers` also when `allow_degradation` lets a request through (spike S8)
 6. Anything the spikes uncover, e.g. token usage in log variables for streaming responses
 
 ## Principles
 
-- aisa has no knowledge of any specific gateway. Code for a specific proxy lives only under `adapters/<name>/` (to become `proxies/<name>/`).
+- aisa has no knowledge of any specific gateway. Code for a specific proxy lives only under `proxies/<name>/`.
 - aisa never proxies model traffic itself. That is the proxy's job, and the proxy is an existing AI gateway: aisa installs it, configures it and removes it, and at run time the proxy depends on aisa as little as it can.
 - Consul holds everything that is not a secret, Vault holds the secrets, and Kubernetes objects are what aisa makes of them, never where aisa reads from.
 - The Terraform module takes Vault and Consul addresses and mount names as variables and assumes nothing about a specific environment.

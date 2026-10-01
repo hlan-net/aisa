@@ -3,7 +3,7 @@
 # (prompt_eval_count / eval_count) with its OpenAI-compatible endpoint and with the usage events
 # APISIX logs, for non-streamed and streamed requests.
 #
-#   OLLAMA_URL=http://gpu-box.internal:11434 MODEL=qwen3 ./adapters/apisix/spikes/s2-s6-usage-events/ollama.sh
+#   OLLAMA_URL=http://gpu-box.internal:11434 MODEL=qwen3 ./proxies/apisix/spikes/s2-s6-usage-events/ollama.sh
 #
 # The dev stack must be able to reach Ollama: set GATEWAY_OLLAMA_URL when the containers reach it
 # by another address than this machine (default: OLLAMA_URL). Generation is pinned (temperature 0, fixed seed,

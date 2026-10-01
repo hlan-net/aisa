@@ -2,7 +2,7 @@
 # Spike S9: consul-template renders apisix.yaml from Consul and Vault, and APISIX reloads it.
 # Does a change reach the gateway, and does a reload drop requests?
 #
-#   ./adapters/apisix/spikes/s9-config-rendering/run.sh
+#   ./proxies/apisix/spikes/s9-config-rendering/run.sh
 #
 # Starts the dev stack with this spike's consul-template, runs the checks and leaves the stack up
 # for inspection (docker compose -f dev/compose.yaml -f <this directory>/compose.override.yaml

@@ -2,8 +2,8 @@
 # Spikes S7 + S10: memory and CPU of APISIX, the stub aisa and consul-template under parallel
 # streams, and the latency that forward-auth and the internal hop add.
 #
-#   ./adapters/apisix/spikes/s7-s10-footprint/run.sh
-#   APISIX_WORKERS=1 STREAMS="1 10" DURATION=10 ./adapters/apisix/spikes/s7-s10-footprint/run.sh
+#   ./proxies/apisix/spikes/s7-s10-footprint/run.sh
+#   APISIX_WORKERS=1 STREAMS="1 10" DURATION=10 ./proxies/apisix/spikes/s7-s10-footprint/run.sh
 #
 # Starts the dev stack with this spike's config, measures and leaves the stack up for inspection
 # (docker compose -f dev/compose.yaml -f <this directory>/compose.override.yaml down -v to stop).

@@ -1,6 +1,6 @@
 # Concept: Consul integration
 
-Consul holds three things for aisa: **where the model backends are**, **what models cost** and **what each consumer may spend**. aisa reads them directly. Gateways get backends only through rendered config ([`ADAPTER_CONTRACT.md`](./ADAPTER_CONTRACT.md#3-config-rendering-gateway-configuration)).
+Consul holds three things for aisa: **where the model backends are**, **what models cost** and **what each consumer may spend**. aisa reads them directly. Gateways get backends only through rendered config ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#3-config-rendering-gateway-configuration)).
 
 Related: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`VAULT.md`](./VAULT.md), [`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md).
 
@@ -36,12 +36,12 @@ resource "consul_service" "ollama_1" {
 }
 ```
 
-- All backends use one service name (`aisa-backend`), and **service meta** describes each one. The adapter template turns them into gateway routes (for APISIX, `ai-proxy-multi` instances grouped by model).
+- All backends use one service name (`aisa-backend`), and **service meta** describes each one. The proxy's template turns them into gateway routes (for APISIX, `ai-proxy-multi` instances grouped by model).
 - Cloud providers are registered the same way (an external node such as `api.openai.com`), so every backend is discoverable in one place.
 - Each backend has a **service ID that is unique in the whole catalog**, not only on its node: it is the backend's name in the rendered config and in usage events, where aisa looks up its provider and prices. The Terraform provider defaults the ID to the service name, which all backends share, so the module must set `service_id`.
 - The meta `scheme` says how the gateway reaches a backend, `http` or `https`. It defaults to `https` for a backend with a key, so a provider key is not sent in the clear by accident, and to `http` for the others.
-- The meta `fail_policy` says whether the backend may serve requests while aisa is unreachable: `open` backends serve them without a decision, `closed` backends (the default) do not. A request is answered with 503 only when its model has no `open` backend. It belongs to the backend and not to the consumer, because without aisa the gateway cannot tell who the consumer is. An `open` backend serves any credential in that time, including an unknown one, and its usage is charged to no quota or budget, so set it only where unmetered use costs nothing that matters, typically local models ([`ADAPTER_CONTRACT.md`](./ADAPTER_CONTRACT.md#adapter-rules-for-the-decision)).
-- The meta `timeout` is how long, in seconds, the gateway waits for the backend's next byte: before the first token, between tokens, or for a whole non-streamed answer. It defaults to 300, and the adapter caps it at what its gateway accepts ([`ADAPTER_CONTRACT.md`](./ADAPTER_CONTRACT.md#3-config-rendering-gateway-configuration)). Slow local models need it raised.
+- The meta `fail_policy` says whether the backend may serve requests while aisa is unreachable: `open` backends serve them without a decision, `closed` backends (the default) do not. A request is answered with 503 only when its model has no `open` backend. It belongs to the backend and not to the consumer, because without aisa the gateway cannot tell who the consumer is. An `open` backend serves any credential in that time, including an unknown one, and its usage is charged to no quota or budget, so set it only where unmetered use costs nothing that matters, typically local models ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#proxy-rules-for-the-decision)).
+- The meta `timeout` is how long, in seconds, the gateway waits for the backend's next byte: before the first token, between tokens, or for a whole non-streamed answer. It defaults to 300, and the proxy caps it at what its gateway accepts ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#3-config-rendering-gateway-configuration)). Slow local models need it raised.
 - A backend that needs an API key names it with the meta `key`: the secret `secret/aisa/providers/<key>` in Vault ([`VAULT.md`](./VAULT.md#provider-keys)).
 - A failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically. Until then, requests sent to it fail. That window is the check's interval and timeout, plus the template's quiet period and the gateway's reload: with a 2 s interval it was about 3 s (spike S9). Requests already sent to the backend can wait until the gateway's timeout.
 

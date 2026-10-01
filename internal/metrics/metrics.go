@@ -1,5 +1,5 @@
 // Package metrics defines aisa's own metrics, the aisa_* series of contract 4 in
-// docs/concepts/ADAPTER_CONTRACT.md. They are the same whatever gateway is in use.
+// docs/concepts/PROXY_CONTRACT.md. They are the same whatever gateway is in use.
 package metrics
 
 import (

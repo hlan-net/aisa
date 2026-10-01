@@ -1,5 +1,5 @@
 # Spike S2/S6: extra mock backends with different streamed-usage behaviour.
-#   docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s2-s6-usage-events/compose.override.yaml ...
+#   docker compose -f dev/compose.yaml -f proxies/apisix/spikes/s2-s6-usage-events/compose.override.yaml ...
 services:
   mock-nousage:
     image: aisa-dev-tools:local

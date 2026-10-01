@@ -1,5 +1,5 @@
 # Spike S9: consul-template renders apisix.yaml into a volume that APISIX reads.
-#   docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s9-config-rendering/compose.override.yaml ...
+#   docker compose -f dev/compose.yaml -f proxies/apisix/spikes/s9-config-rendering/compose.override.yaml ...
 # Paths are relative to dev/, the directory of the first compose file.
 services:
   # A second backend for qwen3, so that one of them can leave the rotation.
@@ -23,7 +23,7 @@ services:
     user: "0"
     command: ["-config=/spike/consul-template.hcl"]
     volumes:
-      - ../adapters/apisix/spikes/s9-config-rendering:/spike:ro
+      - ../proxies/apisix/spikes/s9-config-rendering:/spike:ro
       - rendered:/rendered
     depends_on:
       seed-consul: {condition: service_healthy}
@@ -40,7 +40,7 @@ services:
     # a link into it.
     entrypoint: ["sh", "-c", "ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start"]
     volumes: !override
-      - ../adapters/apisix/spikes/s9-config-rendering/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ../proxies/apisix/spikes/s9-config-rendering/config.yaml:/usr/local/apisix/conf/config.yaml:ro
       - rendered:/rendered:ro
     depends_on:
       consul-template: {condition: service_healthy}
