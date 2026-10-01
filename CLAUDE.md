@@ -14,7 +14,7 @@ aisa — **AI Service [Access, Admin, Authority]** — is a Vault- and Consul-na
 |---|---|
 | `docs/concepts/` | The core design: `ARCHITECTURE.md`, `ADAPTER_CONTRACT.md` (the three aisa ↔ gateway contracts), `VAULT.md`, `CONSUL.md` |
 | `docs/features/` | User-facing capabilities: `quotas-and-budgets.md`, `usage-metrics.md` |
-| `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes) |
+| `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes), `USER_STORIES.md` (who aisa is built for, with acceptance criteria and gaps) |
 | `cmd/aisa/`, `internal/` | aisa itself: `config` (environment variables), `server` (HTTP, health), `metrics` (the `aisa_*` registry), `vault`, `consumers`, `decide`, `ledger`, `consul`, `quotas`, `version` |
 | `Dockerfile` | The product image: a static binary in a distroless image, amd64 and arm64 |
 | `dev/` | Docker Compose dev stack (Vault, Consul, Redis, APISIX standalone, mock backends, stub aisa) and `smoke.sh`; see `dev/README.md` |

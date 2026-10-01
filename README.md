@@ -56,6 +56,7 @@ Three contracts connect aisa to a gateway: a **decision API** (forward-auth patt
 | [usage-metrics.md](docs/features/usage-metrics.md) | Metrics, dashboard and alerts |
 | **Process** | |
 | [SPIKES.md](docs/process/SPIKES.md) | Unknowns to verify before implementation |
+| [USER_STORIES.md](docs/process/USER_STORIES.md) | Who aisa is built for, with acceptance criteria and gaps |
 
 ## Running aisa
 
