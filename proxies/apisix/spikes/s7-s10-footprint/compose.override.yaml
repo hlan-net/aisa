@@ -1,5 +1,5 @@
 # Spikes S7 + S10: two more mock backends and a consul-template next to APISIX and the stub aisa.
-#   docker compose -f dev/compose.yaml -f adapters/apisix/spikes/s7-s10-footprint/compose.override.yaml ...
+#   docker compose -f dev/compose.yaml -f proxies/apisix/spikes/s7-s10-footprint/compose.override.yaml ...
 # Paths are relative to dev/, the directory of the first compose file.
 services:
   # Streams like a model: 200 ms to the first token, then 50 tokens a second.
@@ -34,7 +34,7 @@ services:
       - -consul-addr=consul:8500
       - -template=/spike/backends.ctmpl:/tmp/backends.yaml
     volumes:
-      - ../adapters/apisix/spikes/s7-s10-footprint/backends.ctmpl:/spike/backends.ctmpl:ro
+      - ../proxies/apisix/spikes/s7-s10-footprint/backends.ctmpl:/spike/backends.ctmpl:ro
     depends_on:
       seed-consul: {condition: service_healthy}
 

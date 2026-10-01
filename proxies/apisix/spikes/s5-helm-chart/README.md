@@ -3,8 +3,8 @@
 The question and outcome are recorded in [`docs/process/SPIKES.md`](../../../../docs/process/SPIKES.md#s5-apisix-in-standalone-mode-on-kubernetes). This directory holds what they are based on, so they can be re-run on another cluster or against a newer chart.
 
 ```bash
-OLLAMA_ADDR=gpu-box.internal:11434 ./adapters/apisix/spikes/s5-helm-chart/run.sh             # both parts
-OLLAMA_ADDR=gpu-box.internal:11434 ./adapters/apisix/spikes/s5-helm-chart/run.sh manifests   # one part
+OLLAMA_ADDR=gpu-box.internal:11434 ./proxies/apisix/spikes/s5-helm-chart/run.sh             # both parts
+OLLAMA_ADDR=gpu-box.internal:11434 ./proxies/apisix/spikes/s5-helm-chart/run.sh manifests   # one part
 kubectl delete namespace aisa-spike
 ```
 

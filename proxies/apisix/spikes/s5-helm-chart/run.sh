@@ -2,8 +2,8 @@
 # Spike S5: APISIX in standalone mode on Kubernetes, with the official chart and with plain
 # manifests that put consul-template next to it. Which one fits the adapter?
 #
-#   OLLAMA_ADDR=gpu-box.internal:11434 ./adapters/apisix/spikes/s5-helm-chart/run.sh
-#   OLLAMA_ADDR=gpu-box.internal:11434 ./adapters/apisix/spikes/s5-helm-chart/run.sh manifests
+#   OLLAMA_ADDR=gpu-box.internal:11434 ./proxies/apisix/spikes/s5-helm-chart/run.sh
+#   OLLAMA_ADDR=gpu-box.internal:11434 ./proxies/apisix/spikes/s5-helm-chart/run.sh manifests
 #   kubectl delete namespace aisa-spike      # when done
 #
 # Uses the current kubectl context and the namespace aisa-spike (NAMESPACE), which it creates

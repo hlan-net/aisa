@@ -1,6 +1,6 @@
 # Baseline dev route: forward-auth to the stub aisa, proxy to the local mock backend and send
 # an access log entry to the stub's usage endpoint. The spikes change this file; the rendered
-# production config will come from a consul-template template under adapters/apisix/.
+# production config will come from a consul-template template under proxies/apisix/.
 routes:
   - id: chat-completions
     uri: /v1/chat/completions
@@ -10,7 +10,7 @@ routes:
         phase: rewrite
         functions:
           - |
-            -- Adapter rule 1 (ADAPTER_CONTRACT.md): no client-supplied X-Aisa-* header reaches
+            -- Proxy rule 1 (PROXY_CONTRACT.md): no client-supplied X-Aisa-* header reaches
             -- the decision or the backend; only aisa's answer sets them.
             return function(conf, ctx)
               local core = require("apisix.core")
@@ -26,7 +26,7 @@ routes:
         request_headers: [Authorization, X-Request-Id]
         upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
         client_headers: [Content-Type]
-        # aisa unreachable is a 503 (ADAPTER_CONTRACT.md adapter rules), not forward-auth's default 403.
+        # aisa unreachable is a 503 (PROXY_CONTRACT.md proxy rules), not forward-auth's default 403.
         status_on_error: 503
       ai-proxy-multi:
         instances:

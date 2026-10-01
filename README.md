@@ -36,11 +36,11 @@ What aisa is, its parts and the direction it is taking are in [docs/concepts/ARC
             └────▲─────────────▲────────────┬──────┘
       1. decide  │  2. usage   │  3. config │
             ┌────┴─────────────┴────────────▼──────┐
- clients ──▶│ AI gateway (APISIX, …) via an adapter │──▶ Ollama / vLLM / cloud APIs
+ clients ──▶│ proxy: an AI gateway (APISIX, …)      │──▶ Ollama / vLLM / cloud APIs
             └───────────────────────────────────────┘
 ```
 
-Three contracts connect aisa to a gateway: a **decision API** (forward-auth pattern), **usage events** (access log sink) and **config rendering** (consul-template). See [docs/concepts/ADAPTER_CONTRACT.md](docs/concepts/ADAPTER_CONTRACT.md).
+Three contracts connect aisa to its proxy: a **decision API** (forward-auth pattern), **usage events** (access log sink) and **config rendering** (consul-template). See [docs/concepts/PROXY_CONTRACT.md](docs/concepts/PROXY_CONTRACT.md).
 
 ## Documents
 
@@ -50,7 +50,7 @@ Three contracts connect aisa to a gateway: a **decision API** (forward-auth patt
 | [CHANGELOG.md](CHANGELOG.md) | Notable changes per release |
 | **Concepts** | |
 | [ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md) | Components, traffic path, failure modes, reference deployment |
-| [ADAPTER_CONTRACT.md](docs/concepts/ADAPTER_CONTRACT.md) | The three aisa ↔ gateway contracts, the `aisa_*` metrics and the adapter checklist |
+| [PROXY_CONTRACT.md](docs/concepts/PROXY_CONTRACT.md) | The three aisa ↔ proxy contracts, the `aisa_*` metrics and the proxy checklist |
 | [VAULT.md](docs/concepts/VAULT.md) | Identities and provider keys from Vault |
 | [CONSUL.md](docs/concepts/CONSUL.md) | Backends, prices and budgets in Consul |
 | **Features** | |
@@ -77,7 +77,7 @@ curl localhost:8080/healthz
 |---|---|
 | `GET /healthz` | Answers while the process runs (liveness) |
 | `GET /readyz` | 200 when every dependency can be used, else 503 with the names of those that failed (readiness) |
-| `GET /metrics` | The `aisa_*` metrics of [ADAPTER_CONTRACT.md](docs/concepts/ADAPTER_CONTRACT.md#4-metrics-output-of-aisa), in the Prometheus format |
+| `GET /metrics` | The `aisa_*` metrics of [PROXY_CONTRACT.md](docs/concepts/PROXY_CONTRACT.md#4-metrics-output-of-aisa), in the Prometheus format |
 
 ## Development
 

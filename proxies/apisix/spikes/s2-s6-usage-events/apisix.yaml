@@ -1,4 +1,4 @@
-# Spike S2 + S6: can APISIX http-logger produce the usage event schema (ADAPTER_CONTRACT.md,
+# Spike S2 + S6: can APISIX http-logger produce the usage event schema (PROXY_CONTRACT.md,
 # contract 2), and are the token counts right for streamed responses?
 #
 #   /u/  forward-auth + ai-proxy-multi → mock-local    (streams usage when asked, like OpenAI)

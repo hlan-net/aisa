@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Spike S8: runs the variants in apisix.yaml against the dev stack and prints what happened.
 #
-#   ./adapters/apisix/spikes/s8-forward-auth-model/run.sh
+#   ./proxies/apisix/spikes/s8-forward-auth-model/run.sh
 #
 # Starts the dev stack with this spike's APISIX config, runs the checks and leaves the stack up
 # for inspection (docker compose -f dev/compose.yaml down -v to stop). Needs curl and jq.

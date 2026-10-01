@@ -10,7 +10,7 @@
 
 <!-- Does this PR change the decision API, the usage event schema, config rendering or the aisa_* metrics? -->
 - [ ] No contract change
-- [ ] Contract changed: new version and `docs/concepts/ADAPTER_CONTRACT.md` updated
+- [ ] Contract changed: new version and `docs/concepts/PROXY_CONTRACT.md` updated
 
 ## Test plan
 
@@ -20,6 +20,6 @@
 ## Checklist
 
 - [ ] No secrets and no environment-specific values (hostnames, IP addresses, tenant IDs)
-- [ ] Gateway-specific code only under `adapters/<name>/`
+- [ ] Gateway-specific code only under `proxies/<name>/`
 - [ ] `CHANGELOG.md` entry under `[Unreleased]` for user-visible changes
 - [ ] Docs updated
