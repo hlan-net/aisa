@@ -1,0 +1,32 @@
+# APISIX configuration for the aisa proxy in standalone mode.
+# Two-hop routing uses an internal listener on 127.0.0.1:9081 for model routing and proxying.
+
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+
+apisix:
+  node_listen:
+    - 9080
+    - ip: 127.0.0.1
+      port: 9081
+  enable_admin: false
+  # Disable IPv6 for container and Kubernetes environments where IPv6 may not be configured.
+  enable_ipv6: false
+  # Re-resolve DNS quickly for recreated backend pods and containers.
+  dns_resolver_valid: 1
+
+nginx_config:
+  error_log_level: warn
+  # One worker, whatever the node has: APISIX otherwise starts one per core of the node, not of
+  # the pod's CPU limit. It keeps the footprint predictable on small nodes (spike S7, #16).
+  worker_processes: 1
+  event:
+    worker_connections: 1024
+
+plugin_attr:
+  prometheus:
+    export_addr:
+      ip: 0.0.0.0
+      port: 9091

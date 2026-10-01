@@ -1,0 +1,297 @@
+# Rendered by consul-template from the Consul catalog (service aisa-backend) and Vault
+# (secret/data/aisa/providers/*). Do not edit directly: the next render replaces this file.
+#
+# Routes:
+#   client                   the client-facing route: pre-step, forward-auth, then internal listener
+#   model-<name>             normal route per model on the internal listener (matched by X-Aisa-Model)
+#   model-<name>-fail-open   fail-open route for models with fail_policy="open" when aisa is unreachable
+#   no-backend               answers 503 for any model without a healthy backend (priority 0)
+
+{{- /* Log comments for skipped backends with invalid metadata (#18) */}}
+{{- range service "aisa-backend" }}
+  {{- if not (index .ServiceMeta "models") }}
+# Skipped backend {{ .ID | toJSON }}: missing 'models' metadata
+  {{- else if not (eq (index .ServiceMeta "provider") "openai-compatible") }}
+# Skipped backend {{ .ID | toJSON }}: unsupported provider {{ index .ServiceMeta "provider" | toJSON }}
+  {{- end }}
+{{- end }}
+
+{{- /* Collect distinct models and fail-open models from valid backends */}}
+{{- range service "aisa-backend" }}
+  {{- $backend := . }}
+  {{- $modelsMeta := index $backend.ServiceMeta "models" }}
+  {{- $providerMeta := index $backend.ServiceMeta "provider" }}
+  {{- if and $modelsMeta (eq $providerMeta "openai-compatible") }}
+    {{- range ($modelsMeta | split ",") }}
+      {{- $m := . | trimSpace }}
+      {{- if $m }}
+        {{- scratch.MapSet "models" $m $m }}
+        {{- if eq (index $backend.ServiceMeta "fail_policy") "open" }}
+          {{- scratch.MapSet "fail_open_models" $m $m }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+# The gateway's own metrics for every route, the hop between them included. They are the
+# cross-check of aisa's ledger, never its source (PROXY_CONTRACT.md, Metrics).
+global_rules:
+  - id: metrics
+    plugins:
+      prometheus: {}
+
+routes:
+  - id: client
+    uri: /v1/chat/completions
+    methods: [POST]
+    vars: [["server_port", "==", "9080"]]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              local core = require("apisix.core")
+              -- Proxy rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
+              for name in pairs(core.request.headers(ctx)) do
+                if string.lower(name):find("^x%-aisa%-") then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+              local model
+              local body = core.request.get_body()
+              if body then
+                local t = core.json.decode(body)
+                if type(t) == "table" and type(t.model) == "string" then
+                  model = t.model
+                end
+              end
+              core.request.set_header(ctx, "X-Aisa-Requested-Model", model)
+              -- The internal hop is a new request with an id of its own; its usage event carries this one,
+              -- the id sent to the decision.
+              core.request.set_header(ctx, "X-Aisa-Request-Id", ctx.var.apisix_request_id)
+            end
+      forward-auth:
+        uri: {{ or (env "AISA_DECIDE_URI") "http://aisa:8080/v1/decide" }}
+        request_method: GET
+        request_headers: [Authorization, X-Aisa-Requested-Model]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        client_headers: [Content-Type, Retry-After]
+        extra_headers:
+          X-Request-Id: $apisix_request_id
+        # Fail-open support (#4): allow_degradation passes the request to internal hop
+        # only when aisa is unreachable (connection error or timeout). Answers from aisa
+        # (400, 401, 413, 429, 503) are passed directly to the client.
+        allow_degradation: true
+        status_on_error: 503
+      # A request aisa denied ends here, so this route reports it. The filter is true only
+      # without X-Aisa-Consumer, which forward-auth sets on an allowed request.
+      http-logger:
+        _meta:
+          filter: [["http_x_aisa_consumer", "!", "~~", "."]]
+        uri: {{ or (env "AISA_USAGE_URI") "http://aisa:8080/v1/usage" }}
+        batch_max_size: 1
+        inactive_timeout: 1
+        # Explicit format only (#5): never send raw headers or credentials.
+        log_format:
+          ts: $time_iso8601
+          request_id: $apisix_request_id
+          consumer: $http_x_aisa_consumer
+          requested_model: $http_x_aisa_requested_model
+          status: $status
+    upstream:
+      type: roundrobin
+      # Timeout of the internal hop (#14): read timeout must cover slow generation.
+      timeout: {connect: 5, send: 600, read: 600}
+      nodes:
+        "127.0.0.1:9081": 1
+
+{{- range scratch.MapValues "models" }}{{ $model := . }}
+  {{- /* Compute safe route ID for APISIX: letters, digits, '-', '_', '.' up to 64 chars */}}
+  {{- $safe := $model | regexReplaceAll "[^a-zA-Z0-9_.-]" "-" }}
+  {{- $id := printf "model-%s" $safe }}
+  {{- if or (ne $safe $model) (gt (len $safe) 58) }}
+    {{- $id = printf "model-%s-%s" ($safe | sprig_trunc 49) (sha256Hex $model | sprig_trunc 8) }}
+  {{- end }}
+
+  {{- /* Determine backend timeout for this model (#14): default 300s, max 600s */}}
+  {{- $maxTimeoutSec := 300 }}
+  {{- range service "aisa-backend" }}
+    {{- $serves := false }}
+    {{- range (index .ServiceMeta "models" | split ",") }}{{ if eq (. | trimSpace) $model }}{{ $serves = true }}{{ end }}{{ end }}
+    {{- if $serves }}
+      {{- with index .ServiceMeta "timeout" }}
+        {{- $t := . | sprig_int }}
+        {{- if and (gt $t 0) (gt $t $maxTimeoutSec) }}
+          {{- $maxTimeoutSec = $t }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- if gt $maxTimeoutSec 600 }}{{ $maxTimeoutSec = 600 }}{{ end }}
+  {{- $timeoutMs := sprig_mul $maxTimeoutSec 1000 }}
+
+  - id: {{ $id | toJSON }}
+    uri: /v1/chat/completions
+    methods: [POST]
+    priority: 10
+    vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "==", {{ $model | toJSON }}]]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              -- Strip client credential so no backend receives it.
+              require("apisix.core").request.set_header(ctx, "Authorization", nil)
+            end
+      ai-proxy-multi:
+        timeout: {{ $timeoutMs }}
+        instances:
+        {{- range service "aisa-backend" }}
+          {{- $serves := false }}
+          {{- range (index .ServiceMeta "models" | split ",") }}{{ if eq (. | trimSpace) $model }}{{ $serves = true }}{{ end }}{{ end }}
+          {{- if and $serves (eq (index .ServiceMeta "provider") "openai-compatible") }}
+          - name: {{ .ID | toJSON }}
+            provider: {{ index .ServiceMeta "provider" | toJSON }}
+            weight: 1
+            {{- if index .ServiceMeta "key" }}
+            {{- with secret (printf "secret/data/aisa/providers/%s" (index .ServiceMeta "key")) }}
+            auth: {header: {Authorization: {{ printf "Bearer %s" .Data.data.api_key | toJSON }}}}
+            {{- end }}
+            {{- else }}
+            # ai-proxy-multi requires auth; this backend needs none.
+            auth: {header: {X-Aisa-No-Key: "1"}}
+            {{- end }}
+            options: {model: {{ $model | toJSON }}}
+            {{- /* A backend with a key is a remote provider: https unless its meta says otherwise. */}}
+            {{- $scheme := "http" }}
+            {{- if index .ServiceMeta "key" }}{{ $scheme = "https" }}{{ end }}
+            {{- with index .ServiceMeta "scheme" }}{{ if eq . "http" "https" }}{{ $scheme = . }}{{ end }}{{ end }}
+            override: {endpoint: {{ printf "%s://%s:%d/v1/chat/completions" $scheme .Address .Port | toJSON }}}
+          {{- end }}
+        {{- end }}
+      http-logger:
+        uri: {{ or (env "AISA_USAGE_URI") "http://aisa:8080/v1/usage" }}
+        batch_max_size: 1
+        inactive_timeout: 1
+        # Explicit format only (#5): Contract 2 usage event schema.
+        log_format:
+          ts: $time_iso8601
+          request_id: $http_x_aisa_request_id
+          consumer: $http_x_aisa_consumer
+          model: $llm_model
+          requested_model: $http_x_aisa_requested_model
+          backend: $balancer_ip
+          prompt_tokens: $llm_prompt_tokens
+          completion_tokens: $llm_completion_tokens
+          status: $status
+          latency_ms: $apisix_upstream_response_time
+          ttft_ms: $llm_time_to_first_token
+          stream: $llm_stream
+{{- end }}
+
+{{- /* Render fail-open routes for models whose backends have fail_policy = "open" (#4) */}}
+{{- range scratch.MapValues "fail_open_models" }}{{ $model := . }}
+  {{- $safe := $model | regexReplaceAll "[^a-zA-Z0-9_.-]" "-" }}
+  {{- $id := printf "model-%s-fail-open" $safe }}
+  {{- if or (ne $safe $model) (gt (len $safe) 48) }}
+    {{- $id = printf "model-%s-fo-%s" ($safe | sprig_trunc 40) (sha256Hex $model | sprig_trunc 8) }}
+  {{- end }}
+
+  {{- $maxTimeoutSec := 300 }}
+  {{- range service "aisa-backend" }}
+    {{- $serves := false }}
+    {{- range (index .ServiceMeta "models" | split ",") }}{{ if eq (. | trimSpace) $model }}{{ $serves = true }}{{ end }}{{ end }}
+    {{- if and $serves (eq (index .ServiceMeta "fail_policy") "open") }}
+      {{- with index .ServiceMeta "timeout" }}
+        {{- $t := . | sprig_int }}
+        {{- if and (gt $t 0) (gt $t $maxTimeoutSec) }}
+          {{- $maxTimeoutSec = $t }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- if gt $maxTimeoutSec 600 }}{{ $maxTimeoutSec = 600 }}{{ end }}
+  {{- $timeoutMs := sprig_mul $maxTimeoutSec 1000 }}
+
+  - id: {{ $id | toJSON }}
+    uri: /v1/chat/completions
+    methods: [POST]
+    priority: 10
+    # Matches when aisa was unreachable (X-Aisa-Model absent) and requested model is $model
+    vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "!", "~~", "."], ["http_x_aisa_requested_model", "==", {{ $model | toJSON }}]]
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function(conf, ctx)
+              require("apisix.core").request.set_header(ctx, "Authorization", nil)
+            end
+      ai-proxy-multi:
+        timeout: {{ $timeoutMs }}
+        instances:
+        {{- range service "aisa-backend" }}
+          {{- $serves := false }}
+          {{- range (index .ServiceMeta "models" | split ",") }}{{ if eq (. | trimSpace) $model }}{{ $serves = true }}{{ end }}{{ end }}
+          {{- if and $serves (eq (index .ServiceMeta "fail_policy") "open") (eq (index .ServiceMeta "provider") "openai-compatible") }}
+          - name: {{ .ID | toJSON }}
+            provider: {{ index .ServiceMeta "provider" | toJSON }}
+            weight: 1
+            {{- if index .ServiceMeta "key" }}
+            {{- with secret (printf "secret/data/aisa/providers/%s" (index .ServiceMeta "key")) }}
+            auth: {header: {Authorization: {{ printf "Bearer %s" .Data.data.api_key | toJSON }}}}
+            {{- end }}
+            {{- else }}
+            auth: {header: {X-Aisa-No-Key: "1"}}
+            {{- end }}
+            options: {model: {{ $model | toJSON }}}
+            {{- $scheme := "http" }}
+            {{- if index .ServiceMeta "key" }}{{ $scheme = "https" }}{{ end }}
+            {{- with index .ServiceMeta "scheme" }}{{ if eq . "http" "https" }}{{ $scheme = . }}{{ end }}{{ end }}
+            override: {endpoint: {{ printf "%s://%s:%d/v1/chat/completions" $scheme .Address .Port | toJSON }}}
+          {{- end }}
+        {{- end }}
+      http-logger:
+        uri: {{ or (env "AISA_USAGE_URI") "http://aisa:8080/v1/usage" }}
+        batch_max_size: 1
+        inactive_timeout: 1
+        # Explicit format: consumer is empty, accounted as unknown in aisa.
+        log_format:
+          ts: $time_iso8601
+          request_id: $http_x_aisa_request_id
+          consumer: $http_x_aisa_consumer
+          model: $llm_model
+          requested_model: $http_x_aisa_requested_model
+          backend: $balancer_ip
+          prompt_tokens: $llm_prompt_tokens
+          completion_tokens: $llm_completion_tokens
+          status: $status
+          latency_ms: $apisix_upstream_response_time
+          ttft_ms: $llm_time_to_first_token
+          stream: $llm_stream
+{{- end }}
+
+  - id: no-backend
+    uri: /v1/chat/completions
+    methods: [POST]
+    priority: 0
+    vars: [["server_port", "==", "9081"]]
+    plugins:
+      fault-injection:
+        abort:
+          http_status: 503
+          body: '{"error":{"message":"no healthy backend serves this model","type":"no_backend"}}'
+      http-logger:
+        uri: {{ or (env "AISA_USAGE_URI") "http://aisa:8080/v1/usage" }}
+        batch_max_size: 1
+        inactive_timeout: 1
+        log_format:
+          ts: $time_iso8601
+          request_id: $http_x_aisa_request_id
+          consumer: $http_x_aisa_consumer
+          requested_model: $http_x_aisa_requested_model
+          status: $status
+#END
