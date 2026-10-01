@@ -29,11 +29,11 @@ Kubernetes-native describes the **applications that consume inference**, not the
 
 | Criterion | State | Where |
 |---|---|---|
-| 2 | Open. Vault holds only the hash of a consumer key ([`VAULT.md`](../concepts/VAULT.md)); how the key reaches the application's pod is not specified. The planned Vault-issued JWTs make pods log in to Vault, which is not Kubernetes-native for the application. | Needs a design decision |
-| 4 | In part. Token quotas are enforced; money budgets and downgrade are not. | `ROADMAP.md` v0.3.0 |
+| 2 | Open. Vault holds only the hash of a consumer key ([`VAULT.md`](../concepts/VAULT.md)); how the key reaches the application's pod is not specified. The planned Vault-issued JWTs make pods log in to Vault, which is not Kubernetes-native for the application. | [#32](https://github.com/hlan-net/aisa/issues/32) |
+| 4 | In part. Token quotas are enforced; money budgets and downgrade are not. A consumer without limits is unlimited, and nothing caps the total above the consumers. | `ROADMAP.md` v0.3.0, [#33](https://github.com/hlan-net/aisa/issues/33) |
 | 5 | In progress. | `ROADMAP.md` v0.2.0 PR 5 ([#4](https://github.com/hlan-net/aisa/issues/4)) |
 | 6 | In part. Token metrics exist; cost metrics and the dashboard do not. | `ROADMAP.md` v0.2.0 PR 7, v0.3.0 |
-| 7 | Open. The docs describe aisa for the operator and the adapter author; nothing is written for the developer of a consuming application. Where the instructions live (a feature doc, the chart's install notes, an endpoint of the service) is undecided, and so is what is offered to an application that speaks a provider's own API instead of the OpenAI-compatible one. | Needs a design decision |
+| 7 | Open. The docs describe aisa for the operator and the adapter author; nothing is written for the developer of a consuming application. Where the instructions live (a feature doc, the chart's install notes, an endpoint of the service) is undecided, and so is what is offered to an application that speaks a provider's own API instead of the OpenAI-compatible one. The gateway serves `/v1/chat/completions` only; `/v1/models` is missing. | [#34](https://github.com/hlan-net/aisa/issues/34) |
 
 ## US-2: The provider accounts stay mine
 
@@ -55,7 +55,7 @@ This was implicit in the design from the start (provider keys in Vault, rendered
 
 | Criterion | State | Where |
 |---|---|---|
-| 1, 2 | Open. The adapter passes a provider's response to the application unchanged: its headers (OpenAI, for one, answers with `openai-organization` and `x-ratelimit-*`) and its error bodies, which can name the account or the key. The contract only requires that aisa's own errors be passed on; it says nothing about a provider's. | Needs an adapter rule in [`ADAPTER_CONTRACT.md`](../concepts/ADAPTER_CONTRACT.md) |
-| 3 | Open. The internal route strips `Authorization` only; every other request header goes to the provider, `OpenAI-Organization` and `OpenAI-Project` among them. The contract rule covers the credential, not the headers that choose how the account is used. | Needs an adapter rule: an allowlist of forwarded request headers |
+| 1, 2 | Open. The adapter passes a provider's response to the application unchanged: its headers (OpenAI, for one, answers with `openai-organization` and `x-ratelimit-*`) and its error bodies, which can name the account or the key. The contract only requires that aisa's own errors be passed on; it says nothing about a provider's. | [#35](https://github.com/hlan-net/aisa/issues/35) |
+| 3 | Open. The internal route strips `Authorization` only; every other request header goes to the provider, `OpenAI-Organization` and `OpenAI-Project` among them. The contract rule covers the credential, not the headers that choose how the account is used. | [#35](https://github.com/hlan-net/aisa/issues/35) |
 | 4 | Met by design ([`CONSUL.md`](../concepts/CONSUL.md#backends-consul-catalog)); the routes are in progress. | `ROADMAP.md` v0.2.0 PR 5 ([#4](https://github.com/hlan-net/aisa/issues/4)) |
 | 5 | Met for credentials ([#5](https://github.com/hlan-net/aisa/issues/5)): usage events carry explicit fields only and aisa never logs a raw event. | — |
