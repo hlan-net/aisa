@@ -111,6 +111,8 @@ loaded() {
     echo "{\"modifiedIndex\":$version,\"key\":\"/routes/$id\",\"value\":{\"id\":\"$id\"}}" > "$CONTROL/v1/route/$id"
   done
 }
+# The content of the file that APISIX runs before the guard is called.
+PREVIOUS=previous-config
 stage() {
   cat << 'EOF' > "$STAGED"
 global_rules:
@@ -125,7 +127,7 @@ EOF
 }
 
 echo "== guard.sh: APISIX loaded every route of the new file"
-echo "previous-config" > "$TARGET"
+echo "$PREVIOUS" > "$TARGET"
 touch -d @1700000000 "$TARGET"
 stage
 loaded 1700000100 client model-qwen3 no-backend
@@ -134,7 +136,7 @@ grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: a file APISIX loaded was not ke
 [[ ! -e "$TARGET.last-good" ]] || { echo "FAIL: the copy of the previous file was left behind" >&2; exit 1; }
 
 echo "== guard.sh: APISIX left a route out"
-echo "previous-config" > "$TARGET"
+echo "$PREVIOUS" > "$TARGET"
 touch -d @1700000000 "$TARGET"
 stage
 loaded 1700000100 client no-backend
@@ -142,11 +144,11 @@ if out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
   echo "FAIL: a file with a route APISIX left out was accepted" >&2
   exit 1
 fi
-[[ "$(cat "$TARGET")" = "previous-config" ]] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
+[[ "$(cat "$TARGET")" = "$PREVIOUS" ]] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
 grep -q 'model-qwen3' <<< "$out" || { echo "FAIL: the error does not name the route: $out" >&2; exit 1; }
 
 echo "== guard.sh: APISIX still runs the previous file"
-echo "previous-config" > "$TARGET"
+echo "$PREVIOUS" > "$TARGET"
 touch -d @1700000000 "$TARGET"
 stage
 loaded 1600000000 client model-qwen3 no-backend
@@ -154,7 +156,7 @@ if "$GUARD" "$STAGED" "$TARGET" 2>/dev/null; then
   echo "FAIL: routes of an older file were taken for the new one's" >&2
   exit 1
 fi
-[[ "$(cat "$TARGET")" = "previous-config" ]] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
+[[ "$(cat "$TARGET")" = "$PREVIOUS" ]] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
 
 echo "== guard.sh: a new file with the same modification time as the current one"
 stage
@@ -164,7 +166,7 @@ cp -p "$STAGED" "$TARGET"
 
 echo "== guard.sh: the Control API does not answer"
 kill $SERVER; wait $SERVER 2>/dev/null || true
-echo "previous-config" > "$TARGET"
+echo "$PREVIOUS" > "$TARGET"
 touch -d @1700000000 "$TARGET"
 stage
 if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
