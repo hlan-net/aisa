@@ -51,8 +51,10 @@ Client ──▶ [Port 9080: client route]
      * The file is non-empty and terminates with the `#END` marker (verifying complete write).
      * The `routes:` block is present and contains required routes (`id: client`, `id: no-backend`).
      * Route IDs are unique.
-  3. If validation succeeds, `guard.sh` atomically moves (`mv -f`) the staged file to `/rendered/apisix.yaml`.
-  4. If validation fails, `guard.sh` aborts and APISIX continues serving the last known good configuration without dropping routes or returning 404 on the client endpoint.
+  3. If validation succeeds, `guard.sh` keeps a copy of the current file and atomically moves (`mv -f`) the staged file to `/rendered/apisix.yaml`.
+  4. **APISIX validates the routes against its own schemas** when it loads the file, and leaves out a route that fails, with the error in its log only. So the guard then asks APISIX's Control API (`127.0.0.1:9090`, reachable only inside the pod) for every route of the new file, and waits up to `GUARD_VERIFY_TIMEOUT` (10 s) until each is loaded from the new file: the Control API reports the modification time of the file a route came from as its `modifiedIndex`. If a route is missing, the guard puts the previous file back and fails, naming the routes. Until then, for at most that time, APISIX serves the new file without them.
+  5. If validation fails, `guard.sh` aborts and APISIX continues serving the last known good configuration without dropping routes or returning 404 on the client endpoint.
+  * Not checked against APISIX: the first render, by the init container before APISIX starts, and a render while the Control API does not answer (APISIX restarting); then only the checks of step 2 apply, with a warning in the log.
 * **Metadata validation:** Backends with missing `models` or unsupported `provider` are skipped with descriptive comments in the rendered YAML.
 
 ---
@@ -109,9 +111,9 @@ Settings for an environment go into an overlay, not into these files:
 
 Run against the dev stack (`docker compose -f dev/compose.yaml up -d --build --wait`); CI runs all three:
 
-* [`guard_test.sh`](./guard_test.sh): what `guard.sh` promotes and what it rejects.
+* [`guard_test.sh`](./guard_test.sh): what `guard.sh` promotes and what it rejects, with a fake Control API.
 * [`render_test.sh`](./render_test.sh): renders the template with consul-template against the dev Consul and Vault and checks the routes, also for model names that need an escaped or shortened route ID.
-* [`runtime_test.sh`](./runtime_test.sh): runs APISIX on the rendered config with the stub aisa, and checks that a request aisa allows, denies, or cannot be asked about is reported to the usage sink exactly once, by the right route.
+* [`runtime_test.sh`](./runtime_test.sh): runs APISIX on the rendered config with the stub aisa, and checks that a request aisa allows, denies, or cannot be asked about is reported to the usage sink exactly once, by the right route. It also runs `guard.sh` next to that APISIX: a file with a route APISIX's schema rejects is put back, and a valid one is kept.
 
 Not verified yet: the login with Vault's Kubernetes auth and the Consul token from Vault need a cluster and were not part of spike S5. In particular, whether consul-template picks up a Consul token that the Vault Agent replaces when its lease ends has not been tested; until it has, give the Consul role a long lease or restart the pod within it.
 

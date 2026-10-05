@@ -12,6 +12,11 @@ apisix:
     - ip: 127.0.0.1
       port: 9081
   enable_admin: false
+  # The Control API answers only inside the pod; guard.sh asks it which routes APISIX loaded.
+  enable_control: true
+  control:
+    ip: 127.0.0.1
+    port: 9090
   # Disable IPv6 for container and Kubernetes environments where IPv6 may not be configured.
   enable_ipv6: false
   # Re-resolve DNS quickly for recreated backend pods and containers.

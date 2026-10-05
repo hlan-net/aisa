@@ -53,13 +53,18 @@ render() {
 # proxy <dir>: (re)starts APISIX on the config rendered into <dir> and waits for its routes.
 proxy() {
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    # As in the pod (manifests/proxy.yaml): the directory is mounted, and the config path is a
+    # link into it, so a file that guard.sh renames over the old one is seen.
     docker run -d --name "$CONTAINER" --network "$NETWORK" -p "127.0.0.1:$PORT:9080" \
         -v "$SCRIPT_DIR/config.yaml":/usr/local/apisix/conf/config.yaml:ro \
-        -v "$1/apisix.yaml":/usr/local/apisix/conf/apisix.yaml:ro \
-        "$APISIX_IMAGE" >/dev/null
+        -v "$1":/rendered:ro \
+        "$APISIX_IMAGE" sh -c 'ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start' >/dev/null
     for _ in $(seq 1 30); do
         code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROXY/v1/chat/completions" || true)
-        [[ "$code" != "000" && "$code" != "404" ]] && return 0
+        if [[ "$code" != "000" && "$code" != "404" ]]; then
+            sleep 2 # the usage event of this probe arrives before the checks clear the stub
+            return 0
+        fi
         sleep 1
     done
     fail "APISIX did not load the rendered routes"
@@ -100,6 +105,38 @@ proxy "$OUT/reachable"
 one "allowed" dev-key-chat-ui qwen3 200 chat-ui
 one "denied by a quota" dev-key-blocked qwen3 429 ""
 one "unknown key" wrong-key qwen3 401 ""
+
+echo "== guard.sh against APISIX"
+# guard <dir>: runs guard.sh on <dir>/apisix.yaml.staged in the consul-template image, with
+# APISIX's Control API on its localhost, as in the pod.
+guard() {
+    docker run --rm --network "container:$CONTAINER" --entrypoint sh \
+        -v "$SCRIPT_DIR":/etc/apisix/aisa:ro -v "$1":/rendered \
+        "$CT_IMAGE" /etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml
+}
+dir="$OUT/reachable"
+cp "$dir/apisix.yaml" "$OUT/previous.yaml"
+# A model route that APISIX's schema rejects: a provider ai-proxy-multi does not know.
+awk '/^  - id: "model-qwen3"$/ { f = 1 } /^  - id: / && !/"model-qwen3"/ { f = 0 }
+     f && /provider: "openai-compatible"/ { sub(/openai-compatible/, "no-such-provider") } { print }' \
+    "$dir/apisix.yaml" > "$dir/apisix.yaml.staged"
+grep -q no-such-provider "$dir/apisix.yaml.staged" || fail "the test could not break the route of qwen3"
+chmod 666 "$dir/apisix.yaml.staged"
+sleep 1 # a modification time APISIX has not seen
+if out=$(guard "$dir" 2>&1); then
+    fail "guard.sh promoted a file whose route APISIX left out: $out"
+fi
+grep -q 'model-qwen3' <<<"$out" || fail "guard.sh did not name the route APISIX left out: $out"
+ok "guard.sh: a route APISIX rejects is found, and the file is not kept"
+cmp -s "$dir/apisix.yaml" "$OUT/previous.yaml" || fail "guard.sh did not put the previous file back"
+ok "guard.sh: the previous file is back"
+sleep 2 # APISIX loads the restored file
+one "served after the rejected file" dev-key-chat-ui qwen3 200 chat-ui
+cp "$OUT/previous.yaml" "$dir/apisix.yaml.staged"
+chmod 666 "$dir/apisix.yaml.staged"
+sleep 1
+out=$(guard "$dir" 2>&1) || fail "guard.sh rejected a file APISIX loads: $out"
+ok "guard.sh: a file APISIX loads in full is kept"
 
 echo "== aisa unreachable"
 # Nothing listens on this port: forward-auth fails and degrades to the internal hop.
