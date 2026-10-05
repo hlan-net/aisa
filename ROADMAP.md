@@ -12,7 +12,7 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 ## Current state: v0.1.0 released
 
 - Architecture and the three aisa ↔ gateway contracts are written down ([docs/concepts/](docs/concepts/))
-- Quotas, money budgets and usage metrics are specified ([docs/features/](docs/features/))
+- Quotas, budgets (in tokens) and usage metrics are specified ([docs/features/](docs/features/))
 - The spikes of v0.1.0 are answered ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S2 in part ([#12](https://github.com/hlan-net/aisa/issues/12))
 - Local dev stack with a mock backend and a stub aisa ([dev/](dev/))
 - aisa authenticates consumers against Vault with `/v1/decide`, ingests usage events at `/v1/usage`, enforces token quotas from Consul with counters in Redis and exports its metrics; it does not enforce budgets yet ([cmd/aisa/](cmd/aisa/))

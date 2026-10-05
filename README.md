@@ -55,7 +55,7 @@ Three contracts connect aisa to its proxy: a **decision API** (forward-auth patt
 | [CONSUL.md](docs/concepts/CONSUL.md) | Backends, prices and budgets in Consul |
 | [KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md) | What applications see: `Model` objects and a Secret with their key (draft) |
 | **Features** | |
-| [quotas-and-budgets.md](docs/features/quotas-and-budgets.md) | Token quotas and monthly money budgets |
+| [quotas-and-budgets.md](docs/features/quotas-and-budgets.md) | Token quotas and monthly budgets, both in tokens |
 | [usage-metrics.md](docs/features/usage-metrics.md) | Metrics, dashboard and alerts |
 | **Process** | |
 | [SPIKES.md](docs/process/SPIKES.md) | Unknowns to verify before implementation |

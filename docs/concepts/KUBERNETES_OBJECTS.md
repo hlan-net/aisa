@@ -53,7 +53,12 @@ status:
   conditions: [...]
 ```
 
-- **Name.** `spec.model` is the exact name to send. The object's name is the model name lowercased, with every character outside `[a-z0-9-]` replaced by `-`, cut to 54 characters, plus `-` and the first 8 hex digits of the SHA-256 of the exact model name, so `qwen3:8b` and `qwen3-8b` get different objects. Should two model names still map to one object name, aisa creates neither, logs an error and reports it in its metrics.
+- **Name.** `spec.model` is the exact name to send. The object's name is derived from it as follows, and the same rule makes the consumer label below:
+  1. Lowercase it, replace every run of characters outside `[a-z0-9]` with one `-`, and trim `-` from both ends.
+  2. Cut it to 54 characters and trim a trailing `-` again. If nothing is left (`🔥`, `:::`), use `model` (or `consumer`).
+  3. Append `-` and the first 8 hex digits of the SHA-256 of the exact name.
+
+  The result is at most 63 characters, starts and ends with a letter or digit, and is a valid object name and label value. `qwen3:8b` and `qwen3-8b` get different names. Should two names still map to one, aisa creates neither, logs an error and reports it in its metrics.
 - **Found through Kubernetes.** An application lists the objects by what they can do with a label selector, for example `kubectl get models.aisa.hlan-net.github.io -l feature.aisa.hlan-net.github.io/TextGeneration,capability.aisa.hlan-net.github.io/tools`, and maps its tasks to them (US-1 criterion 8). aisa sets one label per feature and per capability from `spec`, because a selector cannot match an element of a list. A ClusterRole that aggregates to `view` lets any namespace read them. An application that does not talk to the Kubernetes API reads the same list at `/v1/models` through the proxy ([#34](https://github.com/hlan-net/aisa/issues/34)).
 - **Endpoint.** The URL of the proxy's Service in the namespace aisa is installed in, both taken from the install (the chart's values), never fixed.
 - **Nothing about the provider.** No backend address, provider, account or key is in the object (US-2). Whether a model is local or paid is open question 3.
@@ -75,24 +80,27 @@ aisa then:
    ```yaml
    metadata:
      labels:
-       aisa.hlan-net.github.io/consumer: batch-jobs
+       aisa.hlan-net.github.io/consumer: batch-jobs-3c9e1f0a   # the consumer's name by the rule above
+     annotations:
+       aisa.hlan-net.github.io/consumer-name: batch-jobs     # exact
    stringData:
      OPENAI_BASE_URL: http://<proxy-service>.<namespace>.svc.cluster.local/v1
      OPENAI_API_KEY: <key>
    ```
    An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret.
-2. **Adds the key's SHA-256** to the consumer's hashes in Vault (`secret/aisa/consumers/batch-jobs`, `key_sha256`), which the decision API reads as it does today ([`VAULT.md`](./VAULT.md#consumer-credentials)).
-3. **Rotates the key**: writes a new key to the Secret, adds its hash next to the old one, and removes the old hash after a grace period (`AISA_KEY_ROTATION_GRACE`). A pod that read the key into its environment keeps the old one until it restarts; open question 4.
+2. **Accepts the key** by moving its SHA-256 from `pending_sha256` to `key_sha256` in Vault (`secret/aisa/consumers/batch-jobs`), which the decision API reads as it does today ([`VAULT.md`](./VAULT.md#consumer-credentials)). Before step 1, aisa records the new key's hash as `pending_sha256`; the decision API does not accept a pending hash.
+3. **Rotates the key**: the same two steps with a new key, keeping the old hash in `key_sha256` and removing it after a grace period (`AISA_KEY_ROTATION_GRACE`). When a hash was superseded is kept in the custom metadata of the Vault secret, so the grace period survives a restart. A pod that read the key into its environment keeps the old one until it restarts; open question 4.
 4. **Deletes** the Secret and the hashes when the consumer is removed from Consul.
 
-**Reconciling is restart-safe.** The Secret is written first because it is the only place the plaintext can live; Vault only ever gets a hash computed from it. Each pass compares the two and repairs the difference, so a crash between any two steps is finished on the next pass:
+**Reconciling is restart-safe, and accepts only keys aisa issued.** The plaintext lives only in the Secret, and Vault records which hash aisa meant to issue before the Secret is written. Each pass compares the two and repairs the difference, so a crash between any two steps is finished on the next pass, and a key written into the Secret by anyone else never becomes valid:
 
 | State found | Action |
 |---|---|
-| Secret owned by the consumer, its key's hash in Vault | Nothing |
-| Secret owned by the consumer, its key's hash not in Vault | Add the hash: a crash after step 1 or during a rotation |
-| No Secret | Generate a key, write the Secret, then add the hash. Hashes already in Vault are kept for the grace period, because a running pod may still hold their key. The consumer's credential changes, so this is logged and counted |
-| Hashes in Vault that no owned Secret holds, older than the grace period | Remove them |
+| Secret owned by the consumer, its key's hash in `key_sha256` | Nothing |
+| Secret owned by the consumer, its key's hash is `pending_sha256` | Accept it (step 2): a crash after step 1 |
+| Secret owned by the consumer, its key's hash in neither | The key was not issued by aisa (edited by hand, or a crash before the pending hash was written). Issue a new key with steps 1 and 2; the unknown key is never accepted. Logged and counted |
+| No Secret | Issue a new key with steps 1 and 2. Hashes already in `key_sha256` are kept for the grace period, because a running pod may still hold their key. The consumer's credential changes, so this is logged and counted |
+| Hashes in `key_sha256` that the Secret does not hold, older than the grace period; a `pending_sha256` that the Secret does not hold | Remove them |
 
 **Ownership.** aisa changes or deletes only a Secret that carries its label with this consumer's name. A Secret of that name without the label, or with another consumer's, is never adopted, overwritten or deleted: the consumer's reconcile fails, and the failure is logged and reported in aisa's metrics until the holder renames one of them. Two consumers that name the same namespace and Secret both fail the same way.
 
@@ -101,7 +109,7 @@ This is option 1 of [#32](https://github.com/hlan-net/aisa/issues/32) with aisa 
 ## What aisa needs
 
 - **Kubernetes API access**, the first time aisa talks to it: create and update `Model` objects (cluster-wide), and create, update and delete Secrets with a label of its own in the namespaces of its consumers. A ClusterRole on Secrets is broad; open question 2.
-- **Write access in Vault** to `secret/aisa/consumers/*` for the hashes. Today aisa only reads there.
+- **Write access in Vault** to `secret/aisa/consumers/*` for the hashes and their metadata. Today aisa only reads there.
 - **The CRD**, shipped in aisa's chart ([`ARCHITECTURE.md`](./ARCHITECTURE.md#packaging-and-deployment)).
 - **One writer.** With more than one replica, a lease elects the one that reconciles.
 
