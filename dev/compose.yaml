@@ -137,7 +137,7 @@ services:
       retries: 30
 
   apisix:
-    image: apache/apisix:3.18.0-debian
+    image: apache/apisix:3.19.0-debian
     volumes:
       # Spikes swap in their own files, e.g. APISIX_ROUTES=../proxies/apisix/spikes/<spike>/apisix.yaml
       - ${APISIX_CONFIG:-./apisix/config.yaml}:/usr/local/apisix/conf/config.yaml:ro
