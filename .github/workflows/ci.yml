@@ -131,6 +131,7 @@ jobs:
         run: |
           ./proxies/apisix/guard_test.sh
           ./proxies/apisix/render_test.sh
+          ./proxies/apisix/runtime_test.sh
 
       - name: Logs
         if: failure()

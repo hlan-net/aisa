@@ -18,7 +18,7 @@ Client ──▶ [Port 9080: client route]
                  └── (2-hop) ──▶ [Port 9081: internal listener]
                                        │
                                        ├── model-<name> ──────────▶ Backend (e.g. Ollama, OpenAI)
-                                       ├── model-<name>-fail-open ─▶ Fail-open Backend
+                                       ├── fail-open-<name> ──────▶ Fail-open Backend
                                        ├── aisa-unreachable (503)
                                        └── no-backend (503)
                                        │
@@ -38,6 +38,7 @@ Client ──▶ [Port 9080: client route]
 ### 2. Usage Events (`POST /v1/usage`)
 
 * Both the client route (for denied/unroutable requests) and internal model routes attach `http-logger` sending to aisa `/v1/usage`.
+* **Every request is reported once.** A request that forward-auth lets through (aisa allowed it, or could not be reached) is reported by the internal route that serves it; the client route reports only a request that ends there because aisa denied it. A `serverless-post-function` sets the variable `aisa_forwarded` when forward-auth lets a request through, and the client route's `http-logger` filters on it. Its `_meta.priority` of 1000 runs it between forward-auth (2002) and `http-logger` (410), because APISIX evaluates and keeps the filter when `http-logger`'s access handler runs. `upstream_addr` cannot be used: it is still empty then. [`runtime_test.sh`](./runtime_test.sh) checks each case against a running APISIX.
 * **Explicit format only ([#5](https://github.com/hlan-net/aisa/issues/5)):** The proxy explicitly lists only the Contract 2 fields (`request_id`, `consumer`, `model`, `prompt_tokens`, `completion_tokens`, `status`, `latency_ms`, `ttft_ms`, `stream`). Client request headers (`Authorization`) are never included in the log sink payload.
 * The internal route strips `Authorization` before proxying to local backends, so plaintext consumer keys never reach backends without provider keys.
 
@@ -103,6 +104,14 @@ Settings for an environment go into an overlay, not into these files:
 * **Addresses**: the ConfigMap `apisix-env` (`CONSUL_HTTP_ADDR`, `VAULT_ADDR`, `AISA_DECIDE_URI`, `AISA_USAGE_URI`).
 * **Vault names**: the auth mount, the role and the Consul secrets mount are in [`vault-agent.hcl`](./vault-agent.hcl); they must match the Terraform module.
 * **A Consul without ACLs**: remove the `template` block from `vault-agent.hcl`, the `-consul-token-file` arguments and the second half of the startup probe.
+
+### Tests
+
+Run against the dev stack (`docker compose -f dev/compose.yaml up -d --build --wait`); CI runs all three:
+
+* [`guard_test.sh`](./guard_test.sh): what `guard.sh` promotes and what it rejects.
+* [`render_test.sh`](./render_test.sh): renders the template with consul-template against the dev Consul and Vault and checks the routes, also for model names that need an escaped or shortened route ID.
+* [`runtime_test.sh`](./runtime_test.sh): runs APISIX on the rendered config with the stub aisa, and checks that a request aisa allows, denies, or cannot be asked about is reported to the usage sink exactly once, by the right route.
 
 Not verified yet: the login with Vault's Kubernetes auth and the Consul token from Vault need a cluster and were not part of spike S5. In particular, whether consul-template picks up a Consul token that the Vault Agent replaces when its lease ends has not been tested; until it has, give the Consul role a long lease or restart the pod within it.
 

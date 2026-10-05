@@ -4,7 +4,10 @@
 # Routes:
 #   client                   the client-facing route: pre-step, forward-auth, then internal listener
 #   model-<name>             normal route per model on the internal listener (matched by X-Aisa-Model)
-#   model-<name>-fail-open   fail-open route for models with fail_policy="open" when aisa is unreachable
+#   fail-open-<name>         fail-open route for models with fail_policy="open" when aisa is unreachable
+#
+# The two kinds of model route have prefixes of their own, so no model name can make a route ID
+# of one kind equal to one of the other (a model "qwen3-fail-open" next to "qwen3", for example).
 #   aisa-unreachable         answers 503 when aisa is unreachable and the model does not fail open (priority 5)
 #   no-backend               answers 503 for any model without a healthy backend (priority 0)
 
@@ -86,13 +89,26 @@ routes:
         # (400, 401, 413, 429, 503) are passed directly to the client.
         allow_degradation: true
         status_on_error: 503
-      # A request aisa denied ends here, so this route reports it. The filter is true only
-      # without X-Aisa-Consumer, which forward-auth sets on an allowed request, and without an
-      # upstream: a request that went on to the internal hop because aisa was unreachable is
-      # reported there, under the same request_id, and must not be reported twice.
+      # Runs after forward-auth, and only when forward-auth let the request through: aisa allowed
+      # it, or could not be asked. The request then goes on to the internal hop, whose route
+      # reports it. Its priority puts it between forward-auth (2002) and http-logger (410), whose
+      # filter below is evaluated, and kept, when http-logger's access handler runs.
+      serverless-post-function:
+        _meta:
+          priority: 1000
+        phase: access
+        functions:
+          - |
+            return function(conf, ctx)
+              ctx.var.aisa_forwarded = "1"
+            end
+      # A request aisa denied ends here, so this route reports it, and only such a request: one
+      # that went on to the internal hop is reported there, under the same request_id, and must
+      # not be reported twice. (upstream_addr cannot tell them apart: it is still empty when the
+      # filter is evaluated, in the access phase.) runtime_test.sh checks this against APISIX.
       http-logger:
         _meta:
-          filter: [["http_x_aisa_consumer", "!", "~~", "."], ["upstream_addr", "!", "~~", "."]]
+          filter: [["aisa_forwarded", "!", "~~", "."]]
         uri: {{ or (env "AISA_USAGE_URI") "http://aisa:8080/v1/usage" }}
         batch_max_size: 1
         inactive_timeout: 1
@@ -171,16 +187,16 @@ routes:
                X-Aisa-Requested-Model, with only the backends that have fail_policy = "open"
 */}}
 {{- define "model-route" }}{{ $model := .model }}{{ $failOpen := .failOpen }}
-  {{- /* A route ID for APISIX: letters, digits, '-', '_', '.', at most 64 characters */}}
+  {{- /* A route ID for APISIX: letters, digits, '-', '_', '.', at most 64 characters. The prefix
+         says the kind of route, "model-" or "fail-open-", so the two kinds never share an ID.
+         A name that had to be changed or shortened gets a hash of the full name. */}}
+  {{- /* $room: what 64 leaves after the prefix; $cut: what it leaves for the name next to "-" and 8 hex digits */}}
+  {{- $prefix := "model-" }}{{ $room := 58 }}{{ $cut := 49 }}
+  {{- if $failOpen }}{{ $prefix = "fail-open-" }}{{ $room = 54 }}{{ $cut = 45 }}{{ end }}
   {{- $safe := $model | regexReplaceAll "[^a-zA-Z0-9_.-]" "-" }}
-  {{- $id := printf "model-%s" $safe }}
-  {{- if $failOpen }}
-    {{- $id = printf "model-%s-fail-open" $safe }}
-    {{- if or (ne $safe $model) (gt (len $safe) 48) }}
-      {{- $id = printf "model-%s-fo-%s" ($safe | sprig_trunc 40) (sha256Hex $model | sprig_trunc 8) }}
-    {{- end }}
-  {{- else if or (ne $safe $model) (gt (len $safe) 58) }}
-    {{- $id = printf "model-%s-%s" ($safe | sprig_trunc 49) (sha256Hex $model | sprig_trunc 8) }}
+  {{- $id := printf "%s%s" $prefix $safe }}
+  {{- if or (ne $safe $model) (gt (len $safe) $room) }}
+    {{- $id = printf "%s%s-%s" $prefix ($safe | sprig_trunc $cut) (sha256Hex $model | sprig_trunc 8) }}
   {{- end }}
 
   {{- /* The backends of this route: those that serve the model, and on a fail-open route only
