@@ -98,7 +98,7 @@ echo '[]' > "$CONTROL/v1/routes"
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$CONTROL" >/dev/null 2>&1 &
 SERVER=$!
-trap 'kill $SERVER 2>/dev/null; rm -rf "$TMPDIR"' EXIT
+trap 'kill "$SERVER" 2>/dev/null || true; rm -rf "$TMPDIR"' EXIT
 export GUARD_CONTROL_URL="http://127.0.0.1:$PORT"
 for _ in $(seq 1 20); do curl -fs -o /dev/null "$GUARD_CONTROL_URL/v1/routes" && break; sleep 0.2; done
 
