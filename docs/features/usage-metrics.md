@@ -9,7 +9,7 @@ aisa keeps the books: every request is accounted per consumer, model and backend
 Full list in [`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md#4-metrics-output-of-aisa):
 
 - `aisa_requests_total`, `aisa_tokens_total{direction}`, `aisa_cost_total`
-- `aisa_budget_limit`, `aisa_budget_spent`
+- `aisa_budget_limit`, `aisa_budget_spent`, in tokens
 - `aisa_latency_seconds`, `aisa_ttft_seconds`
 - `aisa_usage_events_total{result}` (`accepted`, `duplicate`, `rejected`) and `aisa_usage_requests_rejected_total{reason}` for usage requests rejected as a whole (`malformed`, `too_large`, `unreadable`)
 - `aisa_usage_missing_total{consumer,model,backend}`: successful requests whose event has no token counts, because the backend did not stream usage or the client disconnected mid-stream. Their tokens are in no other metric and are not charged to quotas ([#12](https://github.com/hlan-net/aisa/issues/12))
@@ -47,7 +47,7 @@ Shipped as JSON in `dashboards/`:
 1. **Tokens per model**, stacked prompt and completion, split by consumer
 2. **Requests and decisions**: allow, deny_quota, deny_budget and downgrade over time
 3. **Latency**: p50/p95 total and time to first token per model and backend
-4. **Cost this month** per consumer, against the budget and what remains
+4. **This month** per consumer: tokens against the budget and what remains, and their cost in currency
 5. **Backends**: Consul health of each `aisa-backend` and, from the proxy, active streams
 6. **Ledger consistency**: aisa tokens vs gateway tokens (should be about 1.0), and the share of successful requests with missing usage per backend
 7. **Top consumers** table: tokens, cost, and the local vs cloud share

@@ -49,7 +49,7 @@ A gateway that already exists and belongs to someone else can still be connected
 ```
 
 - **Consul holds everything except secrets; Vault holds the secrets.** They are the only sources of truth. aisa has no database of its own.
-- **Kubernetes objects are aisa's output, never its input.** aisa creates them from Consul and Vault, and restores one that is changed by hand. The model is KubeAI's `Model` objects: a consumer finds the models on offer with a query to the Kubernetes API and maps its tasks to them.
+- **Kubernetes objects are aisa's output, never its input.** aisa creates them from Consul and Vault, and restores one that is changed by hand. They are modelled on KubeAI's `Model`, in aisa's own API group ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md)): a consumer finds the models on offer with a query to the Kubernetes API and maps its tasks to them.
 - **The holder need not use Consul or Vault directly.** aisa's admin interface sits in between; Vault can authenticate the holder. Direct use, and Terraform, stay possible, because the truth is in Consul and Vault either way.
 
 ### State of this direction

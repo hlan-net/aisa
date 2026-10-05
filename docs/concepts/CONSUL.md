@@ -48,13 +48,14 @@ resource "consul_service" "ollama_1" {
 ## Prices and budgets: Consul KV
 
 ```
-aisa/pricing/<model>              {"input_per_1k": 0.0, "output_per_1k": 0.0, "currency": "EUR"}
-aisa/budgets/<consumer>           {"monthly": 10.00, "soft_ratio": 0.8, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}
+aisa/pricing/<model>              {"input_per_1k": 0.0, "output_per_1k": 0.0, "currency": "EUR"}   for display only
+aisa/budgets/<consumer>           {"monthly_tokens": 5000000, "soft_ratio": 0.8, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}
 aisa/quotas/<profile>             {"tokens_per_hour": 200000}
-aisa/state/<consumer>/<YYYY-MM>   persisted monthly spend (written by aisa)
+aisa/state/<consumer>/<YYYY-MM>   persisted monthly tokens (written by aisa)
 ```
 
 - A quota profile is a JSON object with `tokens_per_hour`, a non-negative integer; other fields are ignored. A profile without it, or one that is not valid JSON, is logged and counted in `aisa_quota_profiles_invalid`, and its consumers are denied with 503 until it is fixed ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#token-quotas-v020)).
+- Budgets are in tokens; prices only turn tokens into currency for reports ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#budgets-v030)).
 - Local models cost 0 by default. An energy-based price per token can be set from measured power use.
 - **Single source of truth:** prices, budgets and quota profiles are Terraform variables. Terraform writes them to Consul KV, and aisa watches the prefix (blocking queries) and picks up changes without a restart.
 - Hot counters live in Redis. Consul KV only gets the persisted monthly totals once a minute, because Consul's Raft log is not meant for a write per request.

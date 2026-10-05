@@ -55,7 +55,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 
 ## v0.3.0: Budgets
 
-Budgets are enforced in tokens, like quotas. Prices turn tokens into currency for reports and dashboards only; no limit is set or checked in currency (decided 2026-09-29). [docs/features/quotas-and-budgets.md](docs/features/quotas-and-budgets.md) still describes money budgets and is rewritten with the first PR of this version.
+Budgets are enforced in tokens, like quotas. Prices turn tokens into currency for reports and dashboards only; no limit is set or checked in currency (decided 2026-09-29). The design is in [docs/features/quotas-and-budgets.md](docs/features/quotas-and-budgets.md#budgets-v030).
 
 | Feature | Scope | Status |
 |---------|-------|--------|
@@ -83,7 +83,7 @@ Prove the contract with a second gateway. **LiteLLM** is the most likely: its op
 
 ## Later
 
-- **Vault-issued JWTs** instead of static consumer keys ([docs/concepts/VAULT.md](docs/concepts/VAULT.md)). As designed, a pod logs in to Vault to get one, which US-1 rules out for applications; [#32](https://github.com/hlan-net/aisa/issues/32) settles how the two fit
+- **Vault-issued JWTs** for people instead of static consumer keys ([docs/concepts/VAULT.md](docs/concepts/VAULT.md)). Applications get theirs as a Secret from aisa (v0.2.0 PR 12) and never log in to Vault
 - Dynamic provider credentials where supported (e.g. Azure OpenAI through Vault)
 
 ---

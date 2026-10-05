@@ -38,19 +38,24 @@ One object per model name that the proxy offers, cluster-scoped, created from th
 apiVersion: aisa.hlan-net.github.io/v1alpha1   # group: open question 1
 kind: Model
 metadata:
-  name: qwen3-8b                # a DNS name derived from the model name
+  name: qwen3-8b-6f1d2c9a       # derived from the model name, see below
+  labels:
+    feature.aisa.hlan-net.github.io/TextGeneration: "true"
+    capability.aisa.hlan-net.github.io/tools: "true"
 spec:                           # written by aisa only
   model: "qwen3:8b"             # the name to send in requests
   features: [TextGeneration]    # KubeAI's vocabulary: TextGeneration, TextEmbedding, Reranking, SpeechToText
   contextLength: 32768
   capabilities: [tools]         # tools, vision, json_mode
-  endpoint: http://aisa-proxy.aisa.svc.cluster.local/v1
+  endpoint: http://<proxy-service>.<namespace>.svc.cluster.local/v1   # of this install
 status:
   available: true               # at least one healthy backend
   conditions: [...]
 ```
 
-- **Found through Kubernetes.** An application lists `models.aisa…` with a label or field selector and maps its tasks to them (US-1 criterion 8). A ClusterRole that aggregates to `view` lets any namespace read them. An application that does not talk to the Kubernetes API reads the same list at `/v1/models` through the proxy ([#34](https://github.com/hlan-net/aisa/issues/34)).
+- **Name.** `spec.model` is the exact name to send. The object's name is the model name lowercased, with every character outside `[a-z0-9-]` replaced by `-`, cut to 54 characters, plus `-` and the first 8 hex digits of the SHA-256 of the exact model name, so `qwen3:8b` and `qwen3-8b` get different objects. Should two model names still map to one object name, aisa creates neither, logs an error and reports it in its metrics.
+- **Found through Kubernetes.** An application lists the objects by what they can do with a label selector, for example `kubectl get models.aisa.hlan-net.github.io -l feature.aisa.hlan-net.github.io/TextGeneration,capability.aisa.hlan-net.github.io/tools`, and maps its tasks to them (US-1 criterion 8). aisa sets one label per feature and per capability from `spec`, because a selector cannot match an element of a list. A ClusterRole that aggregates to `view` lets any namespace read them. An application that does not talk to the Kubernetes API reads the same list at `/v1/models` through the proxy ([#34](https://github.com/hlan-net/aisa/issues/34)).
+- **Endpoint.** The URL of the proxy's Service in the namespace aisa is installed in, both taken from the install (the chart's values), never fixed.
 - **Nothing about the provider.** No backend address, provider, account or key is in the object (US-2). Whether a model is local or paid is open question 3.
 - **Description in Consul.** `features`, `contextLength` and `capabilities` are not in the catalog today. They go in Consul KV, `aisa/models/<model>`, written by the holder; a model without a description gets `features: [TextGeneration]` and no other fields.
 - **A model without healthy backends** keeps its object with `available: false`, so an application can tell "not on offer" from "down".
@@ -66,16 +71,30 @@ aisa/consumers/batch-jobs   {"quota_profile": "batch", "namespace": "news", "sec
 
 aisa then:
 
-1. **Generates the key** and writes its SHA-256 to Vault (`secret/aisa/consumers/batch-jobs`, `key_sha256`), as the decision API reads it today ([`VAULT.md`](./VAULT.md#consumer-credentials)).
-2. **Writes the Secret** `aisa` in the namespace `news`:
+1. **Writes the Secret** `aisa` in the namespace `news`, with a key it generates:
    ```yaml
+   metadata:
+     labels:
+       aisa.hlan-net.github.io/consumer: batch-jobs
    stringData:
-     OPENAI_BASE_URL: http://aisa-proxy.aisa.svc.cluster.local/v1
+     OPENAI_BASE_URL: http://<proxy-service>.<namespace>.svc.cluster.local/v1
      OPENAI_API_KEY: <key>
    ```
-   An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret; Vault holds the hash.
-3. **Rotates the key**: adds the new hash next to the old one, updates the Secret, and removes the old hash after a grace period (`AISA_KEY_ROTATION_GRACE`). A pod that read the key into its environment keeps the old one until it restarts; open question 4.
-4. **Deletes** the Secret and the hash when the consumer is removed from Consul.
+   An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret.
+2. **Adds the key's SHA-256** to the consumer's hashes in Vault (`secret/aisa/consumers/batch-jobs`, `key_sha256`), which the decision API reads as it does today ([`VAULT.md`](./VAULT.md#consumer-credentials)).
+3. **Rotates the key**: writes a new key to the Secret, adds its hash next to the old one, and removes the old hash after a grace period (`AISA_KEY_ROTATION_GRACE`). A pod that read the key into its environment keeps the old one until it restarts; open question 4.
+4. **Deletes** the Secret and the hashes when the consumer is removed from Consul.
+
+**Reconciling is restart-safe.** The Secret is written first because it is the only place the plaintext can live; Vault only ever gets a hash computed from it. Each pass compares the two and repairs the difference, so a crash between any two steps is finished on the next pass:
+
+| State found | Action |
+|---|---|
+| Secret owned by the consumer, its key's hash in Vault | Nothing |
+| Secret owned by the consumer, its key's hash not in Vault | Add the hash: a crash after step 1 or during a rotation |
+| No Secret | Generate a key, write the Secret, then add the hash. Hashes already in Vault are kept for the grace period, because a running pod may still hold their key. The consumer's credential changes, so this is logged and counted |
+| Hashes in Vault that no owned Secret holds, older than the grace period | Remove them |
+
+**Ownership.** aisa changes or deletes only a Secret that carries its label with this consumer's name. A Secret of that name without the label, or with another consumer's, is never adopted, overwritten or deleted: the consumer's reconcile fails, and the failure is logged and reported in aisa's metrics until the holder renames one of them. Two consumers that name the same namespace and Secret both fail the same way.
 
 This is option 1 of [#32](https://github.com/hlan-net/aisa/issues/32) with aisa as the sync, so no Vault Secrets Operator or External Secrets is needed, and no pod logs in to Vault. Option 2 (the service account token) stays possible as a second credential type later.
 

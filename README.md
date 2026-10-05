@@ -1,6 +1,6 @@
 # aisa — AI Service [Access, Admin, Authority]
 
-> **Status: early development.** The design is written down and its open questions are answered by spikes. aisa authenticates consumers against Vault in its decision API, accounts usage events and enforces token quotas; budgets come next.
+> **Status: early development.** The design is written down and its open questions are answered by spikes. aisa authenticates consumers against Vault in its decision API, accounts usage events and enforces token quotas. Next comes a working install in a cluster: the proxy, the Helm chart and the Kubernetes objects applications use; budgets follow.
 
 Pick the A that fits your day:
 - **Access**: decides who may use which model, through a decision API that your gateway asks before every request.

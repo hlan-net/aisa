@@ -2,7 +2,7 @@
 
 ## Concept
 
-Every consumer gets a token quota, and optionally a monthly money budget. Both are enforced by **aisa**, not by the gateway, so they work the same with any proxy. The gateway only calls `/v1/decide` before the request and reports usage afterwards ([`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md)).
+Every consumer gets a token quota, and optionally a monthly budget. Both are counted in tokens and enforced by **aisa**, not by the gateway, so they work the same with any proxy. The gateway only calls `/v1/decide` before the request and reports usage afterwards ([`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md)).
 
 ## Flow
 
@@ -10,11 +10,11 @@ Every consumer gets a token quota, and optionally a monthly money budget. Both a
 request ─▶ gateway ─▶ /v1/decide
                         1. authenticate consumer
                         2. quota:  tokens used in the current window  < profile limit ?
-                        3. budget: spend this month                   < monthly budget ?
+                        3. budget: tokens used this month             < monthly budget ?
                         4. result: allow | deny_quota (429) | deny_budget (429) | downgrade (X-Aisa-Model rewritten)
           ◀─ headers ─┘
 gateway ─▶ backend ─▶ response to client
-gateway ─▶ usage event ─▶ aisa: cost = tokens × price, then update the counters
+gateway ─▶ usage event ─▶ aisa: update the token counters; cost = tokens × price, for display
 ```
 
 ## Token quotas (v0.2.0)
@@ -30,18 +30,21 @@ gateway ─▶ usage event ─▶ aisa: cost = tokens × price, then update the 
 
 Gateway-native quota plugins (e.g. APISIX `ai-rate-limiting`) are **not** used. They would split the enforcement logic between aisa and each gateway.
 
-## Money budgets (v0.3.0)
+## Budgets (v0.3.0)
 
-- Monthly budget per consumer in `aisa/budgets/<consumer>`, **calendar month** in the configured time zone.
-- Spend = Σ (prompt tokens × input price + completion tokens × output price), with prices from `aisa/pricing/<model>` ([`CONSUL.md`](../concepts/CONSUL.md)).
-- **Soft limit** (e.g. 80 %): the request is allowed, the response gets `X-Aisa-Budget-Remaining`, and an alert fires.
+Every limit is in tokens; currency is how spend is shown, never how it is limited (decided 2026-09-29).
+
+- Monthly budget per consumer in `aisa/budgets/<consumer>`, in tokens (`monthly_tokens`), **calendar month** in the configured time zone. Used = Σ (prompt tokens + completion tokens) of the consumer's requests that month.
+- **Cost is for display**: Σ (prompt tokens × input price + completion tokens × output price), with prices from `aisa/pricing/<model>` ([`CONSUL.md`](../concepts/CONSUL.md)), in `aisa_cost_total` and the dashboard. It denies nothing.
+- **Open:** whether every model's tokens count against the budget or only those of models with a price, and whether prompt and completion tokens weigh the same. Decided with the first v0.3.0 PR.
+- **Soft limit** (e.g. 80 %): the request is allowed, the response gets `X-Aisa-Budget-Remaining` (tokens), and an alert fires.
 - **Exhausted**, depending on `on_exhausted`:
   - `reject`: 429 with an OpenAI-style error body
   - `downgrade`: allow the request, but set `X-Aisa-Model` to the configured local model. The proxy routes by that header, so when the cloud budget runs out, work continues on local models.
 
 ## Design notes
 
-- **Accuracy:** cost is only known after the response, so the last request of a month can overshoot the budget. This is acceptable and documented. Reserving an estimate up front would add complexity for little gain.
+- **Accuracy:** a request's tokens are only known after the response, so the last request of a month can overshoot the budget. This is acceptable and documented. Reserving an estimate up front would add complexity for little gain.
 - **Streaming:** token usage arrives at the end of the stream. The proxy must make sure the usage event contains it (for Ollama's OpenAI endpoint via `stream_options.include_usage`; spike S2).
 - **Idempotency:** usage events are deduplicated by `request_id`, because log sinks retry.
 - **Persistence:** Redis holds the hot counters, and monthly totals are copied to Consul KV every minute.
