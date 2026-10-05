@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-aisa — **AI Service [Access, Admin, Authority]** — offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, with Vault and Consul as its sources of truth. It stands between the applications (consumers) and the model providers: it decides whether a request may pass, passes it on with the holder's credentials and keeps the books (identities, token quotas, money budgets, normalized usage metrics). It is **not** a gateway: it never proxies model traffic itself. An existing AI gateway is its **proxy**, which aisa installs, configures and removes. Apache 2.0, public repository `hlan-net/aisa`.
+aisa — **AI Service [Access, Admin, Authority]** — offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, with Vault and Consul as its sources of truth. It stands between the applications (consumers) and the model providers: it decides whether a request may pass, passes it on with the holder's credentials and keeps the books (identities, token quotas, budgets in tokens, normalized usage metrics). It is **not** a gateway: it never proxies model traffic itself. An existing AI gateway is its **proxy**, which aisa installs, configures and removes. Apache 2.0, public repository `hlan-net/aisa`.
 
 **Status: early development (v0.2.0).** The design lives in `docs/`, and its open questions are answered in `docs/process/SPIKES.md`. aisa has config, health endpoints, the metrics registry, the decision API with consumers from Vault (`internal/vault`, `internal/consumers`, `internal/decide`), the usage ledger (`internal/ledger`) and token quotas from Consul with counters in Redis (`internal/consul`, `internal/quotas`); the next steps are the PRs of `ROADMAP.md` v0.2.0.
 
@@ -12,7 +12,7 @@ aisa — **AI Service [Access, Admin, Authority]** — offers inference to the a
 
 | Path | Contents |
 |---|---|
-| `docs/concepts/` | The core design: `ARCHITECTURE.md`, `PROXY_CONTRACT.md` (the three aisa ↔ proxy contracts), `VAULT.md`, `CONSUL.md` |
+| `docs/concepts/` | The core design: `ARCHITECTURE.md`, `PROXY_CONTRACT.md` (the three aisa ↔ proxy contracts), `VAULT.md`, `CONSUL.md`, `KUBERNETES_OBJECTS.md` (what applications see: `Model` objects and their Secret) |
 | `docs/features/` | User-facing capabilities: `quotas-and-budgets.md`, `usage-metrics.md` |
 | `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes), `USER_STORIES.md` (who aisa is built for, US-1 to US-3, with acceptance criteria and gaps) |
 | `cmd/aisa/`, `internal/` | aisa itself: `config` (environment variables), `server` (HTTP, health), `metrics` (the `aisa_*` registry), `vault`, `consumers`, `decide`, `ledger`, `consul`, `quotas`, `version` |
