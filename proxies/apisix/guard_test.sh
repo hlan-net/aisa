@@ -42,7 +42,7 @@ if "$GUARD" "$STAGED" "$TARGET" 2>/dev/null; then
   echo "FAIL: incomplete file should be rejected" >&2
   exit 1
 fi
-if [ "$(cat "$TARGET")" != "initial-good-config" ]; then
+if [[ "$(cat "$TARGET")" != "initial-good-config" ]]; then
   echo "FAIL: target was modified on failure" >&2
   exit 1
 fi
@@ -131,7 +131,7 @@ stage
 loaded 1700000100 client model-qwen3 no-backend
 "$GUARD" "$STAGED" "$TARGET" >/dev/null
 grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: a file APISIX loaded was not kept" >&2; exit 1; }
-[ ! -e "$TARGET.last-good" ] || { echo "FAIL: the copy of the previous file was left behind" >&2; exit 1; }
+[[ ! -e "$TARGET.last-good" ]] || { echo "FAIL: the copy of the previous file was left behind" >&2; exit 1; }
 
 echo "== guard.sh: APISIX left a route out"
 echo "previous-config" > "$TARGET"
@@ -142,7 +142,7 @@ if out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
   echo "FAIL: a file with a route APISIX left out was accepted" >&2
   exit 1
 fi
-[ "$(cat "$TARGET")" = "previous-config" ] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
+[[ "$(cat "$TARGET")" = "previous-config" ]] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
 grep -q 'model-qwen3' <<< "$out" || { echo "FAIL: the error does not name the route: $out" >&2; exit 1; }
 
 echo "== guard.sh: APISIX still runs the previous file"
@@ -154,13 +154,13 @@ if "$GUARD" "$STAGED" "$TARGET" 2>/dev/null; then
   echo "FAIL: routes of an older file were taken for the new one's" >&2
   exit 1
 fi
-[ "$(cat "$TARGET")" = "previous-config" ] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
+[[ "$(cat "$TARGET")" = "previous-config" ]] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
 
 echo "== guard.sh: a new file with the same modification time as the current one"
 stage
 cp -p "$STAGED" "$TARGET"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || true
-[ "$(stat -c %Y "$TARGET")" -gt 1700000100 ] || { echo "FAIL: the new file is not newer than the current one" >&2; exit 1; }
+[[ "$(stat -c %Y "$TARGET")" -gt 1700000100 ]] || { echo "FAIL: the new file is not newer than the current one" >&2; exit 1; }
 
 echo "== guard.sh: the Control API does not answer"
 kill $SERVER; wait $SERVER 2>/dev/null || true

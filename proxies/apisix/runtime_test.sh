@@ -29,35 +29,45 @@ cleanup() {
 trap cleanup EXIT
 
 pass=0
-ok() { pass=$((pass + 1)); echo "ok   $*"; }
+ok() {
+    local what=$*
+    pass=$((pass + 1))
+    echo "ok   $what"
+}
 fail() {
-    echo "FAIL $*" >&2
+    local why=$*
+    echo "FAIL $why" >&2
     docker logs "$CONTAINER" 2>&1 | tail -n 20 >&2 || true
     exit 1
 }
-expect() { if [[ "$2" == "$3" ]]; then ok "$1"; else fail "$1: want '$2', got '$3'"; fi; }
+expect() {
+    local what=$1 want=$2 got=$3
+    if [[ "$got" == "$want" ]]; then ok "$what"; else fail "$what: want '$want', got '$got'"; fi
+}
 
 # render <dir> <decide uri>: renders the template the way a cluster does, with the decision
 # sent to <decide uri> and usage to the stub.
 render() {
-    mkdir -p "$1"
-    chmod 777 "$1" # consul-template runs as a user of its own in the container
+    local dir=$1 decide=$2
+    mkdir -p "$dir"
+    chmod 777 "$dir" # consul-template runs as a user of its own in the container
     docker run --rm --network "$NETWORK" \
         -e CONSUL_HTTP_ADDR=consul:8500 -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN=dev-root \
-        -e AISA_DECIDE_URI="$2" -e AISA_USAGE_URI=http://stub-aisa:8080/v1/usage \
-        -v "$SCRIPT_DIR":/etc/apisix/aisa:ro -v "$1":/rendered \
+        -e AISA_DECIDE_URI="$decide" -e AISA_USAGE_URI=http://stub-aisa:8080/v1/usage \
+        -v "$SCRIPT_DIR":/etc/apisix/aisa:ro -v "$dir":/rendered \
         "$CT_IMAGE" -config=/etc/apisix/aisa/consul-template.hcl -once
-    [[ -s "$1/apisix.yaml" ]] || fail "guard.sh promoted nothing in $1"
+    [[ -s "$dir/apisix.yaml" ]] || fail "guard.sh promoted nothing in $dir"
 }
 
 # proxy <dir>: (re)starts APISIX on the config rendered into <dir> and waits for its routes.
 proxy() {
+    local dir=$1
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     # As in the pod (manifests/proxy.yaml): the directory is mounted, and the config path is a
     # link into it, so a file that guard.sh renames over the old one is seen.
     docker run -d --name "$CONTAINER" --network "$NETWORK" -p "127.0.0.1:$PORT:9080" \
         -v "$SCRIPT_DIR/config.yaml":/usr/local/apisix/conf/config.yaml:ro \
-        -v "$1":/rendered:ro \
+        -v "$dir":/rendered:ro \
         "$APISIX_IMAGE" sh -c 'ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start' >/dev/null
     for _ in $(seq 1 30); do
         code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROXY/v1/chat/completions" || true)
@@ -72,8 +82,9 @@ proxy() {
 
 # chat <key> <model>: sends one request and prints its status.
 chat() {
-    curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
-        -d "{\"model\":\"$2\",\"messages\":[{\"role\":\"user\",\"content\":\"hello there\"}]}" \
+    local key=$1 model=$2
+    curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+        -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hello there\"}]}" \
         "$PROXY/v1/chat/completions"
 }
 
@@ -110,8 +121,9 @@ echo "== guard.sh against APISIX"
 # guard <dir>: runs guard.sh on <dir>/apisix.yaml.staged in the consul-template image, with
 # APISIX's Control API on its localhost, as in the pod.
 guard() {
+    local dir=$1
     docker run --rm --network "container:$CONTAINER" --entrypoint sh \
-        -v "$SCRIPT_DIR":/etc/apisix/aisa:ro -v "$1":/rendered \
+        -v "$SCRIPT_DIR":/etc/apisix/aisa:ro -v "$dir":/rendered \
         "$CT_IMAGE" /etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml
 }
 dir="$OUT/reachable"

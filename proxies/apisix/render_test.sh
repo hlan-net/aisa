@@ -39,13 +39,18 @@ docker run --rm --network "$NETWORK" \
     "$IMAGE" -config=/etc/apisix/aisa/consul-template.hcl -once
 
 RENDERED="$OUT/apisix.yaml"
-fail() { echo "FAIL: $1" >&2; exit 1; }
+fail() {
+    local why=$1
+    echo "FAIL: $why" >&2
+    exit 1
+}
 
-[ -s "$RENDERED" ] || fail "guard.sh promoted nothing"
+[[ -s "$RENDERED" ]] || fail "guard.sh promoted nothing"
 
 expect() {
-    grep -q -- "$2" "$RENDERED" || fail "$1"
-    echo "ok: $1"
+    local what=$1 pattern=$2
+    grep -q -- "$pattern" "$RENDERED" || fail "$what"
+    echo "ok: $what"
 }
 expect "the client-facing route" '^  - id: client$'
 expect "the fallback route" '^  - id: no-backend$'
@@ -63,13 +68,13 @@ echo "ok: no fail-open route for the paid model"
 
 # The fail-open route of the local model serves only its fail-open backends.
 awk '/^  - id: "fail-open-qwen3"$/{f=1;next} /^  - id: /{f=0} f' "$RENDERED" > "$OUT/fail-open"
-[ -s "$OUT/fail-open" ] || fail "the fail-open route of the local model is empty"
+[[ -s "$OUT/fail-open" ]] || fail "the fail-open route of the local model is empty"
 grep -q 'override: {endpoint:' "$OUT/fail-open" || fail "the fail-open route of the local model has no backend"
 echo "ok: the fail-open route of the local model has a backend"
 
 # Every route ID is unique and valid for APISIX, also for the test backend's model names.
 grep -E '^  - id: ' "$RENDERED" | sed -E 's/^  - id: "?([^"]*)"?$/\1/' > "$OUT/ids"
-[ -z "$(sort "$OUT/ids" | uniq -d)" ] || fail "duplicate route IDs: $(sort "$OUT/ids" | uniq -d | tr '\n' ' ')"
+[[ -z "$(sort "$OUT/ids" | uniq -d)" ]] || fail "duplicate route IDs: $(sort "$OUT/ids" | uniq -d | tr '\n' ' ')"
 if grep -Evq '^[a-zA-Z0-9_.-]{1,64}$' "$OUT/ids"; then
     fail "route IDs APISIX does not accept: $(grep -Ev '^[a-zA-Z0-9_.-]{1,64}$' "$OUT/ids" | tr '\n' ' ')"
 fi
