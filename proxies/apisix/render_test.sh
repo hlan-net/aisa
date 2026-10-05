@@ -35,6 +35,8 @@ expect() {
 }
 expect "the client-facing route" '^  - id: client$'
 expect "the fallback route" '^  - id: no-backend$'
+expect "the route for an unreachable aisa" '^  - id: aisa-unreachable$'
+expect "the client route reports only requests that end there" 'filter: \[\["http_x_aisa_consumer", "!", "~~", "."\], \["upstream_addr", "!", "~~", "."\]\]'
 expect "a route for the local model" '^  - id: "model-qwen3"$'
 expect "a route for the paid model" '^  - id: "model-cloud-large"$'
 expect "a fail-open route for the local model" '^  - id: "model-qwen3-fail-open"$'
@@ -44,5 +46,11 @@ if grep -q '^  - id: "model-cloud-large-fail-open"$' "$RENDERED"; then
     fail "a paid backend has a fail-open route"
 fi
 echo "ok: no fail-open route for the paid model"
+
+# The fail-open route of the local model serves only its fail-open backends.
+awk '/^  - id: "model-qwen3-fail-open"$/{f=1;next} /^  - id: /{f=0} f' "$RENDERED" > "$OUT/fail-open"
+[ -s "$OUT/fail-open" ] || fail "the fail-open route of the local model is empty"
+grep -q 'override: {endpoint:' "$OUT/fail-open" || fail "the fail-open route of the local model has no backend"
+echo "ok: the fail-open route of the local model has a backend"
 
 echo "ok: all render tests passed"

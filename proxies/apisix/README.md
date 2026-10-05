@@ -19,6 +19,7 @@ Client ──▶ [Port 9080: client route]
                                        │
                                        ├── model-<name> ──────────▶ Backend (e.g. Ollama, OpenAI)
                                        ├── model-<name>-fail-open ─▶ Fail-open Backend
+                                       ├── aisa-unreachable (503)
                                        └── no-backend (503)
                                        │
                                        └── (2) http-logger ───────▶ aisa /v1/usage
@@ -62,8 +63,9 @@ When aisa is unreachable (connection error or timeout):
 1. `forward-auth` has `allow_degradation: true`, permitting the request to continue to the internal listener.
 2. Because forward-auth degraded, `X-Aisa-Model` and `X-Aisa-Consumer` are **not** set; only `X-Aisa-Requested-Model` exists.
 3. For models with `fail_policy = "open"` backends (e.g. local Ollama), a dedicated fail-open route matches `X-Aisa-Requested-Model` and proxies only to open instances. Usage is logged with an empty consumer, which aisa accounts under `unknown`.
-4. For models without fail-open backends (paid cloud providers), no fail-open route exists; the request falls through to `no-backend` and returns `503 Service Unavailable`.
+4. For models without fail-open backends (paid cloud providers), no fail-open route exists; the request falls through to `aisa-unreachable`, which answers `503 Service Unavailable` with the error type `aisa_unreachable`.
 5. Client-supplied `X-Aisa-Model` headers are stripped in the pre-step, preventing unauthenticated access to paid models during outages.
+6. The usage event of such a request is sent by the internal route only. The client route reports a request only when it ends there (aisa denied it), so a degraded request is not reported twice under the same `request_id`.
 
 ---
 
