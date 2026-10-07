@@ -60,6 +60,9 @@ expect "a route for the local model" '^  - id: "model-qwen3"$'
 expect "a route for the paid model" '^  - id: "model-cloud-large"$'
 expect "a fail-open route for the local model" '^  - id: "fail-open-qwen3"$'
 expect "the gateway's metrics for every route" '^      prometheus: {}$'
+expect "the model list route" '^  - id: models$'
+expect "the model list names the local model" '\\"id\\":\\"qwen3\\"'
+expect "the model list names the paid model" '\\"id\\":\\"cloud-large\\"'
 
 if grep -q '^  - id: "fail-open-cloud-large"$' "$RENDERED"; then
     fail "a paid backend has a fail-open route"
