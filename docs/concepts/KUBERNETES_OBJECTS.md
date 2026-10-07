@@ -35,13 +35,13 @@ None of them is a read-only catalog of models an application may use. aisa defin
 One object per model name that the proxy offers, cluster-scoped, created from the Consul catalog (the `models` meta of the backends, [`CONSUL.md`](./CONSUL.md#backends-consul-catalog)) and from the model's description in Consul KV.
 
 ```yaml
-apiVersion: aisa.hlan-net.github.io/v1alpha1   # group: open question 1
+apiVersion: aisa.hlan.net/v1alpha1
 kind: Model
 metadata:
   name: qwen3-8b-6f1d2c9a       # derived from the model name, see below
   labels:
-    feature.aisa.hlan-net.github.io/TextGeneration: "true"
-    capability.aisa.hlan-net.github.io/tools: "true"
+    feature.aisa.hlan.net/TextGeneration: "true"
+    capability.aisa.hlan.net/tools: "true"
 spec:                           # written by aisa only
   model: "qwen3:8b"             # the name to send in requests
   features: [TextGeneration]    # KubeAI's vocabulary: TextGeneration, TextEmbedding, Reranking, SpeechToText
@@ -59,7 +59,7 @@ status:
   3. Append `-` and the first 8 hex digits of the SHA-256 of the exact name.
 
   The result is at most 63 characters, starts and ends with a letter or digit, and is a valid object name and label value. `qwen3:8b` and `qwen3-8b` get different names. Should two names still map to one, aisa creates neither, logs an error and reports it in its metrics.
-- **Found through Kubernetes.** An application lists the objects by what they can do with a label selector, for example `kubectl get models.aisa.hlan-net.github.io -l feature.aisa.hlan-net.github.io/TextGeneration,capability.aisa.hlan-net.github.io/tools`, and maps its tasks to them (US-1 criterion 8). aisa sets one label per feature and per capability from `spec`, because a selector cannot match an element of a list. A ClusterRole that aggregates to `view` lets any namespace read them. An application that does not talk to the Kubernetes API reads the same list at `/v1/models` through the proxy ([#34](https://github.com/hlan-net/aisa/issues/34)).
+- **Found through Kubernetes.** An application lists the objects by what they can do with a label selector, for example `kubectl get models.aisa.hlan.net -l feature.aisa.hlan.net/TextGeneration,capability.aisa.hlan.net/tools`, and maps its tasks to them (US-1 criterion 8). aisa sets one label per feature and per capability from `spec`, because a selector cannot match an element of a list. A ClusterRole that aggregates to `view` lets any namespace read them. An application that does not talk to the Kubernetes API reads the same list at `/v1/models` through the proxy ([#34](https://github.com/hlan-net/aisa/issues/34)).
 - **Endpoint.** The URL of the proxy's Service in the namespace aisa is installed in, both taken from the install (the chart's values), never fixed.
 - **Nothing about the provider.** No backend address, provider, account or key is in the object (US-2). Whether a model is local or paid is open question 3.
 - **Description in Consul.** `features`, `contextLength` and `capabilities` are not in the catalog today. They go in Consul KV, `aisa/models/<model>`, written by the holder; a model without a description gets `features: [TextGeneration]` and no other fields.
@@ -80,9 +80,9 @@ aisa then:
    ```yaml
    metadata:
      labels:
-       aisa.hlan-net.github.io/consumer: batch-jobs-3c9e1f0a   # the consumer's name by the rule above
+       aisa.hlan.net/consumer: batch-jobs-3c9e1f0a   # the consumer's name by the rule above
      annotations:
-       aisa.hlan-net.github.io/consumer-name: batch-jobs     # exact
+       aisa.hlan.net/consumer-name: batch-jobs     # exact
    stringData:
      OPENAI_BASE_URL: http://<proxy-service>.<namespace>.svc.cluster.local/v1
      OPENAI_API_KEY: <key>
@@ -125,7 +125,7 @@ This is option 1 of [#32](https://github.com/hlan-net/aisa/issues/32) with aisa 
 
 ## Open questions
 
-1. **API group.** It must be a domain the project controls. `aisa.hlan-net.github.io` is the proposal.
+1. **API group.** Decided: `aisa.hlan.net`, a domain the maintainer controls (2026-10-07).
 2. **Scope of Secret writes.** A ClusterRole, or a Role per namespace that the chart creates from a list in its values. The second is narrower but needs a chart change for each new namespace.
 3. **Local or paid in `Model`.** An application may want to prefer a free model. It reveals nothing about the account, but it is a fact about the holder's costs.
 4. **Rotation and running pods.** Mount the Secret as a file and read it per request, rely on a restarter such as Reloader, or rotate only on request.
