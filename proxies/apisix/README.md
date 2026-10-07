@@ -104,7 +104,7 @@ One pod, three containers:
 
 Settings for an environment are values of the chart ([`chart/values.yaml`](./chart/values.yaml); under `apisix:` when installed through aisa's chart):
 
-* **Addresses**: `global.vault.addr` and `global.consul.addr`, shared with aisa's chart. aisa's address is its Service in the same release; `aisa.url` overrides it.
+* **Addresses**: `global.vault.addr` and `global.consul.addr`, shared with aisa's chart. aisa's address is its Service in the same release, named by `global.aisa.fullnameOverride` when that is set; `aisa.url` overrides it.
 * **Vault names**: `vaultAgent.auth.mount`, `vaultAgent.auth.role` and `vaultAgent.consulToken.path`; they must match the Terraform module.
 * **A Consul without ACLs**: `vaultAgent.consulToken.enabled: false`.
 * **Prometheus Operator**: `serviceMonitor.enabled: true`.
@@ -121,7 +121,7 @@ The chart is installed in a kind cluster by [`deploy/helm/test/install_test.sh`]
 
 ### Metrics
 
-The rendered config enables APISIX's `prometheus` plugin for every route with a global rule; without it the metrics port answers but reports no requests. The Service exposes the port as `metrics` (9091, path `/apisix/prometheus/metrics`). For the Prometheus Operator, set `serviceMonitor.enabled: true`. These metrics (`apisix_llm_*`, `apisix_http_status`) are the cross-check of aisa's ledger, never its source.
+The rendered config enables APISIX's `prometheus` plugin for every route with a global rule; without it the metrics port answers but reports no requests. The metrics port (9091, path `/apisix/prometheus/metrics`) has a ClusterIP Service of its own, `<release>-apisix-metrics`, so a `service.type` that publishes the client-facing Service does not publish the metrics. For the Prometheus Operator, set `serviceMonitor.enabled: true`. These metrics (`apisix_llm_*`, `apisix_http_status`) are the cross-check of aisa's ledger, never its source.
 
 ### Resource footprint ([#16](https://github.com/hlan-net/aisa/issues/16))
 

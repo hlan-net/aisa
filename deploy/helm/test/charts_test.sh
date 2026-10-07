@@ -54,14 +54,32 @@ if helm template aisa "$AISA" >/dev/null 2>&1; then
 fi
 echo "ok: global.vault.addr is required"
 
-# The proxy finds aisa's Service under the name aisa's chart gives it.
-for release in aisa prod; do
-    svc=$(helm template "$release" "$AISA" "${REQUIRED[@]}" 2>/dev/null |
-        awk '/^kind: Service$/{s=1} s && /^  name:/{print $2; s=0}' | grep -v -e apisix -e redis)
-    url=$(helm template "$release" "$AISA" "${REQUIRED[@]}" 2>/dev/null |
-        awk '/name: AISA_DECIDE_URI/{getline; print $2; exit}' | tr -d '"')
-    [[ "${url#*://}" == "$svc:8080/v1/decide" ]] || fail "release $release: the proxy asks $url, aisa's Service is $svc"
-    echo "ok: release $release: the proxy asks aisa's Service $svc"
+# The proxy finds aisa's Service under the name aisa's chart gives it: by the release name, or
+# by global.aisa.fullnameOverride.
+for case in "aisa" "prod" "aisa --set global.aisa.fullnameOverride=inference"; do
+    read -r release extra <<<"$case"
+    # shellcheck disable=SC2086 # $extra is a list of helm arguments
+    helm template $release "$AISA" "${REQUIRED[@]}" $extra >"$OUT/names.yaml" 2>/dev/null
+    svc=$(awk '/^kind: Service$/{s=1} s && /^  name:/{print $2; s=0}' "$OUT/names.yaml" | grep -v -e apisix -e redis)
+    port=$(awk -v svc="$svc" '/^kind:/{s = ($2 == "Service"); f = 0} s && /^  name:/ && $2 == svc {f=1} f && /port: /{print; exit}' "$OUT/names.yaml" |
+        sed -E 's/.*port: ([0-9]+).*/\1/')
+    url=$(awk '/name: AISA_DECIDE_URI/{getline; print $2; exit}' "$OUT/names.yaml" | tr -d '"')
+    [[ "${url#*://}" == "$svc:$port/v1/decide" ]] ||
+        fail "$case: the proxy asks $url, aisa's Service is $svc:$port"
+    echo "ok: $case: the proxy asks aisa's Service $svc:$port"
 done
+
+# A Service type that publishes the proxy does not publish its metrics, or aisa.
+helm template aisa "$AISA" "${REQUIRED[@]}" --set apisix.service.type=LoadBalancer >"$OUT/lb.yaml" 2>/dev/null
+types=$(awk '/^kind: Service$/{s=1; n=""} s && /^  name:/{n=$2} s && /^  type:/{print n, $2; s=0}' "$OUT/lb.yaml" | LC_ALL=C sort | tr '\n' ' ')
+[[ "$types" == "aisa ClusterIP aisa-apisix LoadBalancer aisa-apisix-metrics ClusterIP aisa-redis ClusterIP " ]] ||
+    fail "Service types with a published proxy: $types"
+echo "ok: only the proxy's client Service is published: $types"
+
+# Nothing but the proxy reaches aisa by default.
+from=$(awk '/^kind:/{s = ($2 == "NetworkPolicy"); f = 0} s && /^  name: aisa$/{f=1} f && /^ *- (podSelector|namespaceSelector|ipBlock):/{c++} END {print c + 0}' \
+    "$OUT/defaults.yaml")
+[[ "$from" == 1 ]] || fail "aisa's NetworkPolicy has $from peers by default, want only the proxy"
+echo "ok: by default only the proxy reaches aisa"
 
 echo "ok: all chart tests passed"

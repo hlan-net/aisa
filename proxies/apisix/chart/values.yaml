@@ -4,6 +4,9 @@
 
 # Shared with aisa's chart, which sets them once for both.
 global:
+  aisa:
+    # The name of aisa's Service when aisa's chart was given one (its global.aisa.fullnameOverride).
+    fullnameOverride: ""
   vault:
     # Vault's address, e.g. https://vault.vault.svc:8200. Required.
     addr: ""
@@ -12,7 +15,8 @@ global:
     addr: ""
 
 # Where the proxy asks for decisions and sends usage events. Empty: the Service of aisa's chart
-# in the same release (<release>, or <release>-aisa when the release name does not contain "aisa").
+# in the same release on port 8080: global.aisa.fullnameOverride, or <release>, or <release>-aisa
+# when the release name does not contain "aisa".
 aisa:
   url: ""
 
@@ -65,6 +69,8 @@ serviceAccount:
   name: ""
 
 # The Service that applications call: an OpenAI-compatible API at http://<service>.<namespace>.svc/v1.
+# APISIX's metrics have a ClusterIP Service of their own, <fullname>-metrics, so a type that
+# publishes this one does not publish them.
 service:
   type: ClusterIP
   port: 80

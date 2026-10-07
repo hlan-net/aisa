@@ -1,12 +1,12 @@
 {{- define "aisa.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- .Chart.Name }}
 {{- end }}
 
-{{- /* The proxy's chart derives aisa's Service name the same way (proxies/apisix/chart,
-       "proxy.aisaURL"); keep the two in step. */}}
+{{- /* The proxy's chart derives aisa's Service name the same way, from the same values
+       (proxies/apisix/chart, "proxy.aisaURL"); keep the two in step. */}}
 {{- define "aisa.fullname" -}}
-{{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- if .Values.global.aisa.fullnameOverride }}
+{{- .Values.global.aisa.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else if contains (include "aisa.name" .) .Release.Name }}
 {{- .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- else }}

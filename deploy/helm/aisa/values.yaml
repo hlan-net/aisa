@@ -3,6 +3,10 @@
 
 # Shared with the proxy's chart, which reads them too.
 global:
+  aisa:
+    # The name of aisa's objects, its Service among them. Empty: <release>, or <release>-aisa when
+    # the release name does not contain "aisa". Global, because the proxy finds aisa by it.
+    fullnameOverride: ""
   vault:
     # Vault's address, e.g. https://vault.vault.svc:8200. Required.
     addr: ""
@@ -10,9 +14,6 @@ global:
     # Consul's address, e.g. consul-server.consul.svc:8500. Required: quota profiles are there,
     # and the proxy renders its routes from its catalog.
     addr: ""
-
-nameOverride: ""
-fullnameOverride: ""
 
 image:
   repository: ghcr.io/hlan-net/aisa
@@ -88,18 +89,21 @@ serviceAccount:
   # Empty: the chart's full name.
   name: ""
 
-service:
-  type: ClusterIP
-  port: 8080
+# aisa's Service is always a ClusterIP on port 8080, for the proxy: /v1/usage takes usage events
+# without authentication, so it is never published outside the cluster.
 
 # aisa answers only its proxy (decisions and usage events). Other clients of its port, such as
-# Prometheus for /metrics, need an entry in extraFrom (NetworkPolicy "from" peers).
+# Prometheus for /metrics, need an entry in extraFrom (NetworkPolicy "from" peers). /metrics and
+# /v1/usage share the port, so a peer allowed here can also send usage events that charge the
+# consumers' quotas: allow only what you trust as much as the proxy (#46).
 networkPolicy:
   enabled: true
-  extraFrom:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: monitoring
+  extraFrom: []
+  # e.g. Prometheus in the namespace monitoring:
+  # extraFrom:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: monitoring
 
 # For clusters with the Prometheus Operator: scrapes aisa's own aisa_* metrics.
 serviceMonitor:

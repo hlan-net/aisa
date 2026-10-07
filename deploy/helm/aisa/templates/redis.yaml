@@ -61,6 +61,7 @@ metadata:
   labels:
     {{- include "aisa.redis.labels" . | nindent 4 }}
 spec:
+  type: ClusterIP
   selector:
     {{- include "aisa.redis.selectorLabels" . | nindent 4 }}
   ports:

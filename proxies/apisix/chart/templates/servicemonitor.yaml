@@ -14,6 +14,7 @@ spec:
   selector:
     matchLabels:
       {{- include "proxy.selectorLabels" . | nindent 6 }}
+      aisa.hlan.net/metrics: "true"
   endpoints:
     - port: metrics
       path: /apisix/prometheus/metrics

@@ -1,4 +1,5 @@
-# Decisions (/v1/decide) and usage events (/v1/usage) from the proxy, and aisa's metrics.
+# Decisions (/v1/decide) and usage events (/v1/usage) from the proxy, and aisa's metrics. Always
+# a ClusterIP on 8080: /v1/usage has no authentication, and the proxy expects this port.
 apiVersion: v1
 kind: Service
 metadata:
@@ -6,8 +7,8 @@ metadata:
   labels:
     {{- include "aisa.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type }}
+  type: ClusterIP
   selector:
     {{- include "aisa.selectorLabels" . | nindent 4 }}
   ports:
-    - {name: http, port: {{ .Values.service.port }}, targetPort: http}
+    - {name: http, port: 8080, targetPort: http}

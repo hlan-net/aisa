@@ -1,6 +1,6 @@
 aisa is installed in the namespace {{ .Release.Namespace }}.
 
-  aisa:   http://{{ include "aisa.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }} (decisions, usage events, /metrics)
+  aisa:   http://{{ include "aisa.fullname" . }}.{{ .Release.Namespace }}.svc:8080 (decisions, usage events, /metrics)
 {{- if .Values.apisix.enabled }}
   proxy:  see the proxy's notes below; applications call it, never aisa
 {{- end }}

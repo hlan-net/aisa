@@ -33,6 +33,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- define "proxy.aisaURL" -}}
 {{- if .Values.aisa.url }}
 {{- .Values.aisa.url | trimSuffix "/" }}
+{{- else if .Values.global.aisa.fullnameOverride }}
+{{- printf "http://%s:8080" (.Values.global.aisa.fullnameOverride | trunc 63 | trimSuffix "-") }}
 {{- else }}
 {{- $name := .Release.Name }}
 {{- if not (contains "aisa" .Release.Name) }}{{ $name = printf "%s-aisa" .Release.Name }}{{ end }}
