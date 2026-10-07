@@ -127,6 +127,12 @@ jobs:
       - name: Smoke test
         run: ./dev/smoke.sh
 
+      - name: Proxy config tests
+        run: |
+          ./proxies/apisix/guard_test.sh
+          ./proxies/apisix/render_test.sh
+          ./proxies/apisix/runtime_test.sh
+
       - name: Logs
         if: failure()
         run: docker compose -f dev/compose.yaml logs

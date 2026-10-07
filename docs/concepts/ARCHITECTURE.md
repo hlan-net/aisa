@@ -97,6 +97,7 @@ backends                                                                │ /met
 | Redis | Hot counters for quotas and budgets. Monthly totals are also persisted to Consul KV once a minute, so they survive a Redis loss with at most a minute of drift. |
 | **APISIX proxy** | `apache/apisix` 3.18+ in standalone mode. Routes and plugins come from the rendered `apisix.yaml`. No etcd, no Admin API writes, and no Vault or Consul access of its own. Routing by `X-Aisa-Model` needs a second hop inside APISIX, because routes are matched before `forward-auth` runs (spike S8). |
 | consul-template | Sidecar next to the gateway. Renders the gateway config from the Consul catalog (backends) and Vault (provider keys, KV v2) and triggers the reload. |
+| Vault Agent | Second sidecar next to the gateway. Logs in to Vault with the pod's service account and hands consul-template its Vault token and its Consul ACL token; consul-template cannot log in by itself. |
 | ServiceMonitors | aisa's `/metrics` (primary) and the gateway's own metrics (cross-check). |
 
 ## Code layout (planned)
@@ -108,7 +109,8 @@ aisa/
 ├── proxies/
 │   └── apisix/
 │       ├── apisix.yaml.ctmpl # consul-template template
-│       ├── helm-values.yaml  # standalone mode
+│       ├── config.yaml       # standalone mode
+│       ├── kustomization.yaml, manifests/   # the proxy's own manifests (spike S5)
 │       └── README.md
 ├── deploy/helm/              # chart for aisa (+ Redis)
 ├── terraform/                # module: Vault mount/policies/roles, Consul ACLs/KV/registrations
