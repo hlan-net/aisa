@@ -11,8 +11,8 @@ consul kv put aisa/pricing/qwen3       '{"input_per_1k": 0.0, "output_per_1k": 0
 consul kv put aisa/pricing/llama3.2    '{"input_per_1k": 0.0, "output_per_1k": 0.0, "currency": "EUR"}'
 consul kv put aisa/pricing/cloud-large '{"input_per_1k": 0.003, "output_per_1k": 0.015, "currency": "EUR"}'
 
-consul kv put aisa/budgets/chat-ui    '{"monthly": 25.00, "soft_ratio": 0.8, "on_exhausted": "reject"}'
-consul kv put aisa/budgets/batch-jobs '{"monthly": 10.00, "soft_ratio": 0.8, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}'
+consul kv put aisa/budgets/chat-ui    '{"monthly_tokens": 20000000, "soft_ratio": 0.8, "on_exhausted": "reject"}'
+consul kv put aisa/budgets/batch-jobs '{"monthly_tokens": 5000000, "soft_ratio": 0.8, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}'
 
 consul kv put aisa/quotas/interactive '{"tokens_per_hour": 1000000}'
 consul kv put aisa/quotas/batch       '{"tokens_per_hour": 200000}'

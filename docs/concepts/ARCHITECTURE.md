@@ -49,7 +49,7 @@ A gateway that already exists and belongs to someone else can still be connected
 ```
 
 - **Consul holds everything except secrets; Vault holds the secrets.** They are the only sources of truth. aisa has no database of its own.
-- **Kubernetes objects are aisa's output, never its input.** aisa creates them from Consul and Vault, and restores one that is changed by hand. The model is KubeAI's `Model` objects: a consumer finds the models on offer with a query to the Kubernetes API and maps its tasks to them.
+- **Kubernetes objects are aisa's output, never its input.** aisa creates them from Consul and Vault, and restores one that is changed by hand. They are modelled on KubeAI's `Model`, in aisa's own API group ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md)): a consumer finds the models on offer with a query to the Kubernetes API and maps its tasks to them.
 - **The holder need not use Consul or Vault directly.** aisa's admin interface sits in between; Vault can authenticate the holder. Direct use, and Terraform, stay possible, because the truth is in Consul and Vault either way.
 
 ### State of this direction
@@ -61,9 +61,9 @@ The sections after this one describe what is designed and, where the status says
 | Decision API, usage ledger, token quotas | Built |
 | The proxy rendering its own configuration (consul-template next to APISIX) | Designed, in progress (`ROADMAP.md` v0.2.0 PR 5) |
 | aisa installing and removing the proxy with its own chart | Decided. Today the proxy is installed separately ([Packaging](#packaging-and-deployment)) |
-| `Model` objects for consumers | Decided, not designed. An existing standard is checked first (Gateway API Inference Extension) |
-| A consumer's credential as a Kubernetes object | Decided in principle, [#32](https://github.com/hlan-net/aisa/issues/32) |
-| The non-secret part of a consumer (name, quota profile) in Consul instead of Vault | Decided, follows from the rule above. Today the whole consumer is in Vault ([`VAULT.md`](./VAULT.md)) |
+| `Model` objects for consumers | Designed, not built ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)); `ROADMAP.md` v0.2.0 PR 12 |
+| A consumer's credential as a Kubernetes object | Designed, not built: a Secret with a key aisa generates ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret), [#32](https://github.com/hlan-net/aisa/issues/32)) |
+| The non-secret part of a consumer (name, quota profile) in Consul instead of Vault | Decided, follows from the rule above; `ROADMAP.md` v0.2.0 PR 11. Today the whole consumer is in Vault ([`VAULT.md`](./VAULT.md)) |
 | Admin interface | Decided, not designed (US-3) |
 | Provider adapters beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains itself can be used | Decided, not designed |
 | No way around the proxy | Decided, not designed |

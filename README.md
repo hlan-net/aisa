@@ -1,16 +1,16 @@
 # aisa — AI Service [Access, Admin, Authority]
 
-> **Status: early development.** The design is written down and its open questions are answered by spikes. aisa authenticates consumers against Vault in its decision API, accounts usage events and enforces token quotas; money budgets come next.
+> **Status: early development.** The design is written down and its open questions are answered by spikes. aisa authenticates consumers against Vault in its decision API, accounts usage events and enforces token quotas. Next comes a working install in a cluster: the proxy, the Helm chart and the Kubernetes objects applications use; budgets follow.
 
 Pick the A that fits your day:
 - **Access**: decides who may use which model, through a decision API that your gateway asks before every request.
-- **Admin**: quotas, money budgets, prices and model backends, managed in one place.
+- **Admin**: quotas, budgets, prices and model backends, managed in one place.
 - **Authority**: the single source of truth for usage. It keeps the books, and your gateway just proxies.
 
 **aisa** offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, on HashiCorp-based infrastructure. It stands between the applications and the model providers, with an existing AI gateway as its proxy, and adds:
 
 - **identities and provider keys from Vault**, and **backends, prices and budgets from Consul**
-- **token quotas and money budgets** per client, with optional downgrade to a local model when a budget runs out
+- **token quotas and budgets** per client, both enforced in tokens and shown in currency, with optional downgrade to a local model when a budget runs out
 - **normalized usage metrics** per client and model, with a Grafana dashboard and alert rules
 - **a proxy it does not write itself**: an existing AI gateway carries the traffic. [Apache APISIX](https://apisix.apache.org/) is the first.
 
@@ -53,8 +53,9 @@ Three contracts connect aisa to its proxy: a **decision API** (forward-auth patt
 | [PROXY_CONTRACT.md](docs/concepts/PROXY_CONTRACT.md) | The three aisa ↔ proxy contracts, the `aisa_*` metrics and the proxy checklist |
 | [VAULT.md](docs/concepts/VAULT.md) | Identities and provider keys from Vault |
 | [CONSUL.md](docs/concepts/CONSUL.md) | Backends, prices and budgets in Consul |
+| [KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md) | What applications see: `Model` objects and a Secret with their key (draft) |
 | **Features** | |
-| [quotas-and-budgets.md](docs/features/quotas-and-budgets.md) | Token quotas and monthly money budgets |
+| [quotas-and-budgets.md](docs/features/quotas-and-budgets.md) | Token quotas and monthly budgets, both in tokens |
 | [usage-metrics.md](docs/features/usage-metrics.md) | Metrics, dashboard and alerts |
 | **Process** | |
 | [SPIKES.md](docs/process/SPIKES.md) | Unknowns to verify before implementation |

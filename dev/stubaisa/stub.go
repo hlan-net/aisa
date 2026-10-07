@@ -135,7 +135,7 @@ func (s *server) decideInto(rec *Record, r *http.Request, body []byte, h http.He
 	}
 	h.Set("X-Aisa-Consumer", consumer)
 	h.Set("X-Aisa-Model", rec.ReturnModel)
-	h.Set("X-Aisa-Budget-Remaining", "10.00")
+	h.Set("X-Aisa-Budget-Remaining", "1000000")
 	if id := r.Header.Get("X-Request-Id"); id != "" {
 		h.Set("X-Aisa-Request-Id", id)
 	}

@@ -23,7 +23,7 @@ Each role can only read its own paths.
 
 ## Consumer credentials
 
-> **Direction** ([`ARCHITECTURE.md`](./ARCHITECTURE.md#where-things-are-written-and-what-aisa-makes-of-them)): Vault holds secrets only. The part of a consumer that is not a secret, its name and quota profile, is to move to Consul, and a consumer is to get its credential as a Kubernetes object ([#32](https://github.com/hlan-net/aisa/issues/32)). What follows describes what is built.
+> **Direction** ([`ARCHITECTURE.md`](./ARCHITECTURE.md#where-things-are-written-and-what-aisa-makes-of-them)): Vault holds secrets only. The part of a consumer that is not a secret, its name and quota profile, is to move to Consul, and a consumer is to get its credential as a Secret that aisa writes in its application's namespace, so the plaintext key is never handed over by hand ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret), [#32](https://github.com/hlan-net/aisa/issues/32)). What follows describes what is built.
 
 ### First version: consumer keys
 ```
@@ -43,6 +43,8 @@ secret/aisa/consumers/batch-jobs  key_sha256=<hash>  quota_profile=batch
 - aisa logs in with Kubernetes auth (role `aisa`, `AISA_VAULT_K8S_ROLE`). In development `VAULT_TOKEN` replaces the login. The KV mount and the `aisa/` prefix are `AISA_VAULT_KV_MOUNT` and `AISA_VAULT_PREFIX`.
 
 ### Later: Vault-issued JWTs
+> **Superseded for applications.** An application must not log in to Vault (US-1). Applications get their credential as a Secret from aisa ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret)); a service account token checked by aisa is the other option that keeps them unaware of Vault ([#32](https://github.com/hlan-net/aisa/issues/32)). The design below stays for people, who log in through Vault's OIDC auth method.
+
 Clients authenticate with **JWTs from Vault's identity/OIDC provider** instead of static keys. Pods log in with Kubernetes auth, and people log in through an external identity provider via Vault's OIDC auth method (e.g. Entra ID). aisa validates the JWT against Vault's JWKS and maps a claim to the consumer. No long-lived gateway keys remain, and no gateway change is needed, because authentication happens in aisa.
 
 ## Provider keys
