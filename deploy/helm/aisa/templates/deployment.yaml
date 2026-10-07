@@ -30,6 +30,10 @@ spec:
       securityContext:
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
+        # The nonroot user of the distroless image. The image names it, and Kubernetes can check
+        # runAsNonRoot only against a number.
+        runAsUser: 65532
+        runAsGroup: 65532
       {{- if $consulToken }}
       initContainers:
         # A sidecar that starts first (restartPolicy: Always, Kubernetes 1.29+), so aisa starts
