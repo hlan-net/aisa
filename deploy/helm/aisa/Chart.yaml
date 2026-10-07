@@ -1,0 +1,23 @@
+apiVersion: v2
+name: aisa
+description: >-
+  aisa, AI Service [Access, Admin, Authority]: inference for the applications of a Kubernetes
+  cluster as a service of the cluster, with Vault and Consul as its sources of truth. Installs
+  aisa, an optional Redis for its quota counters, and its proxy.
+type: application
+# The release workflow sets both to the release tag; 0.0.0 marks a chart built from the repository.
+version: 0.0.0
+appVersion: "0.0.0"
+home: https://github.com/hlan-net/aisa
+sources:
+  - https://github.com/hlan-net/aisa
+keywords: [aisa, llm, inference, vault, consul, quotas]
+kubeVersion: ">=1.29.0-0"
+dependencies:
+  # The proxy carries the traffic; aisa only decides and keeps the books. Each proxy has its
+  # own chart under proxies/<name>/chart, so this chart knows no gateway beyond this entry.
+  - name: aisa-proxy-apisix
+    alias: apisix
+    version: ">=0.0.0"
+    repository: file://../../../proxies/apisix/chart
+    condition: apisix.enabled

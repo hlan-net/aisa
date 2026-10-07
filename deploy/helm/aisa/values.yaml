@@ -1,0 +1,130 @@
+# aisa's chart. Nothing here names an environment: the addresses of Vault and Consul and the
+# names of the Vault roles come from the values of the install.
+
+# Shared with the proxy's chart, which reads them too.
+global:
+  aisa:
+    # The name of aisa's objects, its Service among them. Empty: <release>, or <release>-aisa when
+    # the release name does not contain "aisa". Global, because the proxy finds aisa by it.
+    fullnameOverride: ""
+  vault:
+    # Vault's address, e.g. https://vault.vault.svc:8200. Required.
+    addr: ""
+  consul:
+    # Consul's address, e.g. consul-server.consul.svc:8500. Required: quota profiles are there,
+    # and the proxy renders its routes from its catalog.
+    addr: ""
+
+image:
+  repository: ghcr.io/hlan-net/aisa
+  # Empty: the chart's appVersion, which is the release tag (e.g. v0.2.0).
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# debug, info, warn or error.
+logLevel: info
+
+# One replica: the usage ledger deduplicates events in memory, so a second replica would count
+# an event that a log sink retries to the other one twice.
+replicas: 1
+
+vault:
+  # Vault's Kubernetes auth: the mount and the role bound to this chart's service account and
+  # namespace. The role reads secret/aisa/consumers/* (docs/concepts/VAULT.md).
+  auth:
+    mount: kubernetes
+    role: aisa
+    # The audience of the projected service account token; empty: the API server's default.
+    # Set it when the Vault role has bound audiences.
+    audience: ""
+  # Where aisa's secrets are: consumers under <kvMount>/<prefix>/consumers.
+  kvMount: secret
+  prefix: aisa
+
+consul:
+  # aisa's keys in Consul KV: quota profiles under <prefix>/quotas/.
+  prefix: aisa
+  # A Consul ACL token from Vault's Consul secrets engine, which a Vault Agent next to aisa
+  # writes to a file in memory and renews (docs/concepts/CONSUL.md, ACLs). The agent logs in with
+  # the same role as aisa. Turn it off for a Consul without ACLs.
+  token:
+    fromVault: true
+    path: consul/creds/aisa
+
+# Token quotas need Consul and Redis. Off: aisa authenticates and keeps the books, but no
+# consumer is limited.
+quotas:
+  enabled: true
+
+# Redis holds the hot quota counters. They are short-lived (an hour of one-minute buckets), so
+# this Redis keeps nothing on disk.
+redis:
+  # A Redis of this chart. Off: set addr to a Redis of your own.
+  enabled: true
+  # host:port of an external Redis, used when enabled is false.
+  addr: ""
+  image:
+    repository: redis
+    tag: 8-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 10m, memory: 16Mi, ephemeral-storage: 16Mi}
+    limits: {memory: 64Mi, ephemeral-storage: 64Mi}
+
+# Not measured on a Raspberry Pi 4 yet (#16).
+resources:
+  requests: {cpu: 20m, memory: 32Mi, ephemeral-storage: 16Mi}
+  limits: {memory: 128Mi, ephemeral-storage: 64Mi}
+
+vaultAgent:
+  image:
+    repository: hashicorp/vault
+    tag: 2.1.1
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 10m, memory: 64Mi, ephemeral-storage: 16Mi}
+    limits: {memory: 128Mi, ephemeral-storage: 64Mi}
+
+serviceAccount:
+  # Empty: the chart's full name.
+  name: ""
+
+# aisa's Service is always a ClusterIP on port 8080, for the proxy: /v1/usage takes usage events
+# without authentication, so it is never published outside the cluster.
+
+# aisa answers only its proxy (decisions and usage events). Other clients of its port, such as
+# Prometheus for /metrics, need an entry in extraFrom (NetworkPolicy "from" peers). /metrics and
+# /v1/usage share the port, so a peer allowed here can also send usage events that charge the
+# consumers' quotas: allow only what you trust as much as the proxy (#46).
+networkPolicy:
+  enabled: true
+  extraFrom: []
+  # e.g. Prometheus in the namespace monitoring:
+  # extraFrom:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: monitoring
+
+# For clusters with the Prometheus Operator: scrapes aisa's own aisa_* metrics.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+# Added to aisa's container, e.g. VAULT_CACERT with a CA mounted through extraVolumes, or
+# AISA_CONSUMER_REFRESH.
+extraEnv: []
+extraVolumes: []
+# Mounted into aisa and its Vault Agent.
+extraVolumeMounts: []
+
+podLabels: {}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# The proxy (proxies/apisix/chart). Its values go here; global.vault and global.consul are
+# shared. See that chart's values.yaml.
+apisix:
+  enabled: true

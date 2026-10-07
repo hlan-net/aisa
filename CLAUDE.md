@@ -17,6 +17,8 @@ aisa — **AI Service [Access, Admin, Authority]** — offers inference to the a
 | `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes), `USER_STORIES.md` (who aisa is built for, US-1 to US-3, with acceptance criteria and gaps) |
 | `cmd/aisa/`, `internal/` | aisa itself: `config` (environment variables), `server` (HTTP, health), `metrics` (the `aisa_*` registry), `vault`, `consumers`, `decide`, `ledger`, `consul`, `quotas`, `version` |
 | `Dockerfile` | The product image: a static binary in a distroless image, amd64 and arm64 |
+| `deploy/helm/aisa/` | aisa's chart: aisa, an optional Redis, and the proxy's chart (`proxies/apisix/chart`) as a dependency |
+| `deploy/helm/test/` | `charts_test.sh` (lint, kubeconform) and `install_test.sh` (kind: Vault, Consul with ACLs, both charts, requests through the proxy) |
 | `dev/` | Docker Compose dev stack (Vault, Consul, Redis, APISIX standalone, mock backends, stub aisa) and `smoke.sh`; see `dev/README.md` |
 | `ROADMAP.md` | Mission, current state and versioned milestones with PR tables |
 | `CHANGELOG.md` | Keep a Changelog, semantic versioning |
@@ -50,7 +52,14 @@ docker compose -f dev/compose.yaml up -d --build --wait
 docker compose -f dev/compose.yaml down -v
 ```
 
-CI runs the unit tests and the dev stack smoke test on both amd64 and arm64 runners.
+### Charts
+
+```bash
+./deploy/helm/test/charts_test.sh    # helm lint and kubeconform for both charts (needs helm, kubeconform)
+./deploy/helm/test/install_test.sh   # install into the current kubectl context, e.g. kind (see the script)
+```
+
+CI runs the unit tests, the dev stack smoke test and the kind install test on both amd64 and arm64 runners.
 
 Skip the pre-push hook with `SKIP_PRE_PUSH_TESTS=1 git push`.
 

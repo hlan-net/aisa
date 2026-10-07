@@ -1,0 +1,29 @@
+# What applications call: an OpenAI-compatible API at http://<this service>.<namespace>.svc/v1.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "proxy.fullname" . }}
+  labels:
+    {{- include "proxy.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "proxy.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.service.port }}, targetPort: http}
+---
+# APISIX's own metrics, for Prometheus. A ClusterIP always, whatever the type of the Service
+# above: the metrics endpoint has no authentication.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "proxy.fullname" . }}-metrics
+  labels:
+    {{- include "proxy.labels" . | nindent 4 }}
+    aisa.hlan.net/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "proxy.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: metrics, port: 9091, targetPort: metrics}

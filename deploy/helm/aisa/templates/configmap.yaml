@@ -1,0 +1,28 @@
+{{- if and .Values.quotas.enabled .Values.consul.token.fromVault }}
+# The Vault Agent next to aisa: it logs in with aisa's role and keeps a Consul ACL token from
+# Vault's Consul secrets engine in a file in memory, renewing it, which aisa reads for every
+# request to Consul (CONSUL_HTTP_TOKEN_FILE). aisa logs in to Vault by itself for its consumers.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aisa.fullname" . }}-vault-agent
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+data:
+  vault-agent.hcl: |-
+    auto_auth {
+      method "kubernetes" {
+        mount_path = {{ printf "auth/%s" .Values.vault.auth.mount | quote }}
+        config = {
+          role       = {{ .Values.vault.auth.role | quote }}
+          token_path = "/var/run/secrets/aisa/serviceaccount/token"
+        }
+      }
+    }
+
+    template {
+      contents    = "{{ "{{" }} with secret \"{{ .Values.consul.token.path }}\" {{ "}}" }}{{ "{{" }} .Data.token {{ "}}" }}{{ "{{" }} end {{ "}}" }}"
+      destination = "/vault/consul-token"
+      perms       = "0644"
+    }
+{{- end }}

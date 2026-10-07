@@ -16,7 +16,7 @@ The mount name (`secret/`) and the `aisa/` prefix are configurable in the Terraf
 
 | Reader | Auth | Reads | Why |
 |---|---|---|---|
-| aisa | Kubernetes auth, role `aisa` | `secret/aisa/consumers/*` (KV v2) | Validates consumer credentials in `/v1/decide` |
+| aisa | Kubernetes auth, role `aisa` | `secret/aisa/consumers/*` (KV v2), `consul/creds/aisa` (its Vault Agent) | Validates consumer credentials in `/v1/decide`; reads quota profiles from Consul with that token |
 | consul-template (next to the gateway) | Kubernetes auth, role `aisa-render` | `secret/aisa/providers/*` (KV v2), `consul/creds/aisa-render` | Renders provider keys into the gateway config |
 
 Each role can only read its own paths.

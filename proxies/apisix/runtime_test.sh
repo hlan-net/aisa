@@ -63,8 +63,8 @@ render() {
 proxy() {
     local dir=$1
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    # As in the pod (manifests/proxy.yaml): the directory is mounted, and the config path is a
-    # link into it, so a file that guard.sh renames over the old one is seen.
+    # As in the pod (chart/templates/deployment.yaml): the directory is mounted, and the config
+    # path is a link into it, so a file that guard.sh renames over the old one is seen.
     docker run -d --name "$CONTAINER" --network "$NETWORK" -p "127.0.0.1:$PORT:9080" \
         -v "$SCRIPT_DIR/config.yaml":/usr/local/apisix/conf/config.yaml:ro \
         -v "$dir":/rendered:ro \

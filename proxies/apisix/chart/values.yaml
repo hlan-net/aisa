@@ -1,0 +1,95 @@
+# The APISIX proxy of aisa. Installed by aisa's chart (deploy/helm/aisa) as the dependency
+# "apisix", or on its own. Nothing here names an environment: the addresses of Vault, Consul and
+# aisa come from the values of the install.
+
+# Shared with aisa's chart, which sets them once for both.
+global:
+  aisa:
+    # The name of aisa's Service when aisa's chart was given one (its global.aisa.fullnameOverride).
+    fullnameOverride: ""
+  vault:
+    # Vault's address, e.g. https://vault.vault.svc:8200. Required.
+    addr: ""
+  consul:
+    # Consul's address, e.g. consul-server.consul.svc:8500. Required.
+    addr: ""
+
+# Where the proxy asks for decisions and sends usage events. Empty: the Service of aisa's chart
+# in the same release on port 8080: global.aisa.fullnameOverride, or <release>, or <release>-aisa
+# when the release name does not contain "aisa".
+aisa:
+  url: ""
+
+nameOverride: ""
+fullnameOverride: ""
+
+apisix:
+  image:
+    repository: apache/apisix
+    tag: 3.19.0-debian
+    pullPolicy: IfNotPresent
+  # From spike S7, to be confirmed on a Raspberry Pi 4 (#16).
+  resources:
+    requests: {cpu: 100m, memory: 96Mi, ephemeral-storage: 64Mi}
+    limits: {memory: 256Mi, ephemeral-storage: 512Mi}
+
+consulTemplate:
+  image:
+    repository: hashicorp/consul-template
+    tag: 0.43.0
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+    limits: {memory: 64Mi, ephemeral-storage: 64Mi}
+
+vaultAgent:
+  image:
+    repository: hashicorp/vault
+    tag: 2.1.1
+    pullPolicy: IfNotPresent
+  # Vault's Kubernetes auth: the mount and the role bound to this chart's service account and
+  # namespace. The role reads secret/aisa/providers/* (docs/concepts/VAULT.md).
+  auth:
+    mount: kubernetes
+    role: aisa-render
+    # The audience of the projected service account token; empty: the API server's default.
+    # Set it when the Vault role has bound audiences.
+    audience: ""
+  # A Consul ACL token from Vault's Consul secrets engine, for consul-template. Turn it off for
+  # a Consul without ACLs.
+  consulToken:
+    enabled: true
+    path: consul/creds/aisa-render
+  resources:
+    requests: {cpu: 10m, memory: 64Mi, ephemeral-storage: 16Mi}
+    limits: {memory: 128Mi, ephemeral-storage: 64Mi}
+
+serviceAccount:
+  # Empty: the chart's full name.
+  name: ""
+
+# The Service that applications call: an OpenAI-compatible API at http://<service>.<namespace>.svc/v1.
+# APISIX's metrics have a ClusterIP Service of their own, <fullname>-metrics, so a type that
+# publishes this one does not publish them.
+service:
+  type: ClusterIP
+  port: 80
+
+# For clusters with the Prometheus Operator: scrapes APISIX's own metrics, the cross-check of
+# aisa's ledger (docs/features/usage-metrics.md).
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+
+# Added to every container of the pod, e.g. VAULT_CACERT with a CA mounted through extraVolumes.
+extraEnv: []
+extraVolumes: []
+# Mounted into the Vault Agent and consul-template, which talk to Vault and Consul.
+extraVolumeMounts: []
+
+podLabels: {}
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

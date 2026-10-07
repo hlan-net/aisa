@@ -85,13 +85,14 @@ When aisa is unreachable (connection error or timeout):
 
 ## Deployment
 
-The proxy is deployed with plain manifests, not with the official APISIX chart: the chart has no place for the sidecar that renders the config (spike S5).
+The proxy is deployed with its own chart, [`chart/`](./chart/), not with the official APISIX chart: the official chart has no place for the sidecar that renders the config (spike S5). aisa's chart ([`deploy/helm/aisa`](../../deploy/helm/aisa/)) installs it as the dependency `apisix`, so one `helm install` brings aisa and its proxy, and `helm uninstall` removes both:
 
 ```bash
-kubectl apply -k proxies/apisix        # into the namespace aisa
+helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> -n aisa --create-namespace \
+  --set global.vault.addr=https://vault.vault.svc:8200 --set global.consul.addr=consul-server.consul.svc:8500
 ```
 
-`kustomization.yaml` generates the ConfigMaps from the files in this directory (`config.yaml`, `apisix.yaml.ctmpl`, `consul-template.hcl`, `guard.sh`, `vault-agent.hcl`), so a cluster runs what the tests run, and a changed file rolls the pod. [`manifests/proxy.yaml`](./manifests/proxy.yaml) holds the service account, the Deployment and the Service `apisix-gateway`.
+The chart's ConfigMaps hold the files of this directory (`config.yaml`, `apisix.yaml.ctmpl`, `consul-template.hcl`, `guard.sh`), linked into `chart/files/`, so a cluster runs what the tests run, and a changed file rolls the pod. The Vault Agent's configuration is rendered from the chart's values. The Service, `<release>-apisix`, is what applications call.
 
 One pod, three containers:
 
@@ -101,11 +102,12 @@ One pod, three containers:
 | `consul-template` | Renders `apisix.yaml` with those tokens. An init container renders once before APISIX starts, because APISIX does not start without the file. |
 | `apisix` | Reads the rendered file from a second directory in memory. It has no token and no access to Vault or Consul. |
 
-Settings for an environment go into an overlay, not into these files:
+Settings for an environment are values of the chart ([`chart/values.yaml`](./chart/values.yaml); under `apisix:` when installed through aisa's chart):
 
-* **Addresses**: the ConfigMap `apisix-env` (`CONSUL_HTTP_ADDR`, `VAULT_ADDR`, `AISA_DECIDE_URI`, `AISA_USAGE_URI`).
-* **Vault names**: the auth mount, the role and the Consul secrets mount are in [`vault-agent.hcl`](./vault-agent.hcl); they must match the Terraform module.
-* **A Consul without ACLs**: remove the `template` block from `vault-agent.hcl`, the `-consul-token-file` arguments and the second half of the startup probe.
+* **Addresses**: `global.vault.addr` and `global.consul.addr`, shared with aisa's chart. aisa's address is its Service in the same release, named by `global.aisa.fullnameOverride` when that is set; `aisa.url` overrides it.
+* **Vault names**: `vaultAgent.auth.mount`, `vaultAgent.auth.role` and `vaultAgent.consulToken.path`; they must match the Terraform module.
+* **A Consul without ACLs**: `vaultAgent.consulToken.enabled: false`.
+* **Prometheus Operator**: `serviceMonitor.enabled: true`.
 
 ### Tests
 
@@ -115,11 +117,11 @@ Run against the dev stack (`docker compose -f dev/compose.yaml up -d --build --w
 * [`render_test.sh`](./render_test.sh): renders the template with consul-template against the dev Consul and Vault and checks the routes, also for model names that need an escaped or shortened route ID.
 * [`runtime_test.sh`](./runtime_test.sh): runs APISIX on the rendered config with the stub aisa, and checks that a request aisa allows, denies, or cannot be asked about is reported to the usage sink exactly once, by the right route. It also runs `guard.sh` next to that APISIX: a file with a route APISIX's schema rejects is put back, and a valid one is kept.
 
-Not verified yet: the login with Vault's Kubernetes auth and the Consul token from Vault need a cluster and were not part of spike S5. In particular, whether consul-template picks up a Consul token that the Vault Agent replaces when its lease ends has not been tested; until it has, give the Consul role a long lease or restart the pod within it.
+The chart is installed in a kind cluster by [`deploy/helm/test/install_test.sh`](../../deploy/helm/test/install_test.sh) (CI, amd64 and arm64): the Vault Agent's login with Kubernetes auth, the Consul token from Vault and a provider key rendered from Vault are checked there. Not verified yet: whether consul-template picks up a Consul token that the Vault Agent replaces when its lease ends; until it has, give the Consul role a long lease or restart the pod within it.
 
 ### Metrics
 
-The rendered config enables APISIX's `prometheus` plugin for every route with a global rule; without it the metrics port answers but reports no requests. The Service exposes the port as `metrics` (9091, path `/apisix/prometheus/metrics`). For the Prometheus Operator, apply [`manifests/servicemonitor.yaml`](./manifests/servicemonitor.yaml) as well. These metrics (`apisix_llm_*`, `apisix_http_status`) are the cross-check of aisa's ledger, never its source.
+The rendered config enables APISIX's `prometheus` plugin for every route with a global rule; without it the metrics port answers but reports no requests. The metrics port (9091, path `/apisix/prometheus/metrics`) has a ClusterIP Service of its own, `<release>-apisix-metrics`, so a `service.type` that publishes the client-facing Service does not publish the metrics. For the Prometheus Operator, set `serviceMonitor.enabled: true`. These metrics (`apisix_llm_*`, `apisix_http_status`) are the cross-check of aisa's ledger, never its source.
 
 ### Resource footprint ([#16](https://github.com/hlan-net/aisa/issues/16))
 

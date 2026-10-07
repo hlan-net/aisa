@@ -1,0 +1,148 @@
+# The APISIX proxy: one pod with APISIX, consul-template and a Vault Agent (spike S5).
+# consul-template renders apisix.yaml into a directory in memory that APISIX reads; the Vault
+# Agent logs in to Vault and hands consul-template its tokens.
+{{- $consulToken := .Values.vaultAgent.consulToken.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "proxy.fullname" . }}
+  labels:
+    {{- include "proxy.labels" . | nindent 4 }}
+spec:
+  # One replica: a second one renders and serves the same routes, but nothing has measured it yet.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "proxy.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "proxy.serviceAccountName" . }}
+      # Nothing in the pod talks to the Kubernetes API. Only the Vault Agent gets a service
+      # account token, projected below, to log in to Vault with.
+      automountServiceAccountToken: false
+      initContainers:
+        # A sidecar that starts first (restartPolicy: Always, Kubernetes 1.29+): the renders
+        # below need its tokens. It is started once they are written.
+        - name: vault-agent
+          image: {{ printf "%s:%s" .Values.vaultAgent.image.repository .Values.vaultAgent.image.tag | quote }}
+          imagePullPolicy: {{ .Values.vaultAgent.image.pullPolicy }}
+          restartPolicy: Always
+          command: ["vault", "agent", "-config=/etc/apisix/aisa/vault-agent.hcl"]
+          env:
+            {{- include "proxy.env" . | nindent 12 }}
+          volumeMounts:
+            - {name: render, mountPath: /etc/apisix/aisa, readOnly: true}
+            - {name: tokens, mountPath: /vault}
+            - {name: serviceaccount, mountPath: /var/run/secrets/aisa/serviceaccount, readOnly: true}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            exec:
+              {{- if $consulToken }}
+              command: ["sh", "-c", "test -s /vault/token && test -s /vault/consul-token"]
+              {{- else }}
+              command: ["sh", "-c", "test -s /vault/token"]
+              {{- end }}
+            periodSeconds: 1
+            failureThreshold: 60
+          resources:
+            {{- toYaml .Values.vaultAgent.resources | nindent 12 }}
+        # APISIX does not start without an apisix.yaml, so the first render comes before it.
+        - name: render-once
+          image: {{ printf "%s:%s" .Values.consulTemplate.image.repository .Values.consulTemplate.image.tag | quote }}
+          imagePullPolicy: {{ .Values.consulTemplate.image.pullPolicy }}
+          args:
+            {{- include "proxy.renderArgs" . | nindent 12 }}
+            - -once
+          env:
+            {{- include "proxy.env" . | nindent 12 }}
+          volumeMounts:
+            {{- include "proxy.renderMounts" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.consulTemplate.resources | nindent 12 }}
+      containers:
+        - name: apisix
+          image: {{ printf "%s:%s" .Values.apisix.image.repository .Values.apisix.image.tag | quote }}
+          imagePullPolicy: {{ .Values.apisix.image.pullPolicy }}
+          # consul-template replaces the file by renaming a new one over it. A mount of the file
+          # itself would keep showing the old one, so the directory is mounted and the config
+          # path is a link into it.
+          command:
+            - sh
+            - -c
+            - ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - {name: http, containerPort: 9080}
+            - {name: metrics, containerPort: 9091}
+          volumeMounts:
+            - {name: config, mountPath: /usr/local/apisix/conf/config.yaml, subPath: config.yaml, readOnly: true}
+            - {name: rendered, mountPath: /rendered, readOnly: true}
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 2
+          resources:
+            {{- toYaml .Values.apisix.resources | nindent 12 }}
+        - name: consul-template
+          image: {{ printf "%s:%s" .Values.consulTemplate.image.repository .Values.consulTemplate.image.tag | quote }}
+          imagePullPolicy: {{ .Values.consulTemplate.image.pullPolicy }}
+          args:
+            {{- include "proxy.renderArgs" . | nindent 12 }}
+          env:
+            {{- include "proxy.env" . | nindent 12 }}
+          volumeMounts:
+            {{- include "proxy.renderMounts" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.consulTemplate.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "proxy.fullname" . }}-config}
+        - name: render
+          # guard.sh is run from here.
+          configMap: {name: {{ include "proxy.fullname" . }}-render, defaultMode: 0555}
+        # In memory: the rendered file holds provider keys, which must not reach a disk.
+        - name: rendered
+          emptyDir: {medium: Memory, sizeLimit: 8Mi}
+        # In memory: the Vault and Consul tokens. Not mounted into the gateway's container.
+        - name: tokens
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: serviceaccount
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+                  {{- with .Values.vaultAgent.auth.audience }}
+                  audience: {{ . | quote }}
+                  {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+

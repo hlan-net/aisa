@@ -18,3 +18,7 @@ coverage.*
 .DS_Store
 Thumbs.db
 .tmp/
+
+# Helm: dependencies are built from Chart.yaml (helm dependency update)
+/deploy/helm/*/charts/
+/deploy/helm/*/Chart.lock
