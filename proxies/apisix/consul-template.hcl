@@ -3,7 +3,7 @@
 #
 # Nothing here names an environment. The addresses come from CONSUL_HTTP_ADDR and VAULT_ADDR,
 # and the tokens from the files that the Vault Agent next to it writes
-# (-vault-agent-token-file and -consul-token-file in manifests/proxy.yaml), or from
+# (-vault-agent-token-file and -consul-token-file in chart/templates/deployment.yaml), or from
 # VAULT_TOKEN and CONSUL_HTTP_TOKEN in development.
 
 vault {

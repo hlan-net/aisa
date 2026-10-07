@@ -1,0 +1,11 @@
+aisa is installed in the namespace {{ .Release.Namespace }}.
+
+  aisa:   http://{{ include "aisa.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }} (decisions, usage events, /metrics)
+{{- if .Values.apisix.enabled }}
+  proxy:  see the proxy's notes below; applications call it, never aisa
+{{- end }}
+
+aisa logs in to Vault as the role "{{ .Values.vault.auth.role }}" with the service account
+"{{ include "aisa.serviceAccountName" . }}". Check that it is ready:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "aisa.fullname" . }}

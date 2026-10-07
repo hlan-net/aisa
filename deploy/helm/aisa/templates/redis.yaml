@@ -1,0 +1,68 @@
+{{- if and .Values.quotas.enabled .Values.redis.enabled }}
+# Redis for the hot quota counters: an hour of one-minute buckets, nothing on disk. A restart
+# empties the windows, so for at most an hour the consumers get their full quota again.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aisa.fullname" . }}-redis
+  labels:
+    {{- include "aisa.redis.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aisa.redis.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aisa.redis.labels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        # The redis user of the official image.
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          image: {{ printf "%s:%s" .Values.redis.image.repository .Values.redis.image.tag | quote }}
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          args: ["--save", "", "--appendonly", "no"]
+          ports:
+            - {name: redis, containerPort: 6379}
+          readinessProbe:
+            exec: {command: ["redis-cli", "ping"]}
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir: {sizeLimit: 16Mi}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aisa.fullname" . }}-redis
+  labels:
+    {{- include "aisa.redis.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "aisa.redis.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+{{- end }}

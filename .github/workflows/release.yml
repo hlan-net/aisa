@@ -127,3 +127,38 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ needs.create-release.outputs.release-tag }}
             ghcr.io/${{ github.repository }}:latest
+
+  charts:
+    name: Package and push the Helm charts
+    needs: [create-release, image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Helm
+        env:
+          HELM_VERSION: v3.22.0
+        run: |
+          curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz" |
+            sudo tar xz -C /usr/local/bin --strip-components=1 linux-amd64/helm
+
+      - name: Package and push
+        env:
+          TAG: ${{ needs.create-release.outputs.release-tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          # Both charts carry the release: version without the "v", appVersion as the tag, which
+          # is the tag of aisa's image. The proxy's chart is versioned first, so aisa's chart
+          # bundles that version of it.
+          VER="${TAG#v}"
+          for chart in proxies/apisix/chart deploy/helm/aisa; do
+            sed -i -e "s/^version: .*/version: $VER/" -e "s/^appVersion: .*/appVersion: \"$TAG\"/" "$chart/Chart.yaml"
+          done
+          helm dependency update deploy/helm/aisa
+          helm package proxies/apisix/chart -d dist
+          helm package deploy/helm/aisa -d dist
+          echo "$GH_TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
+          helm push "dist/aisa-proxy-apisix-$VER.tgz" oci://ghcr.io/${{ github.repository_owner }}/charts
+          helm push "dist/aisa-$VER.tgz" oci://ghcr.io/${{ github.repository_owner }}/charts

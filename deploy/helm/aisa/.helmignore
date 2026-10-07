@@ -1,0 +1,5 @@
+.git/
+*.swp
+*.tmp
+*.orig
+.DS_Store

@@ -1,0 +1,19 @@
+# Values of the install test (install_test.sh): the fixtures of fixtures.yaml, and the images
+# that the test builds and loads into the cluster.
+global:
+  vault:
+    addr: http://vault:8200
+  consul:
+    addr: consul:8500
+image:
+  repository: aisa
+  tag: ci
+  pullPolicy: Never
+logLevel: debug
+vault:
+  auth:
+    audience: vault
+apisix:
+  vaultAgent:
+    auth:
+      audience: vault

@@ -1,0 +1,57 @@
+# The proxy's own files (proxies/apisix/, linked into files/), so the cluster runs exactly what
+# the tests run. A changed file changes the checksum annotation of the pod, which rolls it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "proxy.fullname" . }}-config
+  labels:
+    {{- include "proxy.labels" . | nindent 4 }}
+data:
+  config.yaml: |-
+    {{- .Files.Get "files/config.yaml" | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "proxy.fullname" . }}-render
+  labels:
+    {{- include "proxy.labels" . | nindent 4 }}
+data:
+  apisix.yaml.ctmpl: |-
+    {{- .Files.Get "files/apisix.yaml.ctmpl" | nindent 4 }}
+  consul-template.hcl: |-
+    {{- .Files.Get "files/consul-template.hcl" | nindent 4 }}
+  guard.sh: |-
+    {{- .Files.Get "files/guard.sh" | nindent 4 }}
+  # The Vault Agent logs in to Vault with the pod's service account and keeps the tokens of
+  # consul-template in memory, which cannot log in by itself (docs/concepts/VAULT.md):
+  #   /vault/token          the Vault token of the role: reads secret/aisa/providers/*
+  #   /vault/consul-token   a Consul ACL token from Vault's Consul secrets engine
+  # The address comes from VAULT_ADDR.
+  vault-agent.hcl: |-
+    auto_auth {
+      method "kubernetes" {
+        mount_path = {{ printf "auth/%s" .Values.vaultAgent.auth.mount | quote }}
+        config = {
+          role       = {{ .Values.vaultAgent.auth.role | quote }}
+          token_path = "/var/run/secrets/aisa/serviceaccount/token"
+        }
+      }
+
+      sink "file" {
+        config = {
+          path = "/vault/token"
+          # consul-template runs as another user. The directory is in memory and mounted into
+          # these two containers only, not into the gateway's.
+          mode = 0644
+        }
+      }
+    }
+    {{- if .Values.vaultAgent.consulToken.enabled }}
+
+    template {
+      contents    = "{{ "{{" }} with secret \"{{ .Values.vaultAgent.consulToken.path }}\" {{ "}}" }}{{ "{{" }} .Data.token {{ "}}" }}{{ "{{" }} end {{ "}}" }}"
+      destination = "/vault/consul-token"
+      perms       = "0644"
+    }
+    {{- end }}

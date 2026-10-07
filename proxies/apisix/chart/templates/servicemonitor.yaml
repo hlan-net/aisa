@@ -1,0 +1,21 @@
+{{- if .Values.serviceMonitor.enabled }}
+# Scrapes APISIX's own metrics (apisix_llm_*, apisix_http_status), the cross-check of aisa's
+# ledger, never its source (docs/features/usage-metrics.md).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "proxy.fullname" . }}
+  labels:
+    {{- include "proxy.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "proxy.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /apisix/prometheus/metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

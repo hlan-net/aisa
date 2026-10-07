@@ -1,0 +1,5 @@
+The APISIX proxy of aisa is installed. Applications call it as an OpenAI-compatible API:
+
+  OPENAI_BASE_URL=http://{{ include "proxy.fullname" . }}.{{ .Release.Namespace }}.svc{{ if ne (int .Values.service.port) 80 }}:{{ .Values.service.port }}{{ end }}/v1
+
+It asks aisa at {{ include "proxy.aisaURL" . }} for every request.

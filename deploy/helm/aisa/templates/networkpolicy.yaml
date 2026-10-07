@@ -1,0 +1,48 @@
+{{- if .Values.networkPolicy.enabled }}
+# aisa answers its proxy: the pods of this release with the component label "proxy", which every
+# proxy chart sets. Anything else that needs aisa's port, such as Prometheus, is in extraFrom.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aisa.fullname" . }}
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aisa.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {port: http, protocol: TCP}
+      from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: proxy
+        {{- with .Values.networkPolicy.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- if and .Values.quotas.enabled .Values.redis.enabled }}
+---
+# The counters are aisa's alone.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "aisa.fullname" . }}-redis
+  labels:
+    {{- include "aisa.redis.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aisa.redis.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {port: redis, protocol: TCP}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "aisa.selectorLabels" . | nindent 14 }}
+{{- end }}
+{{- end }}

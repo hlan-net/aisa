@@ -1,0 +1,20 @@
+{{- if .Values.serviceMonitor.enabled }}
+# Scrapes aisa's own aisa_* metrics, the primary ones (docs/features/usage-metrics.md).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "aisa.fullname" . }}
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "aisa.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

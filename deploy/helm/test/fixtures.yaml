@@ -1,0 +1,163 @@
+# What aisa's chart expects to find in a cluster, for the install test (install_test.sh): a
+# dev-mode Vault with Kubernetes auth, a dev-mode Consul with ACLs, and two mock backends. Applied
+# into the namespace of the install. Not for any real cluster: both servers keep everything in
+# memory and have fixed root tokens.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+---
+# Vault reviews the service account tokens that aisa and the proxy log in with.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aisa-test-vault-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vault
+    namespace: NAMESPACE
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  labels: {app: vault}
+spec:
+  selector:
+    matchLabels: {app: vault}
+  template:
+    metadata:
+      labels: {app: vault}
+    spec:
+      serviceAccountName: vault
+      containers:
+        - name: vault
+          image: hashicorp/vault:2.1.1
+          args: ["server", "-dev", "-dev-root-token-id=test-root", "-dev-listen-address=0.0.0.0:8200"]
+          env:
+            - {name: SKIP_SETCAP, value: "true"}
+          ports:
+            - {containerPort: 8200}
+          readinessProbe:
+            httpGet: {path: /v1/sys/health, port: 8200}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+spec:
+  selector: {app: vault}
+  ports:
+    - {port: 8200, targetPort: 8200}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consul
+  labels: {app: consul}
+spec:
+  selector:
+    matchLabels: {app: consul}
+  template:
+    metadata:
+      labels: {app: consul}
+    spec:
+      containers:
+        - name: consul
+          image: hashicorp/consul:2.0.4
+          args:
+            - agent
+            - -dev
+            - -client=0.0.0.0
+            # ACLs on, as in the reference environment: every token comes from Vault's Consul
+            # secrets engine, which uses the management token below.
+            - -hcl=acl { enabled = true, default_policy = "deny", tokens { initial_management = "test-root", agent = "test-root" } }
+          ports:
+            - {containerPort: 8500}
+          readinessProbe:
+            httpGet: {path: /v1/status/leader, port: 8500}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+spec:
+  selector: {app: consul}
+  ports:
+    - {port: 8500, targetPort: 8500}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-local
+  labels: {app: mock-local}
+spec:
+  selector:
+    matchLabels: {app: mock-local}
+  template:
+    metadata:
+      labels: {app: mock-local}
+    spec:
+      containers:
+        - name: mock
+          image: aisa-dev-tools:ci
+          imagePullPolicy: Never
+          command: ["/usr/local/bin/mockbackend"]
+          env:
+            - {name: MOCK_NAME, value: mock-local}
+            - {name: MOCK_MODELS, value: "qwen3,llama3.2"}
+          ports:
+            - {containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-local
+spec:
+  selector: {app: mock-local}
+  ports:
+    - {port: 8080, targetPort: 8080}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-cloud
+  labels: {app: mock-cloud}
+spec:
+  selector:
+    matchLabels: {app: mock-cloud}
+  template:
+    metadata:
+      labels: {app: mock-cloud}
+    spec:
+      containers:
+        - name: mock
+          image: aisa-dev-tools:ci
+          imagePullPolicy: Never
+          command: ["/usr/local/bin/mockbackend"]
+          env:
+            - {name: MOCK_NAME, value: mock-cloud}
+            - {name: MOCK_MODELS, value: cloud-large}
+          ports:
+            - {containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-cloud
+spec:
+  selector: {app: mock-cloud}
+  ports:
+    - {port: 8080, targetPort: 8080}

@@ -1,0 +1,13 @@
+# Decisions (/v1/decide) and usage events (/v1/usage) from the proxy, and aisa's metrics.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aisa.fullname" . }}
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "aisa.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.service.port }}, targetPort: http}

@@ -110,9 +110,10 @@ aisa/
 │   └── apisix/
 │       ├── apisix.yaml.ctmpl # consul-template template
 │       ├── config.yaml       # standalone mode
-│       ├── kustomization.yaml, manifests/   # the proxy's own manifests (spike S5)
+│       ├── chart/            # the proxy's chart (spike S5); aisa's chart depends on it
 │       └── README.md
-├── deploy/helm/              # chart for aisa (+ Redis)
+├── deploy/helm/aisa/         # chart for aisa (+ Redis, + the proxy's chart)
+├── deploy/helm/test/         # chart tests and the kind install test
 ├── terraform/                # module: Vault mount/policies/roles, Consul ACLs/KV/registrations
 └── dashboards/               # Grafana JSON + alert rules
 ```
@@ -124,7 +125,7 @@ aisa is released as two artifacts, both on GitHub Container Registry:
 | Artifact | Where | Built by |
 |---|---|---|
 | Container image | `ghcr.io/hlan-net/aisa`, multi-arch (linux/amd64 and linux/arm64) | `.github/workflows/release.yml` on `v*` tags (`<version>` and `latest`) |
-| Helm chart | `oci://ghcr.io/hlan-net/charts/aisa`, pushed with `helm push` | The same release workflow; the chart's `version` and `appVersion` follow the release tag |
+| Helm charts | `oci://ghcr.io/hlan-net/charts/aisa` (aisa, Redis and the proxy) and `oci://ghcr.io/hlan-net/charts/aisa-proxy-apisix` (the proxy alone), pushed with `helm push` | The same release workflow; each chart's `version` is the release without the `v`, its `appVersion` the tag |
 
 A cluster installs aisa from the OCI chart with its own values, from a separate deployment repository or a GitOps tool:
 
@@ -135,7 +136,8 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> \
 
 - **Own namespace.** aisa, the gateway and Redis run together in a dedicated namespace (`aisa` by default), not in `kube-system`. Vault's Kubernetes auth binds roles to a namespace and service account, so aisa's Vault access stays separate from other workloads, and NetworkPolicies, resource quotas and upgrades apply to aisa alone.
 - **Shared service.** Applications in other namespaces use the gateway's Service as an OpenAI-compatible endpoint (e.g. `http://<gateway-service>.aisa.svc.cluster.local/v1`); clients outside the cluster come in through an internal ingress (see [Exposure](#exposure)). A namespace is not an identity: each application authenticates with its own consumer credential ([`VAULT.md`](./VAULT.md)).
-- **Proxy.** Today the proxy is installed separately, with the files in `proxies/<name>/`. For APISIX these are manifests of its own and not the upstream chart, which has no place for the sidecar that renders the config (spike S5). The direction is that aisa's chart installs and removes it ([What aisa is](#what-aisa-is)).
+- **Proxy.** aisa's chart installs and removes the proxy: each proxy has a chart of its own in `proxies/<name>/chart`, and aisa's chart depends on it (`apisix.enabled`), so `deploy/helm/aisa` names no gateway beyond that dependency. For APISIX it is not the upstream chart, which has no place for the sidecar that renders the config (spike S5).
+- **Prerequisites.** The Vault roles and policies of [`VAULT.md`](./VAULT.md) and the Consul policies of [`CONSUL.md`](./CONSUL.md#acls) exist before the install; the Terraform module (ROADMAP v0.2.0 PR 6) is to create them. `deploy/helm/test/install_test.sh` sets them up by hand for a test cluster.
 
 ## Exposure
 

@@ -140,3 +140,84 @@ jobs:
       - name: Stop the dev stack
         if: always()
         run: docker compose -f dev/compose.yaml down -v
+
+  charts:
+    # The charts render for the usual values and validate against the Kubernetes schemas.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Helm
+        env:
+          HELM_VERSION: v3.22.0
+        run: |
+          arch=$(dpkg --print-architecture)
+          curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-$arch.tar.gz" |
+            sudo tar xz -C /usr/local/bin --strip-components=1 "linux-$arch/helm"
+          helm version --short
+
+      - name: Install kubeconform
+        env:
+          KUBECONFORM_VERSION: v0.8.0
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz" |
+            sudo tar xz -C /usr/local/bin kubeconform
+
+      - name: Lint and validate
+        run: ./deploy/helm/test/charts_test.sh
+
+  install:
+    # aisa's chart with its proxy in a kind cluster, with Vault and Consul as the reference
+    # environment has them (deploy/helm/test/install_test.sh).
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build the images
+        run: |
+          docker build --build-arg VERSION=ci -t aisa:ci .
+          docker build -f dev/Dockerfile -t aisa-dev-tools:ci .
+
+      - name: Install Helm
+        env:
+          HELM_VERSION: v3.22.0
+        run: |
+          arch=$(dpkg --print-architecture)
+          curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-$arch.tar.gz" |
+            sudo tar xz -C /usr/local/bin --strip-components=1 "linux-$arch/helm"
+          helm version --short
+
+      - name: Install kubectl
+        env:
+          KUBECTL_VERSION: v1.37.1
+        run: |
+          arch=$(dpkg --print-architecture)
+          sudo curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/$arch/kubectl"
+          sudo chmod +x /usr/local/bin/kubectl
+
+      - name: Create a kind cluster
+        env:
+          KIND_VERSION: v0.33.0
+        run: |
+          arch=$(dpkg --print-architecture)
+          sudo curl -fsSLo /usr/local/bin/kind "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-$arch"
+          sudo chmod +x /usr/local/bin/kind
+          kind create cluster --name aisa --wait 120s
+          kind load docker-image --name aisa aisa:ci aisa-dev-tools:ci
+
+      - name: Install test
+        run: ./deploy/helm/test/install_test.sh
+
+      - name: Logs
+        if: failure()
+        run: |
+          kubectl -n aisa get pods -o wide || true
+          kubectl -n aisa logs --all-containers --prefix -l app.kubernetes.io/part-of=aisa --tail=200 || true
+          kubectl -n aisa logs deploy/vault --tail=100 || true
+          kubectl -n aisa get events --sort-by=.lastTimestamp | tail -50 || true

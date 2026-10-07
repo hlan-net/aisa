@@ -1,0 +1,14 @@
+apiVersion: v2
+name: aisa-proxy-apisix
+description: >-
+  Apache APISIX as the proxy of aisa: APISIX in standalone mode, consul-template that renders its
+  routes from the Consul catalog and Vault, and a Vault Agent that gives consul-template its tokens.
+type: application
+# The release workflow sets both to the release tag; 0.0.0 marks a chart built from the repository.
+version: 0.0.0
+appVersion: "0.0.0"
+home: https://github.com/hlan-net/aisa
+sources:
+  - https://github.com/hlan-net/aisa/tree/main/proxies/apisix
+keywords: [aisa, apisix, llm, gateway]
+kubeVersion: ">=1.29.0-0"
