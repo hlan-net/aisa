@@ -94,6 +94,13 @@ func TestDecide(t *testing.T) {
 			if got := resp.Header.Get("X-Aisa-Model"); got != tt.wantModel {
 				t.Errorf("X-Aisa-Model = %q, want %q", got, tt.wantModel)
 			}
+			wantBudget := ""
+			if tt.wantStatus == http.StatusOK {
+				wantBudget = "1000000" // tokens
+			}
+			if got := resp.Header.Get("X-Aisa-Budget-Remaining"); got != wantBudget {
+				t.Errorf("X-Aisa-Budget-Remaining = %q, want %q", got, wantBudget)
+			}
 			if tt.wantStatus != http.StatusOK {
 				var e struct {
 					Error struct {
