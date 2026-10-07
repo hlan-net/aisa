@@ -5,11 +5,11 @@
 #   client                   the client-facing route: pre-step, forward-auth, then internal listener
 #   model-<name>             normal route per model on the internal listener (matched by X-Aisa-Model)
 #   fail-open-<name>         fail-open route for models with fail_policy="open" when aisa is unreachable
+#   aisa-unreachable         answers 503 when aisa is unreachable and the model does not fail open (priority 5)
+#   no-backend               answers 503 for any model without a healthy backend (priority 0)
 #
 # The two kinds of model route have prefixes of their own, so no model name can make a route ID
 # of one kind equal to one of the other (a model "qwen3-fail-open" next to "qwen3", for example).
-#   aisa-unreachable         answers 503 when aisa is unreachable and the model does not fail open (priority 5)
-#   no-backend               answers 503 for any model without a healthy backend (priority 0)
 
 {{- /* Log comments for skipped backends with invalid metadata (#18) */}}
 {{- range service "aisa-backend" }}
