@@ -26,7 +26,8 @@ pass=0
 ok() { pass=$((pass + 1)); echo "ok   $*"; }
 fail() { echo "FAIL $*" >&2; exit 1; }
 expect() {
-    if [[ "$2" = "$3" ]]; then ok "$1"; else fail "$1: want '$2', got '$3'"; fi
+    local what=$1 want=$2 got=$3
+    if [[ "$got" = "$want" ]]; then ok "$what"; else fail "$what: want '$want', got '$got'"; fi
 }
 
 pf_pids=()
@@ -37,13 +38,14 @@ trap cleanup EXIT
 
 # port_forward <service> <local port> <service port>: forwards in the background and waits.
 port_forward() {
-    "${K[@]}" port-forward "svc/$1" "$2:$3" >/dev/null 2>&1 &
+    local service=$1 local_port=$2 service_port=$3
+    "${K[@]}" port-forward "svc/$service" "$local_port:$service_port" >/dev/null 2>&1 &
     pf_pids+=($!)
     for _ in $(seq 1 30); do
-        curl -s -o /dev/null "http://127.0.0.1:$2/" && return 0
+        curl -s -o /dev/null "http://127.0.0.1:$local_port/" && return 0
         sleep 1
     done
-    fail "port-forward to $1"
+    fail "port-forward to $service"
 }
 
 vault() { "${K[@]}" exec -i deploy/vault -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=test-root vault "$@"; }
@@ -115,7 +117,10 @@ vault write auth/kubernetes/role/aisa bound_service_account_names="$RELEASE" \
     bound_service_account_namespaces="$NS" audience=vault policies=aisa ttl=1h >/dev/null
 vault write auth/kubernetes/role/aisa-render bound_service_account_names="$RELEASE-apisix" \
     bound_service_account_namespaces="$NS" audience=vault policies=aisa-render ttl=1h >/dev/null
-sha256() { printf %s "$1" | sha256sum | cut -d' ' -f1; }
+sha256() {
+    local text=$1
+    printf %s "$text" | sha256sum | cut -d' ' -f1
+}
 vault kv put secret/aisa/consumers/chat-ui key_sha256="$(sha256 test-key-chat-ui)" quota_profile=interactive >/dev/null
 vault kv put secret/aisa/providers/cloud api_key=test-provider-key >/dev/null
 vault secrets enable consul >/dev/null
@@ -148,8 +153,9 @@ expect "aisa read its quota profiles from Consul (a token from Vault)" 1 "$profi
 echo "== requests through the proxy"
 port_forward "$RELEASE-apisix" 19080 80
 chat() {
-    curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $1" \
-        -H 'Content-Type: application/json' -d "{\"model\":\"$2\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+    local key=$1 model=$2
+    curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" \
+        -H 'Content-Type: application/json' -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
         http://127.0.0.1:19080/v1/chat/completions
 }
 # The proxy loads its routes a moment after it is ready; wait for the first answer from aisa.
@@ -183,7 +189,8 @@ ok "usage events reached aisa ($tokens tokens for chat-ui)"
 echo "== NetworkPolicy"
 # probe_aisa <name> [labels]: asks aisa's /healthz from a new pod with these labels.
 probe_aisa() {
-    "${K[@]}" run "$1" --rm -i --restart=Never --quiet --labels="${2:-}" \
+    local name=$1 labels=${2:-}
+    "${K[@]}" run "$name" --rm -i --restart=Never --quiet --labels="$labels" \
         --image=aisa-dev-tools:ci --image-pull-policy=Never \
         --command -- /usr/local/bin/mockbackend -healthcheck "http://$RELEASE:8080/healthz" >/dev/null 2>&1
 }
