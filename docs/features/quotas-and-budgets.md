@@ -34,9 +34,9 @@ Gateway-native quota plugins (e.g. APISIX `ai-rate-limiting`) are **not** used. 
 
 Every limit is in tokens; currency is how spend is shown, never how it is limited (decided 2026-09-29).
 
-- Monthly budget per consumer in `aisa/budgets/<consumer>`, in tokens (`monthly_tokens`), **calendar month** in the configured time zone. Used = Σ (prompt tokens + completion tokens) of the consumer's requests that month.
+- Monthly budget per consumer in `aisa/budgets/<consumer>`, in tokens (`monthly_tokens`), **calendar month** in the configured time zone. Used = Σ (prompt tokens + completion tokens) of the consumer's requests that month to the models the budget covers.
 - **Cost is for display**: Σ (prompt tokens × input price + completion tokens × output price), with prices from `aisa/pricing/<model>` ([`CONSUL.md`](../concepts/CONSUL.md)), in `aisa_cost_total` and the dashboard. It denies nothing.
-- **Open:** whether every model's tokens count against the budget or only those of models with a price, and whether prompt and completion tokens weigh the same. Decided with the first v0.3.0 PR.
+- **Open, decided with the first v0.3.0 PR:** which models a budget covers, every model or only those with a price (proposed: only those with a price, because the token quota already limits local models), and whether prompt and completion tokens weigh the same (proposed: they do). Until then the formula above is provisional.
 - **Soft limit** (e.g. 80 %): the request is allowed, the response gets `X-Aisa-Budget-Remaining` (tokens), and an alert fires.
 - **Exhausted**, depending on `on_exhausted`:
   - `reject`: 429 with an OpenAI-style error body

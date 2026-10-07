@@ -34,6 +34,8 @@ POST /v1/decide            (GET is accepted too, for gateways that cannot send a
   out: 200 + headers   X-Aisa-Consumer: batch-jobs
                        X-Aisa-Model: qwen3              (possibly rewritten, e.g. budget downgrade)
                        X-Aisa-Budget-Remaining: 1200000  (tokens; only when the consumer has a budget)
+                         The unit was a currency amount until 2026-10. No release of aisa has sent
+                         the header, only the dev stub, so v1 is corrected instead of versioned.
        400 no model in the header or the body, or a model name longer than 256 bytes
        401 unknown or invalid credential
        413 no model in the header, and the body is larger than 16 MiB

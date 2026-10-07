@@ -76,7 +76,8 @@ aisa/consumers/batch-jobs   {"quota_profile": "batch", "namespace": "news", "sec
 
 aisa then:
 
-1. **Writes the Secret** `aisa` in the namespace `news`, with a key it generates:
+1. **Makes a new key valid before anyone sees it.** aisa generates the key and adds its SHA-256 to `key_sha256` in Vault (`secret/aisa/consumers/batch-jobs`), which the decision API reads as it does today ([`VAULT.md`](./VAULT.md#consumer-credentials)). The custom metadata of the Vault secret marks the hash as *not yet written* with the time.
+2. **Writes the Secret** `aisa` in the namespace `news`:
    ```yaml
    metadata:
      labels:
@@ -87,22 +88,24 @@ aisa then:
      OPENAI_BASE_URL: http://<proxy-service>.<namespace>.svc.cluster.local/v1
      OPENAI_API_KEY: <key>
    ```
-   An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret.
-2. **Accepts the key** by moving its SHA-256 from `pending_sha256` to `key_sha256` in Vault (`secret/aisa/consumers/batch-jobs`), which the decision API reads as it does today ([`VAULT.md`](./VAULT.md#consumer-credentials)). Before step 1, aisa records the new key's hash as `pending_sha256`; the decision API does not accept a pending hash.
-3. **Rotates the key**: the same two steps with a new key, keeping the old hash in `key_sha256` and removing it after a grace period (`AISA_KEY_ROTATION_GRACE`). When a hash was superseded is kept in the custom metadata of the Vault secret, so the grace period survives a restart. A pod that read the key into its environment keeps the old one until it restarts; open question 4.
-4. **Deletes** the Secret and the hashes when the consumer is removed from Consul.
+   An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret, and it is valid from the moment it appears there.
+3. **Clears the mark** in Vault.
+4. **Rotates the key** with the same three steps, keeping the old hash in `key_sha256` and removing it after a grace period (`AISA_KEY_ROTATION_GRACE`). The metadata keeps when a hash was superseded, so the grace period survives a restart. A pod that read the key into its environment keeps the old one until it restarts; open question 4.
+5. **Deletes** the Secret and the hashes when the consumer is removed from Consul.
 
-**Reconciling is restart-safe, and accepts only keys aisa issued.** The plaintext lives only in the Secret, and Vault records which hash aisa meant to issue before the Secret is written. Each pass compares the two and repairs the difference, so a crash between any two steps is finished on the next pass, and a key written into the Secret by anyone else never becomes valid:
+**Reconciling is restart-safe, and accepts only keys aisa issued.** Every hash in `key_sha256` was added by aisa before its key was written anywhere, so a key written into the Secret by anyone else never becomes valid. Each pass compares the Secret with Vault and repairs the difference, so a crash between any two steps is finished on the next pass:
 
 | State found | Action |
 |---|---|
-| Secret owned by the consumer, its key's hash in `key_sha256` | Nothing |
-| Secret owned by the consumer, its key's hash is `pending_sha256` | Accept it (step 2): a crash after step 1 |
-| Secret owned by the consumer, its key's hash in neither | The key was not issued by aisa (edited by hand, or a crash before the pending hash was written). Issue a new key with steps 1 and 2; the unknown key is never accepted. Logged and counted |
-| No Secret | Issue a new key with steps 1 and 2. Hashes already in `key_sha256` are kept for the grace period, because a running pod may still hold their key. The consumer's credential changes, so this is logged and counted |
-| Hashes in `key_sha256` that the Secret does not hold, older than the grace period; a `pending_sha256` that the Secret does not hold | Remove them |
+| Secret owned by the consumer, its key's hash in `key_sha256` | Clear a leftover mark (a crash after step 2). Restore the other fields aisa manages, `OPENAI_BASE_URL`, its labels and annotation, if they were changed; the key stays |
+| Secret owned by the consumer, its key's hash not in `key_sha256` | The key was not issued by aisa, or was edited by hand. Issue a new key with steps 1 to 3; the unknown key is never accepted. Logged and counted |
+| No Secret | Issue a new key with steps 1 to 3. Hashes already in `key_sha256` are kept for the grace period, because a running pod may still hold their key. The consumer's credential changes, so this is logged and counted |
+| A hash marked *not yet written* that the Secret does not hold, older than a minute | Remove it: a crash between steps 1 and 2 left a valid hash whose key nobody has |
+| Hashes the Secret does not hold, superseded longer ago than the grace period | Remove them |
 
-**Ownership.** aisa changes or deletes only a Secret that carries its label with this consumer's name. A Secret of that name without the label, or with another consumer's, is never adopted, overwritten or deleted: the consumer's reconcile fails, and the failure is logged and reported in aisa's metrics until the holder renames one of them. Two consumers that name the same namespace and Secret both fail the same way.
+**Ownership.** aisa changes or deletes only a Secret that carries its label with this consumer's name. A Secret of that name without the label, or with another consumer's, is never adopted, overwritten or deleted: the consumer's reconcile fails, and the failure is logged and reported in aisa's metrics until the holder renames one of them.
+
+**One Secret, one consumer.** Before reconciling, aisa checks the consumers in Consul for duplicate targets. When two or more name the same namespace and Secret, none of them is reconciled, whichever came first, and each is reported until the holder changes one; their existing Secrets and hashes are left as they are.
 
 This is option 1 of [#32](https://github.com/hlan-net/aisa/issues/32) with aisa as the sync, so no Vault Secrets Operator or External Secrets is needed, and no pod logs in to Vault. Option 2 (the service account token) stays possible as a second credential type later.
 

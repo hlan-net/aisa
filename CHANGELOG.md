@@ -7,7 +7,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 ## [Unreleased]
 
 ### Changed
-- **Budgets are in tokens**: budgets are enforced in tokens like quotas, and prices only show spend in currency. v0.3.0 is now "Budgets" in `ROADMAP.md`. `aisa/budgets/<consumer>` takes `monthly_tokens`, `X-Aisa-Budget-Remaining` and `aisa_budget_*` are in tokens, and `aisa/pricing/<model>` is for display. Nothing that emits them is built yet.
+- **Budgets are in tokens**: budgets are enforced in tokens like quotas, and prices only show spend in currency. v0.3.0 is now "Budgets" in `ROADMAP.md`. `aisa/budgets/<consumer>` takes `monthly_tokens`, `X-Aisa-Budget-Remaining` and `aisa_budget_*` are in tokens, and `aisa/pricing/<model>` is for display. aisa itself sends none of them yet; the dev stub's `X-Aisa-Budget-Remaining` is now in tokens.
 - **A working in-cluster install comes first**: `ROADMAP.md` v0.2.0 gets PR 11 (consumers in Consul) and PR 12 (Kubernetes objects), and an order that puts the proxy, the chart and those two before the rest.
 - **The proxy is called a proxy**: `adapters/apisix/` is now `proxies/apisix/` and `docs/concepts/ADAPTER_CONTRACT.md` is `PROXY_CONTRACT.md`. "Adapter" from now on means what is specific to a kind of provider ([`ARCHITECTURE.md`](docs/concepts/ARCHITECTURE.md#what-aisa-is)). The contracts, endpoints and metrics are unchanged. The spike files and the entries of released versions keep the older word.
 
