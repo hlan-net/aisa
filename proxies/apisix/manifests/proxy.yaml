@@ -1,0 +1,123 @@
+# The APISIX proxy: one pod with APISIX, consul-template and a Vault Agent (spike S5).
+# consul-template renders apisix.yaml into a directory in memory that APISIX reads; the Vault
+# Agent logs in to Vault and hands consul-template its tokens. Applied through
+# ../kustomization.yaml, which generates the ConfigMaps.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aisa-render
+# Vault's Kubernetes auth binds the role aisa-render to this service account and its namespace.
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apisix
+  labels: {app.kubernetes.io/name: apisix, app.kubernetes.io/part-of: aisa}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: apisix}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: apisix, app.kubernetes.io/part-of: aisa}
+    spec:
+      serviceAccountName: aisa-render
+      # Nothing in the pod talks to the Kubernetes API. Only the Vault Agent gets a service
+      # account token, projected below, to log in to Vault with.
+      automountServiceAccountToken: false
+      initContainers:
+        # A sidecar that starts first (restartPolicy: Always, Kubernetes 1.29+): the renders
+        # below need its tokens. It is started once both are written.
+        - name: vault-agent
+          image: hashicorp/vault:2.1.1
+          restartPolicy: Always
+          command: ["vault", "agent", "-config=/etc/apisix/aisa/vault-agent.hcl"]
+          envFrom: &env
+            - configMapRef: {name: apisix-env}
+          volumeMounts:
+            - {name: render, mountPath: /etc/apisix/aisa, readOnly: true}
+            - {name: tokens, mountPath: /vault}
+            - {name: serviceaccount, mountPath: /var/run/secrets/aisa/serviceaccount, readOnly: true}
+          startupProbe:
+            exec: {command: ["sh", "-c", "test -s /vault/token && test -s /vault/consul-token"]}
+            periodSeconds: 1
+            failureThreshold: 60
+          resources:
+            requests: {cpu: 10m, memory: 64Mi, ephemeral-storage: 16Mi}
+            limits: {memory: 128Mi, ephemeral-storage: 64Mi}
+        # APISIX does not start without an apisix.yaml, so the first render comes before it.
+        - name: render-once
+          image: hashicorp/consul-template:0.43.0
+          args: &render-args
+            - -config=/etc/apisix/aisa/consul-template.hcl
+            - -vault-agent-token-file=/vault/token
+            - -consul-token-file=/vault/consul-token
+            - -once
+          envFrom: *env
+          volumeMounts: &render-mounts
+            - {name: render, mountPath: /etc/apisix/aisa, readOnly: true}
+            - {name: tokens, mountPath: /vault, readOnly: true}
+            - {name: rendered, mountPath: /rendered}
+          resources: &render-resources
+            requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+            limits: {memory: 64Mi, ephemeral-storage: 64Mi}
+      containers:
+        - name: apisix
+          image: apache/apisix:3.19.0-debian
+          # consul-template replaces the file by renaming a new one over it. A mount of the file
+          # itself would keep showing the old one, so the directory is mounted and the config
+          # path is a link into it.
+          command:
+            - sh
+            - -c
+            - ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start
+          ports:
+            - {name: http, containerPort: 9080}
+            - {name: metrics, containerPort: 9091}
+          volumeMounts:
+            - {name: config, mountPath: /usr/local/apisix/conf/config.yaml, subPath: config.yaml, readOnly: true}
+            - {name: rendered, mountPath: /rendered, readOnly: true}
+          readinessProbe:
+            tcpSocket: {port: 9080}
+            periodSeconds: 2
+          # From spike S7, to be confirmed on a Raspberry Pi 4 (#16).
+          resources:
+            requests: {cpu: 100m, memory: 96Mi, ephemeral-storage: 64Mi}
+            limits: {memory: 256Mi, ephemeral-storage: 512Mi}
+        - name: consul-template
+          image: hashicorp/consul-template:0.43.0
+          args:
+            - -config=/etc/apisix/aisa/consul-template.hcl
+            - -vault-agent-token-file=/vault/token
+            - -consul-token-file=/vault/consul-token
+          envFrom: *env
+          volumeMounts: *render-mounts
+          resources: *render-resources
+      volumes:
+        - name: config
+          configMap: {name: apisix-config}
+        - name: render
+          # guard.sh is run from here.
+          configMap: {name: apisix-render, defaultMode: 0555}
+        # In memory: the rendered file holds provider keys, which must not reach a disk.
+        - name: rendered
+          emptyDir: {medium: Memory, sizeLimit: 8Mi}
+        # In memory: the Vault and Consul tokens. Not mounted into the gateway's container.
+        - name: tokens
+          emptyDir: {medium: Memory, sizeLimit: 1Mi}
+        - name: serviceaccount
+          projected:
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apisix-gateway
+  labels: {app.kubernetes.io/name: apisix, app.kubernetes.io/part-of: aisa}
+spec:
+  selector: {app.kubernetes.io/name: apisix}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+    - {name: metrics, port: 9091, targetPort: metrics}
