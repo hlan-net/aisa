@@ -47,6 +47,10 @@ The full list with comments is in [`values.yaml`](./values.yaml). The ones an in
 | `extraEnv`, `extraVolumes`, `extraVolumeMounts` | none | e.g. `VAULT_CACERT` with a CA from a ConfigMap |
 | `apisix.*` | | The proxy's values ([`proxies/apisix/chart/values.yaml`](../../../proxies/apisix/chart/values.yaml)) |
 
+## Working on the charts
+
+The proxy's chart is a packaged dependency: `helm dependency update` copies it into `charts/` (git-ignored), and `helm install` and `helm upgrade` read that copy, not `proxies/apisix/`. After a change to the proxy's files or chart, run `helm dependency update deploy/helm/aisa` again, or pass `--dependency-update` to `helm upgrade`; otherwise the cluster keeps the old template. `charts_test.sh` and `install_test.sh` do this themselves.
+
 ## Tests
 
 - [`../test/charts_test.sh`](../test/charts_test.sh): `helm lint`, and `kubeconform` for the usual combinations of values. Needs no cluster.
