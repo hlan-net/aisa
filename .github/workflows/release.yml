@@ -140,7 +140,7 @@ jobs:
         env:
           HELM_VERSION: v3.22.0
         run: |
-          curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz" |
+          curl -fsSL --proto =https --proto-redir =https "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz" |
             sudo tar xz -C /usr/local/bin --strip-components=1 linux-amd64/helm
 
       - name: Package and push

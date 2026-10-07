@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 AISA="$ROOT/deploy/helm/aisa"
 PROXY="$ROOT/proxies/apisix/chart"
-REQUIRED=(--set global.vault.addr=http://vault.vault.svc:8200 --set global.consul.addr=consul.consul.svc:8500)
+REQUIRED=(--set global.vault.addr=https://vault.vault.svc:8200 --set global.consul.addr=consul.consul.svc:8500)
 # The oldest Kubernetes the charts support (Chart.yaml kubeVersion).
 KUBE_VERSION=1.29.0
 
@@ -19,7 +19,7 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 
 # The charts read the proxy's files through links; a broken link would render an empty file.
 for f in "$PROXY"/files/*; do
-    [ -s "$f" ] || fail "$f is a broken link or empty"
+    [[ -s "$f" ]] || fail "$f is a broken link or empty"
 done
 echo "ok: the proxy chart's files resolve"
 
@@ -46,7 +46,7 @@ validate "monitoring" "$AISA" --set serviceMonitor.enabled=true --set apisix.ser
 validate "consul-without-acls" "$AISA" --set consul.token.fromVault=false --set apisix.vaultAgent.consulToken.enabled=false
 validate "external-redis" "$AISA" --set redis.enabled=false --set redis.addr=redis.example.svc:6379
 validate "no-quotas-no-proxy" "$AISA" --set quotas.enabled=false --set apisix.enabled=false
-validate "proxy-alone" "$PROXY" --set aisa.url=http://aisa.aisa.svc:8080
+validate "proxy-alone" "$PROXY" --set aisa.url=https://aisa.aisa.svc:8080
 
 # The values that must be given are asked for.
 if helm template aisa "$AISA" >/dev/null 2>&1; then
@@ -60,7 +60,7 @@ for release in aisa prod; do
         awk '/^kind: Service$/{s=1} s && /^  name:/{print $2; s=0}' | grep -v -e apisix -e redis)
     url=$(helm template "$release" "$AISA" "${REQUIRED[@]}" 2>/dev/null |
         awk '/name: AISA_DECIDE_URI/{getline; print $2; exit}' | tr -d '"')
-    [ "$url" = "http://$svc:8080/v1/decide" ] || fail "release $release: the proxy asks $url, aisa's Service is $svc"
+    [[ "${url#*://}" == "$svc:8080/v1/decide" ]] || fail "release $release: the proxy asks $url, aisa's Service is $svc"
     echo "ok: release $release: the proxy asks aisa's Service $svc"
 done
 

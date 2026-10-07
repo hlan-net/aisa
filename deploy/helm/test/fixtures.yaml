@@ -34,17 +34,35 @@ spec:
       labels: {app: vault}
     spec:
       serviceAccountName: vault
+      # Vault reviews tokens with its own service account token and the cluster's CA, mounted
+      # below where Kubernetes would mount them.
+      automountServiceAccountToken: false
+      volumes:
+        - name: serviceaccount
+          projected:
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+              - downwardAPI:
+                  items: [{path: namespace, fieldRef: {fieldPath: metadata.namespace}}]
       containers:
         - name: vault
           image: hashicorp/vault:2.1.1
           args: ["server", "-dev", "-dev-root-token-id=test-root", "-dev-listen-address=0.0.0.0:8200"]
           env:
             - {name: SKIP_SETCAP, value: "true"}
+          volumeMounts:
+            - {name: serviceaccount, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
           ports:
             - {containerPort: 8200}
           readinessProbe:
             httpGet: {path: /v1/sys/health, port: 8200}
             periodSeconds: 2
+          resources:
+            requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+            limits: {memory: 256Mi, ephemeral-storage: 256Mi}
 ---
 apiVersion: v1
 kind: Service
@@ -67,6 +85,7 @@ spec:
     metadata:
       labels: {app: consul}
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: consul
           image: hashicorp/consul:2.0.4
@@ -82,6 +101,9 @@ spec:
           readinessProbe:
             httpGet: {path: /v1/status/leader, port: 8500}
             periodSeconds: 2
+          resources:
+            requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+            limits: {memory: 256Mi, ephemeral-storage: 256Mi}
 ---
 apiVersion: v1
 kind: Service
@@ -104,6 +126,7 @@ spec:
     metadata:
       labels: {app: mock-local}
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: mock
           image: aisa-dev-tools:ci
@@ -117,6 +140,9 @@ spec:
           readinessProbe:
             httpGet: {path: /healthz, port: 8080}
             periodSeconds: 2
+          resources:
+            requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+            limits: {memory: 256Mi, ephemeral-storage: 256Mi}
 ---
 apiVersion: v1
 kind: Service
@@ -139,6 +165,7 @@ spec:
     metadata:
       labels: {app: mock-cloud}
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: mock
           image: aisa-dev-tools:ci
@@ -152,6 +179,9 @@ spec:
           readinessProbe:
             httpGet: {path: /healthz, port: 8080}
             periodSeconds: 2
+          resources:
+            requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
+            limits: {memory: 256Mi, ephemeral-storage: 256Mi}
 ---
 apiVersion: v1
 kind: Service

@@ -46,7 +46,7 @@ port_forward() {
     fail "port-forward to $1"
 }
 
-vault() { "${K[@]}" exec deploy/vault -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=test-root vault "$@"; }
+vault() { "${K[@]}" exec -i deploy/vault -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=test-root vault "$@"; }
 consul() { "${K[@]}" exec deploy/consul -- env CONSUL_HTTP_TOKEN=test-root consul "$@"; }
 
 echo "== fixtures"

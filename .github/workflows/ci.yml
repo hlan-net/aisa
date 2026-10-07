@@ -153,7 +153,7 @@ jobs:
           HELM_VERSION: v3.22.0
         run: |
           arch=$(dpkg --print-architecture)
-          curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-$arch.tar.gz" |
+          curl -fsSL --proto =https --proto-redir =https "https://get.helm.sh/helm-$HELM_VERSION-linux-$arch.tar.gz" |
             sudo tar xz -C /usr/local/bin --strip-components=1 "linux-$arch/helm"
           helm version --short
 
@@ -161,7 +161,7 @@ jobs:
         env:
           KUBECONFORM_VERSION: v0.8.0
         run: |
-          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz" |
+          curl -fsSL --proto =https --proto-redir =https "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz" |
             sudo tar xz -C /usr/local/bin kubeconform
 
       - name: Lint and validate
@@ -189,7 +189,7 @@ jobs:
           HELM_VERSION: v3.22.0
         run: |
           arch=$(dpkg --print-architecture)
-          curl -fsSL "https://get.helm.sh/helm-$HELM_VERSION-linux-$arch.tar.gz" |
+          curl -fsSL --proto =https --proto-redir =https "https://get.helm.sh/helm-$HELM_VERSION-linux-$arch.tar.gz" |
             sudo tar xz -C /usr/local/bin --strip-components=1 "linux-$arch/helm"
           helm version --short
 
@@ -198,7 +198,7 @@ jobs:
           KUBECTL_VERSION: v1.37.1
         run: |
           arch=$(dpkg --print-architecture)
-          sudo curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/$arch/kubectl"
+          sudo curl -fsSL --proto =https --proto-redir =https -o /usr/local/bin/kubectl "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/$arch/kubectl"
           sudo chmod +x /usr/local/bin/kubectl
 
       - name: Create a kind cluster
@@ -206,7 +206,7 @@ jobs:
           KIND_VERSION: v0.33.0
         run: |
           arch=$(dpkg --print-architecture)
-          sudo curl -fsSLo /usr/local/bin/kind "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-$arch"
+          sudo curl -fsSL --proto =https --proto-redir =https -o /usr/local/bin/kind "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-$arch"
           sudo chmod +x /usr/local/bin/kind
           kind create cluster --name aisa --wait 120s
           kind load docker-image --name aisa aisa:ci aisa-dev-tools:ci
