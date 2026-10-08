@@ -171,4 +171,9 @@ A proxy is complete when it provides:
 3. a consul-template template for the gateway config, with an explicit upstream timeout and the [check](#checking-the-rendered-config) before the gateway loads it
 4. an example deployment and an integration test against a mock backend
 
-The contract is versioned (`/v1/`) from the start and stays marked unstable until a second proxy implements it.
+## Versioning
+
+The contract is versioned (`/v1/`) from the start and stays marked unstable until a second proxy implements it. Every change to it is documented here in the same PR; whether it gets a new version depends on what it breaks (decided 2026-10-08):
+
+- **An addition stays in its version.** A change that every existing proxy and client keeps working with is added to `/v1/`: a new path a proxy serves (such as `GET /v1/models`), a new optional field or header, a new `aisa_*` metric, label or label value. A proxy that does not have the addition yet is incomplete, not broken.
+- **A breaking change gets a new version at once.** Renaming or removing a path, field, header, metric or label (`/v1/models` → `/v1/model`), changing a field's meaning, type or unit, or making something optional required, moves the changed contract to `/v2/`.
