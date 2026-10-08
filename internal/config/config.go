@@ -14,6 +14,11 @@ import (
 type Config struct {
 	// Addr is the address the HTTP server listens on (AISA_ADDR).
 	Addr string
+	// MetricsAddr is the address of /metrics, apart from the API (AISA_METRICS_ADDR). Empty:
+	// /metrics is on Addr. Set, Addr serves only the API, so a network policy can let a scraper
+	// reach the metrics without reaching /v1/usage and /v1/decide (#46). The probes answer on
+	// both.
+	MetricsAddr string
 	// LogLevel is the lowest level that is logged (AISA_LOG_LEVEL).
 	LogLevel slog.Level
 	// ShutdownTimeout is how long requests in flight get to finish after SIGTERM
@@ -148,6 +153,15 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, err
 	}
 	cfg.Addr = addr
+	if v := getenv("AISA_METRICS_ADDR"); v != "" {
+		if _, _, err := net.SplitHostPort(v); err != nil {
+			return cfg, fmt.Errorf("AISA_METRICS_ADDR: want host:port or :port, got %q: %w", v, err)
+		}
+		if v == cfg.Addr {
+			return cfg, fmt.Errorf("AISA_METRICS_ADDR: %q is AISA_ADDR too; unset it to serve /metrics there", v)
+		}
+		cfg.MetricsAddr = v
+	}
 	if v := getenv("AISA_LOG_LEVEL"); v != "" {
 		// Not slog's own parser: it also takes offsets such as INFO+1.
 		switch strings.ToLower(v) {

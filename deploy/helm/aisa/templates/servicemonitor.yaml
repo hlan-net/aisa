@@ -13,8 +13,9 @@ spec:
   selector:
     matchLabels:
       {{- include "aisa.selectorLabels" . | nindent 6 }}
+      aisa.hlan.net/metrics: "true"
   endpoints:
-    - port: http
+    - port: metrics
       path: /metrics
       interval: {{ .Values.serviceMonitor.interval }}
 {{- end }}

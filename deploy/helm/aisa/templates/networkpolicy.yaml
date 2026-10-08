@@ -1,6 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
-# aisa answers its proxy: the pods of this release with the component label "proxy", which every
-# proxy chart sets. Anything else that needs aisa's port, such as Prometheus, is in extraFrom.
+# aisa's API (/v1/decide, /v1/usage) answers its proxy only: the pods of this release with the
+# component label "proxy", which every proxy chart sets. The peers in extraFrom, such as
+# Prometheus, reach the metrics port only, so they cannot send usage events (#46).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -20,9 +21,12 @@ spec:
             matchLabels:
               app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: proxy
-        {{- with .Values.networkPolicy.extraFrom }}
+    {{- with .Values.networkPolicy.extraFrom }}
+    - ports:
+        - {port: metrics, protocol: TCP}
+      from:
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+    {{- end }}
 {{- if and .Values.quotas.enabled .Values.redis.enabled }}
 ---
 # The counters are aisa's alone.

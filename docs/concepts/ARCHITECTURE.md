@@ -141,7 +141,7 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> \
 
 ## Exposure
 
-Keep the gateway endpoint internal: behind an IP allowlist or on an internal-only ingress. A leaked consumer key on a public endpoint means unmetered use of paid providers until the key is revoked. aisa's decision and ingest endpoints are cluster-internal only (ClusterIP plus a NetworkPolicy that allows only the gateway pods).
+Keep the gateway endpoint internal: behind an IP allowlist or on an internal-only ingress. A leaked consumer key on a public endpoint means unmetered use of paid providers until the key is revoked. aisa's decision and ingest endpoints are cluster-internal only (ClusterIP plus a NetworkPolicy that allows only the gateway pods). aisa serves `/metrics` on a port of its own (`AISA_METRICS_ADDR`; 9090 in the chart), so a scraper such as Prometheus is allowed that port only: `/v1/usage` takes usage events without authentication, and a peer that could reach it could charge consumers' quotas ([#46](https://github.com/hlan-net/aisa/issues/46)).
 
 The proxy is the egress of inference traffic, and a quota holds only if nothing goes around it. A paid provider is safe without further measures, because no application has its key. A backend without a key is not: an application that knows the address of a local Ollama can call it directly, past the quotas and the books. That path must be closed in the network, with a NetworkPolicy that denies applications the backends or a firewall on the backend's host. This is not designed yet.
 

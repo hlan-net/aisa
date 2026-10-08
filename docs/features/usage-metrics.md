@@ -15,6 +15,8 @@ Full list in [`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md#4-metrics-outpu
 - `aisa_usage_missing_total{consumer,model,backend}`: successful requests whose event has no token counts, because the backend did not stream usage or the client disconnected mid-stream. Their tokens are in no other metric and are not charged to quotas ([#12](https://github.com/hlan-net/aisa/issues/12))
 - `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `unavailable` (aisa cannot verify credentials, under the consumer `unknown`, or cannot know a consumer's token quota, and answers 503), `deny_quota`, `deny_budget`, `downgrade`
 
+aisa serves `/metrics` on its own address when `AISA_METRICS_ADDR` is set (the chart sets `:9090`, with a Service `<release>-metrics` that its ServiceMonitor scrapes); `AISA_ADDR` then serves only the proxy's endpoints, `/v1/decide` and `/v1/usage`. Allow Prometheus the metrics port only: a scraper that reaches `/v1/usage` could send usage events that charge consumers' quotas ([#46](https://github.com/hlan-net/aisa/issues/46)).
+
 Cost is computed in aisa from the Consul prices, so no Prometheus rules with hardcoded prices are needed.
 
 aisa also reports on its own state. These are not part of the proxy contract:

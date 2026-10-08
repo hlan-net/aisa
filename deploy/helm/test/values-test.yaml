@@ -17,3 +17,9 @@ apisix:
   vaultAgent:
     auth:
       audience: vault
+# A scraper, as Prometheus would be: the test's pods with this label reach aisa's metrics port.
+networkPolicy:
+  extraFrom:
+    - podSelector:
+        matchLabels:
+          app: np-scraper

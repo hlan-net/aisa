@@ -77,6 +77,10 @@ spec:
           env:
             - name: AISA_LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            # /metrics on a port of its own, apart from /v1/decide and /v1/usage on 8080, so the
+            # NetworkPolicy can let a scraper reach the metrics only (#46).
+            - name: AISA_METRICS_ADDR
+              value: ":9090"
             - name: VAULT_ADDR
               value: {{ include "aisa.vaultAddr" . | quote }}
             - name: AISA_VAULT_K8S_MOUNT
@@ -106,11 +110,12 @@ spec:
             {{- end }}
           ports:
             - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
           livenessProbe:
-            httpGet: {path: /healthz, port: http}
+            httpGet: {path: /healthz, port: metrics}
             periodSeconds: 10
           readinessProbe:
-            httpGet: {path: /readyz, port: http}
+            httpGet: {path: /readyz, port: metrics}
             periodSeconds: 5
           securityContext:
             allowPrivilegeEscalation: false

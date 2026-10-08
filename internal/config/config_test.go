@@ -64,6 +64,7 @@ func TestFromEnvVault(t *testing.T) {
 func TestFromEnv(t *testing.T) {
 	cfg, err := FromEnv(env(map[string]string{
 		"AISA_ADDR":             "127.0.0.1:9000",
+		"AISA_METRICS_ADDR":     ":9090",
 		"AISA_LOG_LEVEL":        "debug",
 		"AISA_SHUTDOWN_TIMEOUT": "30s",
 	}))
@@ -72,6 +73,7 @@ func TestFromEnv(t *testing.T) {
 	}
 	want := Defaults()
 	want.Addr, want.LogLevel, want.ShutdownTimeout = "127.0.0.1:9000", slog.LevelDebug, 30*time.Second
+	want.MetricsAddr = ":9090"
 	want.Vault.Addr = "http://vault:8200"
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
@@ -96,6 +98,8 @@ func TestFromEnvLogLevels(t *testing.T) {
 func TestFromEnvRejects(t *testing.T) {
 	for name, vars := range map[string]map[string]string{
 		"address without a port":  {"AISA_ADDR": "localhost"},
+		"metrics address no port": {"AISA_METRICS_ADDR": "localhost"},
+		"metrics address = api":   {"AISA_ADDR": ":8080", "AISA_METRICS_ADDR": ":8080"},
 		"unknown log level":       {"AISA_LOG_LEVEL": "loud"},
 		"log level with offset":   {"AISA_LOG_LEVEL": "info+1"},
 		"timeout not a duration":  {"AISA_SHUTDOWN_TIMEOUT": "ten"},
