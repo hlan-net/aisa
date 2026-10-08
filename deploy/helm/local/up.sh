@@ -21,6 +21,9 @@
 #   CONSUMER       the consumer to create                   opencode
 #   APP_NAMESPACE  where its Secret goes                    $CONSUMER
 #   TOKENS_PER_HOUR its quota                               2000000
+#   PUBLISH        how the proxy reaches localhost: "lb" (a LoadBalancer on localhost, Docker
+#                  Desktop) or "forward" (a ClusterIP and kubectl port-forward, kind)
+#                                                           by the context
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,11 +35,40 @@ OLLAMA_ADDR="${OLLAMA_ADDR:-host.docker.internal:11434}"
 CONSUMER="${CONSUMER:-opencode}"
 APP_NS="${APP_NAMESPACE:-$CONSUMER}"
 TOKENS_PER_HOUR="${TOKENS_PER_HOUR:-2000000}"
+case "${PUBLISH:-}" in
+    lb|forward) ;;
+    "") case "$CONTEXT" in docker-desktop) PUBLISH=lb ;; *) PUBLISH=forward ;; esac ;;
+    *) echo "PUBLISH: want lb or forward, got '$PUBLISH'" >&2; exit 1 ;;
+esac
+# The consumer's name is a Vault path and a file name here; the label below takes any name.
+[[ "$CONSUMER" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "CONSUMER: letters, digits, '.', '_' and '-' only" >&2; exit 1; }
 K=(kubectl --context "$CONTEXT")
 KN=("${K[@]}" -n "$NS")
 
 ok() { echo "ok   $*"; }
 fail() { echo "FAIL $*" >&2; exit 1; }
+pf_pid=""
+cleanup() { [[ -n "$pf_pid" ]] && kill "$pf_pid" 2>/dev/null; true; }
+trap cleanup EXIT
+# sha256 <text>: with openssl, which macOS has and sha256sum it has not.
+sha256() { printf %s "$1" | openssl dgst -sha256 | sed 's/^.*= //'; }
+# derived_name <name> <fallback>: the rule of KUBERNETES_OBJECTS.md for a label value and an
+# object name: lowercase, runs of other characters to one '-', trimmed, cut to 54, trimmed
+# again, the fallback if nothing is left, then '-' and 8 hex digits of the exact name's SHA-256.
+derived_name() {
+    local name=$1 fallback=$2 safe
+    safe=$(printf %s "$name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-//; s/-$//' | cut -c1-54 | sed -E 's/-$//')
+    [[ -n "$safe" ]] || safe=$fallback
+    printf '%s-%s' "$safe" "$(sha256 "$name" | cut -c1-8)"
+}
+# ensure_ns <name>: creates the namespace if it is missing, labelled as this setup's, so that
+# down.sh removes only what up.sh created.
+ensure_ns() {
+    local ns=$1
+    "${K[@]}" get namespace "$ns" >/dev/null 2>&1 && return 0
+    "${K[@]}" create namespace "$ns" >/dev/null
+    "${K[@]}" label namespace "$ns" aisa.hlan.net/local-setup=true >/dev/null
+}
 vault() { "${KN[@]}" exec -i deploy/vault -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=test-root vault "$@"; }
 consul() { "${KN[@]}" exec -i deploy/consul -- env CONSUL_HTTP_TOKEN=test-root consul "$@"; }
 # in_docker <args>: curl from a container, where host.docker.internal names this machine.
@@ -48,6 +80,17 @@ echo "== context $CONTEXT"
 echo "== the host's Ollama at $OLLAMA_ADDR"
 TAGS=$(in_docker -sf -m 5 "http://$OLLAMA_ADDR/api/tags") ||
     fail "Ollama does not answer at $OLLAMA_ADDR (is it running, and does it listen on all interfaces?)"
+# What Consul and the proxy get is an address every pod can reach. host.docker.internal is a
+# name Docker gives containers it starts with that mapping; a kind node on Linux has no such
+# name, so it is turned into the host's address on Docker's network here.
+OLLAMA_HOST=${OLLAMA_ADDR%:*}
+OLLAMA_PORT=${OLLAMA_ADDR##*:}
+if [[ "$OLLAMA_HOST" == host.docker.internal ]]; then
+    OLLAMA_HOST=$(docker run --rm --add-host=host.docker.internal:host-gateway busybox \
+        awk '$2 == "host.docker.internal" {print $1; exit}' /etc/hosts)
+    [[ -n "$OLLAMA_HOST" ]] || fail "could not find the host's address on Docker's network"
+    echo "     as the cluster reaches it: $OLLAMA_HOST:$OLLAMA_PORT"
+fi
 MODELS=$(jq -r '[.models[].name] | unique | join(",")' <<<"$TAGS")
 # The smallest model answers the check at the end, and is the example for the application.
 SMALL=$(jq -r '.models | min_by(.size) | .name' <<<"$TAGS")
@@ -72,7 +115,7 @@ esac
 ok "aisa:ci and aisa-dev-tools:ci built and loaded"
 
 echo "== fixtures: Vault, Consul, mock backends"
-"${K[@]}" create namespace "$NS" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+ensure_ns "$NS"
 sed "s/NAMESPACE/$NS/" "$HERE/../test/fixtures.yaml" | "${KN[@]}" apply -f - >/dev/null
 for d in vault consul mock-local mock-cloud; do
     "${KN[@]}" rollout status "deploy/$d" --timeout=180s >/dev/null
@@ -92,11 +135,11 @@ consul kv put aisa/quotas/interactive "{\"tokens_per_hour\": $TOKENS_PER_HOUR}" 
 services {
   id      = "ollama-host"
   name    = "aisa-backend"
-  address = "${OLLAMA_ADDR%:*}"
-  port    = ${OLLAMA_ADDR##*:}
+  address = "$OLLAMA_HOST"
+  port    = $OLLAMA_PORT
   tags    = ["ollama", "local"]
   meta    = { provider = "openai-compatible", models = "$MODELS", fail_policy = "open", timeout = "600" }
-  check { http = "http://$OLLAMA_ADDR/", interval = "10s", timeout = "2s" }
+  check { http = "http://$OLLAMA_HOST:$OLLAMA_PORT/", interval = "10s", timeout = "2s" }
 }
 HCL
 for _ in $(seq 1 30); do
@@ -137,16 +180,18 @@ if [[ ! -s "$KEYFILE" ]]; then
     (umask 077; openssl rand -hex 24 > "$KEYFILE")
 fi
 KEY=$(cat "$KEYFILE")
-HASH=$(printf %s "$KEY" | sha256sum | cut -d' ' -f1)
+HASH=$(sha256 "$KEY")
 vault kv put "secret/aisa/consumers/$CONSUMER" key_sha256="$HASH" quota_profile=interactive >/dev/null
 ok "consumer $CONSUMER (its key is in $KEYFILE)"
 
 echo "== aisa's chart"
 helm dependency update "$ROOT/deploy/helm/aisa" >/dev/null 2>&1
-# The proxy as a LoadBalancer: Docker Desktop and kind with a load balancer publish it on
-# localhost. Only the client-facing Service is published; metrics and aisa stay ClusterIPs.
+# PUBLISH=lb: the proxy as a LoadBalancer, which Docker Desktop puts on localhost:80. Only the
+# client-facing Service is published; metrics and aisa stay ClusterIPs. PUBLISH=forward: a
+# ClusterIP, reached with kubectl port-forward (a plain kind cluster has no load balancer).
+if [[ "$PUBLISH" == lb ]]; then service_type=LoadBalancer; BASE_URL=http://localhost; else service_type=ClusterIP; BASE_URL=http://localhost:18080; fi
 helm --kube-context "$CONTEXT" upgrade --install "$RELEASE" "$ROOT/deploy/helm/aisa" -n "$NS" \
-    -f "$HERE/../test/values-test.yaml" --set apisix.service.type=LoadBalancer \
+    -f "$HERE/../test/values-test.yaml" --set "apisix.service.type=$service_type" \
     --wait --timeout 5m >/dev/null 2>&1 || {
     "${KN[@]}" get pods -o wide >&2
     fail "helm install"
@@ -154,42 +199,57 @@ helm --kube-context "$CONTEXT" upgrade --install "$RELEASE" "$ROOT/deploy/helm/a
 ok "aisa, Redis and the proxy are ready"
 
 echo "== the consumer's Secret in the namespace $APP_NS"
-# What ROADMAP v0.2.0 PR 12 is to write; the same shape, written here by hand until then.
-"${K[@]}" create namespace "$APP_NS" --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null
+# What ROADMAP v0.2.0 PR 12 is to write; the same shape, written here by hand until then: the
+# label by the derived-name rule, the annotation the exact name as a quoted string.
+ensure_ns "$APP_NS"
 "${K[@]}" -n "$APP_NS" apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
   name: aisa
   labels:
-    aisa.hlan.net/consumer: $CONSUMER-$(printf %s "$CONSUMER" | sha256sum | cut -c1-8)
+    aisa.hlan.net/consumer: $(derived_name "$CONSUMER" consumer)
+    aisa.hlan.net/local-setup: "true"
   annotations:
-    aisa.hlan.net/consumer-name: $CONSUMER
+    aisa.hlan.net/consumer-name: $(jq -Rn --arg v "$CONSUMER" '$v')
 stringData:
   OPENAI_BASE_URL: http://$RELEASE-apisix.$NS.svc.cluster.local/v1
   OPENAI_API_KEY: $KEY
 EOF
 ok "Secret aisa in $APP_NS: OPENAI_BASE_URL and OPENAI_API_KEY, for envFrom"
 
-echo "== through the proxy on localhost"
+echo "== through the proxy at $BASE_URL"
+if [[ "$PUBLISH" == forward ]]; then
+    "${KN[@]}" port-forward "svc/$RELEASE-apisix" 18080:80 >/dev/null 2>&1 &
+    pf_pid=$!
+fi
 for _ in $(seq 1 30); do
-    status=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://localhost/v1/models || true)
+    status=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$BASE_URL/v1/models" || true)
     [[ "$status" == 200 ]] && break
     sleep 2
 done
-[[ "$status" == 200 ]] || fail "the proxy does not answer on http://localhost (no load balancer on localhost? use kubectl port-forward svc/$RELEASE-apisix 8080:80)"
-ok "GET /v1/models: $(curl -s http://localhost/v1/models | jq -r '.data | length') models"
-status=$(curl -s -m 180 -o /dev/null -w '%{http_code}' http://localhost/v1/chat/completions \
+[[ "$status" == 200 ]] || fail "the proxy does not answer at $BASE_URL (PUBLISH=$PUBLISH)"
+ok "GET /v1/models: $(curl -s "$BASE_URL/v1/models" | jq -r '.data | length') models"
+status=$(curl -s -m 180 -o /dev/null -w '%{http_code}' "$BASE_URL/v1/chat/completions" \
     -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
     -d "{\"model\":\"$SMALL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hi.\"}]}")
 [[ "$status" == 200 ]] || fail "a chat completion with $SMALL answered $status"
 ok "POST /v1/chat/completions with $SMALL: 200, through aisa, from the host's Ollama"
 
+cleanup
+pf_pid=""
 cat <<EOF
 
 aisa is up. Applications in the cluster use the Secret; from this machine:
+EOF
+if [[ "$PUBLISH" == forward ]]; then cat <<EOF
 
-  export OPENAI_BASE_URL=http://localhost/v1
+  kubectl --context $CONTEXT -n $NS port-forward svc/$RELEASE-apisix 18080:80 &   # keep it running
+EOF
+fi
+cat <<EOF
+
+  export OPENAI_BASE_URL=$BASE_URL/v1
   export OPENAI_API_KEY=\$(cat $KEYFILE)
 
 OpenCode (opencode.json), with AISA_API_KEY set from that file:
@@ -198,7 +258,7 @@ OpenCode (opencode.json), with AISA_API_KEY set from that file:
     "aisa": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "aisa",
-      "options": {"baseURL": "http://localhost/v1", "apiKey": "{env:AISA_API_KEY}"},
+      "options": {"baseURL": "$BASE_URL/v1", "apiKey": "{env:AISA_API_KEY}"},
       "models": {"$SMALL": {"name": "$SMALL"}}
     }
   }
