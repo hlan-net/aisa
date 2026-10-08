@@ -20,7 +20,7 @@ Pre-push hook: `./scripts/install-git-hooks.sh`; bypass with `SKIP_PRE_PUSH_TEST
 ## Architecture rules (non-obvious)
 
 - The core (`cmd/`, `internal/`) knows no gateway. Gateway-specific code lives only in `proxies/<name>/`.
-- Gateways integrate through three contracts: `POST /v1/decide` (forward-auth), usage events (access log sink) and config rendering (consul-template). Changing a contract means a new version and an update to `PROXY_CONTRACT.md` in the same PR.
+- Gateways integrate through three contracts: `POST /v1/decide` (forward-auth), usage events (access log sink) and config rendering (consul-template). Changing a contract means an update to `PROXY_CONTRACT.md` in the same PR; an addition that breaks nothing stays in `/v1/`, a breaking change (rename, removal, changed meaning or unit) gets a new version (`PROXY_CONTRACT.md`, Versioning).
 - Consul holds everything that is not a secret (backends, prices, budgets, quota profiles); Vault holds the secrets (provider keys; today also the consumers); Redis holds hot counters. Kubernetes objects are what aisa creates from these, never where it reads from.
 - Terms (`docs/concepts/ARCHITECTURE.md`, What aisa is): aisa (control), proxy (carries the traffic), adapter (specific to a kind of provider). What makes a gateway work as aisa's proxy lives in `proxies/<name>/`.
 - Quota and budget rules live only in aisa, never in gateway plugins.

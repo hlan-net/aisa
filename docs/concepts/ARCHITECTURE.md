@@ -59,8 +59,8 @@ The sections after this one describe what is designed and, where the status says
 | Part | State |
 |---|---|
 | Decision API, usage ledger, token quotas | Built |
-| The proxy rendering its own configuration (consul-template next to APISIX) | Designed, in progress (`ROADMAP.md` v0.2.0 PR 5) |
-| aisa installing and removing the proxy with its own chart | Decided. Today the proxy is installed separately ([Packaging](#packaging-and-deployment)) |
+| The proxy rendering its own configuration (consul-template next to APISIX) | Built (`ROADMAP.md` v0.2.0 PR 5) |
+| aisa installing and removing the proxy with its own chart | Built: aisa's chart depends on the proxy's ([Packaging](#packaging-and-deployment)) |
 | `Model` objects for consumers | Designed, not built ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)); `ROADMAP.md` v0.2.0 PR 12 |
 | A consumer's credential as a Kubernetes object | Designed, not built: a Secret with a key aisa generates ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret), [#32](https://github.com/hlan-net/aisa/issues/32)) |
 | The non-secret part of a consumer (name, quota profile) in Consul instead of Vault | Decided, follows from the rule above; `ROADMAP.md` v0.2.0 PR 11. Today the whole consumer is in Vault ([`VAULT.md`](./VAULT.md)) |

@@ -10,7 +10,8 @@
 
 <!-- Does this PR change the decision API, the usage event schema, config rendering or the aisa_* metrics? -->
 - [ ] No contract change
-- [ ] Contract changed: new version and `docs/concepts/PROXY_CONTRACT.md` updated
+- [ ] Contract extended without breaking anything (stays in `/v1/`), `docs/concepts/PROXY_CONTRACT.md` updated
+- [ ] Breaking contract change: new version (`/v2/`) and `docs/concepts/PROXY_CONTRACT.md` updated
 
 ## Test plan
 
