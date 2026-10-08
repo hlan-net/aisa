@@ -20,9 +20,15 @@ STUB="${STUB:-http://127.0.0.1:8081}"
 PORT="${PROXY_PORT:-19080}"
 PROXY="http://127.0.0.1:$PORT"
 CONTAINER=aisa-proxy-runtime-test
+CONSUL="${CONSUL:-http://127.0.0.1:8500}"
+# A backend that exists only for this test, with a dollar in its model's name: fault-injection
+# resolves $name in a body as an APISIX variable, so the model list must escape it. It is
+# deregistered half way, to see the model leave the list with the next render.
+DOLLAR_MODEL='vendor/$model'
 
 OUT=$(mktemp -d)
 cleanup() {
+    curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test" || true
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     rm -rf "$OUT"
 }
@@ -123,13 +129,24 @@ one() {
     fi
 }
 
+curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "runtime-test", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
+ "Meta": {"provider": "openai-compatible", "models": "$DOLLAR_MODEL", "fail_policy": "open"}}
+EOF
+
 echo "== aisa reachable"
 render "$OUT/reachable" http://stub-aisa:8080/v1/decide
 proxy "$OUT/reachable"
 one "allowed" dev-key-chat-ui qwen3 200 chat-ui
 one "denied by a quota" dev-key-blocked qwen3 429 ""
 one "unknown key" wrong-key qwen3 401 ""
-models "the model list" "cloud-large llama3.2 qwen3"
+models "the model list, a dollar in a name included" "cloud-large llama3.2 qwen3 $DOLLAR_MODEL"
+
+echo "== a model loses its last backend"
+curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test"
+render "$OUT/reachable-again" http://stub-aisa:8080/v1/decide
+proxy "$OUT/reachable-again"
+models "the model list after the next render" "cloud-large llama3.2 qwen3"
 
 echo "== guard.sh against APISIX"
 # guard <dir>: runs guard.sh on <dir>/apisix.yaml.staged in the consul-template image, with
@@ -140,7 +157,8 @@ guard() {
         -v "$SCRIPT_DIR":/etc/apisix/aisa:ro -v "$dir":/rendered \
         "$CT_IMAGE" /etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml
 }
-dir="$OUT/reachable"
+# The directory APISIX runs on now: the one of the last render above.
+dir="$OUT/reachable-again"
 cp "$dir/apisix.yaml" "$OUT/previous.yaml"
 # A model route that APISIX's schema rejects: a provider ai-proxy-multi does not know.
 awk '/^  - id: "model-qwen3"$/ { f = 1 } /^  - id: / && !/"model-qwen3"/ { f = 0 }

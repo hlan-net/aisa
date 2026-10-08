@@ -145,8 +145,10 @@ routes:
           http_status: 200
           headers:
             Content-Type: application/json
-          # One JSON document, rendered as a quoted string: a model name cannot change its shape.
-          body: {{ sprig_dict "object" "list" "data" $models | toJSON | toJSON }}
+          # One JSON document, rendered as a quoted string, so a model name cannot change its
+          # shape. fault-injection resolves $name as an APISIX variable in the body at request
+          # time, so a dollar in a name is written as the JSON escape \u0024, which it leaves alone.
+          body: {{ sprig_dict "object" "list" "data" $models | toJSON | regexReplaceAll "\\$" "\\u0024" | toJSON }}
 
 {{- range scratch.MapValues "models" }}
 {{- template "model-route" (sprig_dict "model" . "failOpen" false) }}
