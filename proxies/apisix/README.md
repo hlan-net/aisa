@@ -21,6 +21,7 @@ Client ──▶ [Port 9080: client route]
                                        ├── fail-open-<name> ──────▶ Fail-open Backend
                                        ├── aisa-unreachable (503)
                                        └── no-backend (503)
+            [Port 9080: models route] ──▶ GET /v1/models, answered by the gateway from the rendered models
                                        │
                                        └── (2) http-logger ───────▶ aisa /v1/usage
 ```

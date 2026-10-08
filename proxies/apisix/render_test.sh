@@ -20,6 +20,8 @@ OUT=$(mktemp -d)
 # route the same ID ("qwen3-fail-open" next to the fail-open "qwen3"), and a name too long and
 # with characters a route ID cannot have.
 LONG_MODEL="example-org/a-model-name-that-is-much-longer-than-a-route-id-may-be:latest"
+# A dollar in a name: an APISIX variable to fault-injection, unless the model list escapes it.
+DOLLAR_MODEL='vendor/$model'
 cleanup() {
     curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/render-test" || true
     rm -rf "$OUT"
@@ -27,7 +29,7 @@ cleanup() {
 trap cleanup EXIT
 curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
 {"ID": "render-test", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
- "Meta": {"provider": "openai-compatible", "models": "qwen3-fail-open,$LONG_MODEL", "fail_policy": "open"}}
+ "Meta": {"provider": "openai-compatible", "models": "qwen3-fail-open,$LONG_MODEL,$DOLLAR_MODEL", "fail_policy": "open"}}
 EOF
 # consul-template runs as a user of its own in the container.
 chmod 777 "$OUT"
@@ -60,6 +62,14 @@ expect "a route for the local model" '^  - id: "model-qwen3"$'
 expect "a route for the paid model" '^  - id: "model-cloud-large"$'
 expect "a fail-open route for the local model" '^  - id: "fail-open-qwen3"$'
 expect "the gateway's metrics for every route" '^      prometheus: {}$'
+expect "the model list route" '^  - id: models$'
+expect "the model list names the local model" '\\"id\\":\\"qwen3\\"'
+expect "the model list names the paid model" '\\"id\\":\\"cloud-large\\"'
+expect "the model list escapes a dollar in a name" '\\"id\\":\\"vendor/\\\\u0024model\\"'
+if grep '^          body: ' "$RENDERED" | grep -q '[$]'; then
+    fail "the model list carries a raw dollar, which APISIX would resolve as a variable"
+fi
+echo "ok: no raw dollar in the model list"
 
 if grep -q '^  - id: "fail-open-cloud-large"$' "$RENDERED"; then
     fail "a paid backend has a fail-open route"
