@@ -185,8 +185,13 @@ func (s *Server) serve(ctx context.Context, lns ...listener) error {
 	// The parent context may be done already; the requests in flight get their own time.
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.shutdownTimeout)
 	defer cancel()
+	// All at once: each listener stops accepting now, and each gets the whole timeout.
+	shutdownErrs := make(chan error, len(srvs))
 	for _, srv := range srvs {
-		if err := srv.Shutdown(shutdownCtx); err != nil && failed == nil {
+		go func() { shutdownErrs <- srv.Shutdown(shutdownCtx) }()
+	}
+	for range srvs {
+		if err := <-shutdownErrs; err != nil && failed == nil {
 			failed = fmt.Errorf("shutdown: %w", err)
 		}
 	}

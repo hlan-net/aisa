@@ -99,6 +99,8 @@ func TestFromEnvRejects(t *testing.T) {
 	for name, vars := range map[string]map[string]string{
 		"address without a port":  {"AISA_ADDR": "localhost"},
 		"metrics address no port": {"AISA_METRICS_ADDR": "localhost"},
+		"empty port":              {"AISA_ADDR": ":"},
+		"metrics empty port":      {"AISA_METRICS_ADDR": "localhost:"},
 		"metrics address = api":   {"AISA_ADDR": ":8080", "AISA_METRICS_ADDR": ":8080"},
 		"unknown log level":       {"AISA_LOG_LEVEL": "loud"},
 		"log level with offset":   {"AISA_LOG_LEVEL": "info+1"},

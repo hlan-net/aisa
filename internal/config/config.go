@@ -138,10 +138,23 @@ func AddrFromEnv(getenv func(string) string) (string, error) {
 	if v == "" {
 		return Defaults().Addr, nil
 	}
-	if _, _, err := net.SplitHostPort(v); err != nil {
-		return "", fmt.Errorf("AISA_ADDR: want host:port or :port, got %q: %w", v, err)
+	if err := checkAddr("AISA_ADDR", v); err != nil {
+		return "", err
 	}
 	return v, nil
+}
+
+// checkAddr checks that v is host:port or :port with a port: net.SplitHostPort takes ":" too,
+// and a listener on it would get a port of the kernel's choosing.
+func checkAddr(name, v string) error {
+	_, port, err := net.SplitHostPort(v)
+	if err != nil {
+		return fmt.Errorf("%s: want host:port or :port, got %q: %w", name, v, err)
+	}
+	if port == "" {
+		return fmt.Errorf("%s: want host:port or :port, got %q: no port", name, v)
+	}
+	return nil
 }
 
 // FromEnv reads the configuration with getenv, which is os.Getenv outside tests.
@@ -154,8 +167,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	cfg.Addr = addr
 	if v := getenv("AISA_METRICS_ADDR"); v != "" {
-		if _, _, err := net.SplitHostPort(v); err != nil {
-			return cfg, fmt.Errorf("AISA_METRICS_ADDR: want host:port or :port, got %q: %w", v, err)
+		if err := checkAddr("AISA_METRICS_ADDR", v); err != nil {
+			return cfg, err
 		}
 		if v == cfg.Addr {
 			return cfg, fmt.Errorf("AISA_METRICS_ADDR: %q is AISA_ADDR too; unset it to serve /metrics there", v)
