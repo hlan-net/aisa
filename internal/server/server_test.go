@@ -209,7 +209,94 @@ func TestRunReportsAnAddressInUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = ln.Close() }()
-	if err := newTestServer().Run(context.Background(), ln.Addr().String()); err == nil {
+	if err := newTestServer().Run(context.Background(), ln.Addr().String(), ""); err == nil {
 		t.Error("want an error for an address that is in use")
+	}
+	// The operations address in use: the API's listener is closed again.
+	if err := newTestServer().Run(context.Background(), "127.0.0.1:0", ln.Addr().String()); err == nil {
+		t.Error("want an error for an operations address that is in use")
+	}
+}
+
+// With two addresses, the API's address does not serve /metrics and the operations address
+// serves nothing of the API; the probes answer on both (#46).
+func TestSplitRoutes(t *testing.T) {
+	s := newTestServer()
+	s.Handle("POST /v1/usage", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, tc := range []struct {
+		name    string
+		handler http.Handler
+		method  string
+		path    string
+		want    int
+	}{
+		{"api: usage", s.APIHandler(), http.MethodPost, "/v1/usage", http.StatusNoContent},
+		{"api: no metrics", s.APIHandler(), http.MethodGet, "/metrics", http.StatusNotFound},
+		{"api: healthz", s.APIHandler(), http.MethodGet, "/healthz", http.StatusOK},
+		{"api: readyz", s.APIHandler(), http.MethodGet, "/readyz", http.StatusOK},
+		{"ops: metrics", s.OpsHandler(), http.MethodGet, "/metrics", http.StatusOK},
+		{"ops: no usage", s.OpsHandler(), http.MethodPost, "/v1/usage", http.StatusNotFound},
+		{"ops: healthz", s.OpsHandler(), http.MethodGet, "/healthz", http.StatusOK},
+		{"ops: readyz", s.OpsHandler(), http.MethodGet, "/readyz", http.StatusOK},
+		{"one address: usage", s.Handler(), http.MethodPost, "/v1/usage", http.StatusNoContent},
+		{"one address: metrics", s.Handler(), http.MethodGet, "/metrics", http.StatusOK},
+	} {
+		rec := httptest.NewRecorder()
+		tc.handler.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		if rec.Code != tc.want {
+			t.Errorf("%s: %s %s = %d, want %d", tc.name, tc.method, tc.path, rec.Code, tc.want)
+		}
+	}
+}
+
+func TestServeSplit(t *testing.T) {
+	s := newTestServer()
+	s.Handle("POST /v1/usage", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opsLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.ServeSplit(ctx, ln, opsLn) }()
+
+	status := func(method, addr, path string) int {
+		req, _ := http.NewRequest(method, "http://"+addr+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := status(http.MethodPost, ln.Addr().String(), "/v1/usage"); got != http.StatusNoContent {
+		t.Errorf("usage on the API's address: %d, want 204", got)
+	}
+	if got := status(http.MethodGet, ln.Addr().String(), "/metrics"); got != http.StatusNotFound {
+		t.Errorf("metrics on the API's address: %d, want 404", got)
+	}
+	if got := status(http.MethodGet, opsLn.Addr().String(), "/metrics"); got != http.StatusOK {
+		t.Errorf("metrics on the operations address: %d, want 200", got)
+	}
+	if got := status(http.MethodPost, opsLn.Addr().String(), "/v1/usage"); got != http.StatusNotFound {
+		t.Errorf("usage on the operations address: %d, want 404", got)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("ServeSplit: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeSplit did not return after the context was done")
 	}
 }

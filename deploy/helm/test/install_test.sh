@@ -140,10 +140,11 @@ helm install "$RELEASE" "$ROOT/deploy/helm/aisa" -n "$NS" -f "$HERE/values-test.
 ok "aisa and its proxy installed and ready"
 
 echo "== aisa"
-port_forward "$RELEASE" 18080 8080
-readyz=$(curl -fsS http://127.0.0.1:18080/readyz)
+# /metrics and the probes are on a port and a Service of their own (#46).
+port_forward "$RELEASE-metrics" 18090 9090
+readyz=$(curl -fsS http://127.0.0.1:18090/readyz)
 echo "     readyz: $readyz"
-metrics=$(curl -fsS http://127.0.0.1:18080/metrics)
+metrics=$(curl -fsS http://127.0.0.1:18090/metrics)
 grep -q '^aisa_consumer_loads_total{result="ok"}' <<<"$metrics" ||
     fail "aisa loaded its consumers from Vault (Kubernetes auth as the role aisa)"
 ok "aisa loaded its consumers from Vault (Kubernetes auth as the role aisa)"
@@ -178,7 +179,7 @@ ok "the local backend got no credential"
 
 # The usage events reach aisa a moment after the answers.
 for _ in $(seq 1 15); do
-    tokens=$(curl -fsS http://127.0.0.1:18080/metrics |
+    tokens=$(curl -fsS http://127.0.0.1:18090/metrics |
         awk '/^aisa_tokens_total\{.*consumer="chat-ui"/{s += $2} END {print s + 0}')
     [[ "$tokens" != 0 ]] && break
     sleep 1
@@ -187,20 +188,36 @@ done
 ok "usage events reached aisa ($tokens tokens for chat-ui)"
 
 echo "== NetworkPolicy"
-# probe_aisa <name> [labels]: asks aisa's /healthz from a new pod with these labels.
+# probe_aisa <name> <url> [labels]: asks url from a new pod with these labels. /healthz answers on
+# both of aisa's ports, so it shows whether the pod reaches the port at all.
 probe_aisa() {
-    local name=$1 labels=${2:-}
+    local name=$1 url=$2 labels=${3:-}
     "${K[@]}" run "$name" --rm -i --restart=Never --quiet --labels="$labels" \
         --image=aisa-dev-tools:ci --image-pull-policy=Never \
-        --command -- /usr/local/bin/mockbackend -healthcheck "http://$RELEASE:8080/healthz" >/dev/null 2>&1
+        --command -- /usr/local/bin/mockbackend -healthcheck "$url" >/dev/null 2>&1
 }
-probe_aisa np-proxy "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=proxy" ||
-    fail "a pod with the proxy's labels reaches aisa"
-ok "a pod with the proxy's labels reaches aisa"
-if probe_aisa np-other "app=np-other"; then
-    fail "a pod that is not the proxy is kept away from aisa"
+api="http://$RELEASE:8080/healthz"
+ops="http://$RELEASE-metrics:9090/healthz"
+probe_aisa np-proxy "$api" "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=proxy" ||
+    fail "a pod with the proxy's labels reaches aisa's API"
+ok "a pod with the proxy's labels reaches aisa's API"
+if probe_aisa np-other "$api" "app=np-other"; then
+    fail "a pod that is not the proxy is kept away from aisa's API"
 fi
-ok "a pod that is not the proxy is kept away from aisa"
+ok "a pod that is not the proxy is kept away from aisa's API"
+# A scraper in networkPolicy.extraFrom (values-test.yaml) reaches the metrics port, and not the
+# port of /v1/usage and /v1/decide (#46).
+probe_aisa np-scraper "$ops" "app=np-scraper" ||
+    fail "a pod in extraFrom reaches aisa's metrics port"
+ok "a pod in extraFrom reaches aisa's metrics port"
+if probe_aisa np-scraper-api "$api" "app=np-scraper"; then
+    fail "a pod in extraFrom is kept away from aisa's API, and cannot send usage events"
+fi
+ok "a pod in extraFrom is kept away from aisa's API, and cannot send usage events"
+if probe_aisa np-other-ops "$ops" "app=np-other"; then
+    fail "a pod in no peer is kept away from aisa's metrics port"
+fi
+ok "a pod in no peer is kept away from aisa's metrics port"
 
 echo "== helm uninstall"
 cleanup

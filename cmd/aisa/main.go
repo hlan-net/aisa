@@ -4,6 +4,7 @@
 // It is configured with environment variables:
 //
 //	AISA_ADDR                   address to listen on                              :8080
+//	AISA_METRICS_ADDR           address of /metrics apart from the API (#46)     (unset: AISA_ADDR)
 //	AISA_LOG_LEVEL              debug, info, warn or error                        info
 //	AISA_SHUTDOWN_TIMEOUT       time for requests in flight at the end            10s
 //	VAULT_ADDR                  Vault's address (required)
@@ -133,7 +134,7 @@ func run(args []string) error {
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide")),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger")))
-	if err := srv.Run(ctx, cfg.Addr); err != nil {
+	if err := srv.Run(ctx, cfg.Addr, cfg.MetricsAddr); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
 	log.Info("stopped")

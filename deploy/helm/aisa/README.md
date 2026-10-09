@@ -15,9 +15,10 @@ Applications call the proxy's Service, `aisa-apisix` for a release named `aisa`,
 | Object | What it is |
 |---|---|
 | Deployment `<release>` | aisa, and a Vault Agent next to it that keeps a Consul ACL token in memory (`consul.token.fromVault`) |
-| Service `<release>` | `/v1/decide`, `/v1/usage` and `/metrics` on port 8080, for the proxy and Prometheus; always a ClusterIP, because `/v1/usage` has no authentication |
+| Service `<release>` | `/v1/decide` and `/v1/usage` on port 8080, for the proxy; always a ClusterIP, because `/v1/usage` has no authentication |
+| Service `<release>-metrics` | `/metrics` (and the probes) on port 9090, for Prometheus; a ClusterIP. aisa serves them apart from the API (`AISA_METRICS_ADDR`, #46) |
 | Deployment, Service `<release>-redis` | Redis for the quota counters, nothing on disk (`redis.enabled`) |
-| NetworkPolicies | Only the proxy, and the peers in `networkPolicy.extraFrom` (none by default), reach aisa; only aisa reaches Redis |
+| NetworkPolicies | Only the proxy reaches aisa's API; the peers in `networkPolicy.extraFrom` (none by default) reach its metrics port only; only aisa reaches Redis |
 | ServiceMonitor | Optional (`serviceMonitor.enabled`) |
 | The proxy | Everything of the proxy's chart, `<release>-apisix` (`apisix.enabled`; its values under `apisix:`) |
 
@@ -42,7 +43,7 @@ The full list with comments is in [`values.yaml`](./values.yaml). The ones an in
 | `consul.token.fromVault`, `consul.token.path` | `true`, `consul/creds/aisa` | aisa's Consul token |
 | `quotas.enabled` | `true` | Off: no Consul and no Redis for aisa |
 | `redis.enabled`, `redis.addr` | `true`, none | Off: an external Redis at `redis.addr` |
-| `networkPolicy.extraFrom` | none | Who else may reach aisa's port, e.g. Prometheus. It shares the port with the unauthenticated `/v1/usage` (#46) |
+| `networkPolicy.extraFrom` | none | Who may reach aisa's metrics port 9090, e.g. Prometheus. Not the API: a peer here cannot send usage events or ask for decisions (#46) |
 | `global.aisa.fullnameOverride` | none | The name of aisa's objects; global, so the proxy finds aisa's Service by it |
 | `extraEnv`, `extraVolumes`, `extraVolumeMounts` | none | e.g. `VAULT_CACERT` with a CA from a ConfigMap |
 | `apisix.*` | | The proxy's values ([`proxies/apisix/chart/values.yaml`](../../../proxies/apisix/chart/values.yaml)) |
