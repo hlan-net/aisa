@@ -60,7 +60,7 @@ for case in "aisa" "prod" "aisa --set global.aisa.fullnameOverride=inference"; d
     read -r release extra <<<"$case"
     # shellcheck disable=SC2086 # $extra is a list of helm arguments
     helm template $release "$AISA" "${REQUIRED[@]}" $extra >"$OUT/names.yaml" 2>/dev/null
-    svc=$(awk '/^kind: Service$/{s=1} s && /^  name:/{print $2; s=0}' "$OUT/names.yaml" | grep -v -e apisix -e redis)
+    svc=$(awk '/^kind: Service$/{s=1} s && /^  name:/{print $2; s=0}' "$OUT/names.yaml" | grep -v -e apisix -e redis -e metrics)
     port=$(awk -v svc="$svc" '/^kind:/{s = ($2 == "Service"); f = 0} s && /^  name:/ && $2 == svc {f=1} f && /port: /{print; exit}' "$OUT/names.yaml" |
         sed -E 's/.*port: ([0-9]+).*/\1/')
     url=$(awk '/name: AISA_DECIDE_URI/{getline; print $2; exit}' "$OUT/names.yaml" | tr -d '"')
@@ -72,7 +72,7 @@ done
 # A Service type that publishes the proxy does not publish its metrics, or aisa.
 helm template aisa "$AISA" "${REQUIRED[@]}" --set apisix.service.type=LoadBalancer >"$OUT/lb.yaml" 2>/dev/null
 types=$(awk '/^kind: Service$/{s=1; n=""} s && /^  name:/{n=$2} s && /^  type:/{print n, $2; s=0}' "$OUT/lb.yaml" | LC_ALL=C sort | tr '\n' ' ')
-[[ "$types" == "aisa ClusterIP aisa-apisix LoadBalancer aisa-apisix-metrics ClusterIP aisa-redis ClusterIP " ]] ||
+[[ "$types" == "aisa ClusterIP aisa-apisix LoadBalancer aisa-apisix-metrics ClusterIP aisa-metrics ClusterIP aisa-redis ClusterIP " ]] ||
     fail "Service types with a published proxy: $types"
 echo "ok: only the proxy's client Service is published: $types"
 
@@ -81,5 +81,28 @@ from=$(awk '/^kind:/{s = ($2 == "NetworkPolicy"); f = 0} s && /^  name: aisa$/{f
     "$OUT/defaults.yaml")
 [[ "$from" == 1 ]] || fail "aisa's NetworkPolicy has $from peers by default, want only the proxy"
 echo "ok: by default only the proxy reaches aisa"
+
+# A peer in networkPolicy.extraFrom, such as Prometheus, reaches aisa's metrics port only, never
+# the port of /v1/decide and /v1/usage (#46). rules prints each ingress rule of aisa's
+# NetworkPolicy as "<ports> <peers>".
+rules() {
+    local file=$1
+    awk '/^kind:/{s = ($2 == "NetworkPolicy"); f = 0} s && /^  name: aisa$/{f=1}
+         f && /^    - ports:/{if (r) print p, q; r = 1; p = ""; q = ""}
+         f && r && /port: /{sub(/.*port: /, ""); sub(/,.*/, ""); p = p $0 "/"}
+         f && r && /component: proxy/{q = q "proxy/"}
+         f && r && /namespaceSelector:/{q = q "namespace/"}
+         END {if (r) print p, q}' "$file"
+}
+helm template aisa "$AISA" "${REQUIRED[@]}" \
+    --set-json 'networkPolicy.extraFrom=[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"monitoring"}}}]' \
+    >"$OUT/extra.yaml" 2>/dev/null
+got=$(rules "$OUT/extra.yaml" | tr '\n' ';')
+[[ "$got" == "http/ proxy/;metrics/ namespace/;" ]] ||
+    fail "aisa's NetworkPolicy rules with extraFrom: $got; want the proxy on http and the peer on metrics only"
+echo "ok: a peer in extraFrom reaches aisa's metrics port only"
+got=$(rules "$OUT/defaults.yaml" | tr '\n' ';')
+[[ "$got" == "http/ proxy/;" ]] || fail "aisa's NetworkPolicy rules by default: $got"
+echo "ok: by default no rule for the metrics port"
 
 echo "ok: all chart tests passed"

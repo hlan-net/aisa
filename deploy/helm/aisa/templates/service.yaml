@@ -1,5 +1,5 @@
-# Decisions (/v1/decide) and usage events (/v1/usage) from the proxy, and aisa's metrics. Always
-# a ClusterIP on 8080: /v1/usage has no authentication, and the proxy expects this port.
+# Decisions (/v1/decide) and usage events (/v1/usage) from the proxy. Always a ClusterIP on 8080:
+# /v1/usage has no authentication, and the proxy expects this port.
 apiVersion: v1
 kind: Service
 metadata:
@@ -12,3 +12,19 @@ spec:
     {{- include "aisa.selectorLabels" . | nindent 4 }}
   ports:
     - {name: http, port: 8080, targetPort: http}
+---
+# aisa's own metrics (/metrics) and probes, for Prometheus. A port and a Service of their own, so
+# that a scraper does not need the port of /v1/usage (#46).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aisa.fullname" . }}-metrics
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+    aisa.hlan.net/metrics: "true"
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "aisa.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: metrics, port: 9090, targetPort: metrics}

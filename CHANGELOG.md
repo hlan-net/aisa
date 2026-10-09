@@ -7,6 +7,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 ## [Unreleased]
 
 ### Changed
+- **Metrics on a port of their own** ([#46](https://github.com/hlan-net/aisa/issues/46)): with `AISA_METRICS_ADDR` set, aisa serves `/metrics` there and only `/v1/decide` and `/v1/usage` on `AISA_ADDR`; `/healthz` and `/readyz` answer on both. Unset, everything stays on `AISA_ADDR`. aisa's chart sets it to `:9090`, adds the Service `<release>-metrics`, points the ServiceMonitor and the probes at it, and lets the peers in `networkPolicy.extraFrom` reach that port only, so a scraper can no longer send usage events that charge quotas.
 - **Contract versioning**: an addition to the proxy contract that breaks no existing proxy or client (a new path, an optional field, a new metric) stays in `/v1/`; a breaking change (a rename, a removal, a changed meaning or unit) moves to `/v2/` at once. The rule is in `docs/concepts/PROXY_CONTRACT.md` (Versioning).
 - **Budgets are in tokens**: budgets are enforced in tokens like quotas, and prices only show spend in currency. v0.3.0 is now "Budgets" in `ROADMAP.md`. `aisa/budgets/<consumer>` takes `monthly_tokens`, `X-Aisa-Budget-Remaining` and `aisa_budget_*` are in tokens, and `aisa/pricing/<model>` is for display. aisa itself sends none of them yet; the dev stub's `X-Aisa-Budget-Remaining` is now in tokens.
 - **A working in-cluster install comes first**: `ROADMAP.md` v0.2.0 gets PR 11 (consumers in Consul) and PR 12 (Kubernetes objects), and an order that puts the proxy, the chart and those two before the rest.
