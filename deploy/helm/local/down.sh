@@ -28,7 +28,7 @@ ours() {
             | select(.kind != "ClusterRoleBinding" or ([.subjects[]?.namespace] | index($ns)))
             | "\(.kind)/\(.metadata.name)"'
 }
-owned() { [[ "$("${K[@]}" get namespace "$1" -o jsonpath='{.metadata.labels.aisa\.hlan\.net/local-setup}' 2>/dev/null)" == true ]]; }
+owned() { local ns=$1; [[ "$("${K[@]}" get namespace "$ns" -o jsonpath='{.metadata.labels.aisa\.hlan\.net/local-setup}' 2>/dev/null)" == true ]]; }
 
 helm --kube-context "$CONTEXT" uninstall "$RELEASE" -n "$NS" --wait --timeout 2m >/dev/null 2>&1 || true
 # Before the namespaces go: the ClusterRoleBinding outlives them.

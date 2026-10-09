@@ -56,7 +56,7 @@ pf_pid=""
 cleanup() { [[ -n "$pf_pid" ]] && kill "$pf_pid" 2>/dev/null; true; }
 trap cleanup EXIT
 # sha256 <text>: with openssl, which macOS has and sha256sum it has not.
-sha256() { printf %s "$1" | openssl dgst -sha256 | sed 's/^.*= //'; }
+sha256() { local text=$1; printf %s "$text" | openssl dgst -sha256 | sed 's/^.*= //'; }
 # derived_name <name> <fallback>: the rule of KUBERNETES_OBJECTS.md for a label value and an
 # object name: lowercase, runs of other characters to one '-', trimmed, cut to 54, trimmed
 # again, the fallback if nothing is left, then '-' and 8 hex digits of the exact name's SHA-256.
@@ -67,7 +67,7 @@ derived_name() {
     printf '%s-%s' "$safe" "$(sha256 "$name" | cut -c1-8)"
 }
 # owned_ns <name>: whether up.sh created the namespace, and everything in it is this setup's.
-owned_ns() { [[ "$("${K[@]}" get namespace "$1" -o jsonpath='{.metadata.labels.aisa\.hlan\.net/local-setup}' 2>/dev/null)" == true ]]; }
+owned_ns() { local ns=$1; [[ "$("${K[@]}" get namespace "$ns" -o jsonpath='{.metadata.labels.aisa\.hlan\.net/local-setup}' 2>/dev/null)" == true ]]; }
 # ensure_ns <name>: creates the namespace if it is missing, labelled as this setup's, so that
 # down.sh removes only what up.sh created.
 ensure_ns() {
