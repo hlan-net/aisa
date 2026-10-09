@@ -44,6 +44,11 @@ esac
 [[ "$CONSUMER" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "CONSUMER: letters, digits, '.', '_' and '-' only" >&2; exit 1; }
 K=(kubectl --context "$CONTEXT")
 KN=("${K[@]}" -n "$NS")
+LABEL=aisa.hlan.net/local-setup
+# aisa's Service and ServiceAccount, by the chart's rule (aisa.fullname): the release's name if it
+# has "aisa" in it, else <release>-aisa. The proxy's are always <release>-apisix.
+if [[ "$RELEASE" == *aisa* ]]; then FULLNAME=$RELEASE; else FULLNAME=$RELEASE-aisa; fi
+FULLNAME=$(printf %s "$FULLNAME" | cut -c1-63 | sed 's/-*$//')
 
 ok() { echo "ok   $*"; }
 fail() { echo "FAIL $*" >&2; exit 1; }
@@ -61,6 +66,8 @@ derived_name() {
     [[ -n "$safe" ]] || safe=$fallback
     printf '%s-%s' "$safe" "$(sha256 "$name" | cut -c1-8)"
 }
+# owned_ns <name>: whether up.sh created the namespace, and everything in it is this setup's.
+owned_ns() { [[ "$("${K[@]}" get namespace "$1" -o jsonpath='{.metadata.labels.aisa\.hlan\.net/local-setup}' 2>/dev/null)" == true ]]; }
 # ensure_ns <name>: creates the namespace if it is missing, labelled as this setup's, so that
 # down.sh removes only what up.sh created.
 ensure_ns() {
@@ -68,6 +75,21 @@ ensure_ns() {
     "${K[@]}" get namespace "$ns" >/dev/null 2>&1 && return 0
     "${K[@]}" create namespace "$ns" >/dev/null
     "${K[@]}" label namespace "$ns" aisa.hlan.net/local-setup=true >/dev/null
+}
+# fixtures: the install test's fixtures, for this namespace.
+fixtures() { sed "s/NAMESPACE/$NS/" "$HERE/../test/fixtures.yaml"; }
+# foreign: of the objects on stdin, those that exist and are not this setup's: without its label
+# (in a namespace up.sh did not create), or, for the cluster-wide ClusterRoleBinding, bound to
+# another namespace's Vault. apply would take them over, and down.sh would delete them.
+foreign() {
+    local owned=false
+    owned_ns "$NS" && owned=true
+    "${KN[@]}" get -f - --ignore-not-found -o json | jq -r --arg l "$LABEL" --arg ns "$NS" --argjson owned "$owned" '
+        (.items // [.])[] | select(.kind != null)
+        | select(if .kind == "ClusterRoleBinding"
+                 then ([.subjects[]?.namespace] | index($ns) | not) or (($owned | not) and .metadata.labels[$l] != "true")
+                 else ($owned | not) and .metadata.labels[$l] != "true" end)
+        | "\(.kind)/\(.metadata.name)"'
 }
 vault() { "${KN[@]}" exec -i deploy/vault -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=test-root vault "$@"; }
 consul() { "${KN[@]}" exec -i deploy/consul -- env CONSUL_HTTP_TOKEN=test-root consul "$@"; }
@@ -116,7 +138,11 @@ ok "aisa:ci and aisa-dev-tools:ci built and loaded"
 
 echo "== fixtures: Vault, Consul, mock backends"
 ensure_ns "$NS"
-sed "s/NAMESPACE/$NS/" "$HERE/../test/fixtures.yaml" | "${KN[@]}" apply -f - >/dev/null
+taken=$(fixtures | foreign)
+[[ -z "$taken" ]] || fail "these exist already and are not this setup's (another NAMESPACE, or remove them):" $taken
+fixtures | "${KN[@]}" apply -f - >/dev/null
+# The label is what down.sh deletes by, in a namespace up.sh did not create.
+fixtures | "${KN[@]}" label -f - --overwrite "$LABEL=true" >/dev/null
 for d in vault consul mock-local mock-cloud; do
     "${KN[@]}" rollout status "deploy/$d" --timeout=180s >/dev/null
 done
@@ -164,7 +190,7 @@ vault policy write aisa-render - >/dev/null <<'HCL'
 path "secret/data/aisa/providers/*" { capabilities = ["read"] }
 path "consul/creds/aisa-render" { capabilities = ["read"] }
 HCL
-vault write auth/kubernetes/role/aisa bound_service_account_names="$RELEASE" \
+vault write auth/kubernetes/role/aisa bound_service_account_names="$FULLNAME" \
     bound_service_account_namespaces="$NS" audience=vault policies=aisa ttl=1h >/dev/null
 vault write auth/kubernetes/role/aisa-render bound_service_account_names="$RELEASE-apisix" \
     bound_service_account_namespaces="$NS" audience=vault policies=aisa-render ttl=1h >/dev/null
@@ -177,8 +203,10 @@ vault write consul/roles/aisa-render consul_policies=aisa-render ttl=1h >/dev/nu
 KEYFILE="$ROOT/.local/$CONSUMER.key"
 if [[ ! -s "$KEYFILE" ]]; then
     mkdir -p "$ROOT/.local"
+    rm -f "$KEYFILE" # an empty file would keep its mode through the redirect
     (umask 077; openssl rand -hex 24 > "$KEYFILE")
 fi
+chmod 600 "$KEYFILE" # a key from an earlier run, or put there by hand, too
 KEY=$(cat "$KEYFILE")
 HASH=$(sha256 "$KEY")
 vault kv put "secret/aisa/consumers/$CONSUMER" key_sha256="$HASH" quota_profile=interactive >/dev/null
@@ -202,6 +230,12 @@ echo "== the consumer's Secret in the namespace $APP_NS"
 # What ROADMAP v0.2.0 PR 12 is to write; the same shape, written here by hand until then: the
 # label by the derived-name rule, the annotation the exact name as a quoted string.
 ensure_ns "$APP_NS"
+# A Secret aisa that is not this setup's is an application's: apply would overwrite its keys and
+# down.sh delete it.
+taken=""
+owned_ns "$APP_NS" || taken=$("${K[@]}" -n "$APP_NS" get secret aisa --ignore-not-found -o json |
+    jq -r --arg l "$LABEL" 'select(.metadata.labels[$l] != "true") | .metadata.name')
+[[ -z "$taken" ]] || fail "the namespace $APP_NS has a Secret aisa that is not this setup's (another APP_NAMESPACE, or remove it)"
 "${K[@]}" -n "$APP_NS" apply -f - >/dev/null <<EOF
 apiVersion: v1
 kind: Secret
@@ -263,6 +297,6 @@ OpenCode (opencode.json), with AISA_API_KEY set from that file:
     }
   }
 
-aisa's metrics:  kubectl --context $CONTEXT -n $NS port-forward svc/$RELEASE 8080:8080, then http://127.0.0.1:8080/metrics
+aisa's metrics:  kubectl --context $CONTEXT -n $NS port-forward svc/$FULLNAME-metrics 9090:9090, then http://127.0.0.1:9090/metrics
 Remove it all:   $HERE/down.sh
 EOF
