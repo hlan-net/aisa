@@ -19,6 +19,7 @@ aisa — **AI Service [Access, Admin, Authority]** — offers inference to the a
 | `Dockerfile` | The product image: a static binary in a distroless image, amd64 and arm64 |
 | `deploy/helm/aisa/` | aisa's chart: aisa, an optional Redis, and the proxy's chart (`proxies/apisix/chart`) as a dependency |
 | `deploy/helm/test/` | `charts_test.sh` (lint, kubeconform) and `install_test.sh` (kind: Vault, Consul with ACLs, both charts, requests through the proxy) |
+| `deploy/helm/local/` | `up.sh` and `down.sh`: aisa on Docker Desktop's Kubernetes or kind with the machine's Ollama as the backend, a consumer and its Secret; for trying the whole path on a laptop |
 | `dev/` | Docker Compose dev stack (Vault, Consul, Redis, APISIX standalone, mock backends, stub aisa) and `smoke.sh`; see `dev/README.md` |
 | `ROADMAP.md` | Mission, current state and versioned milestones with PR tables |
 | `CHANGELOG.md` | Keep a Changelog, semantic versioning |
