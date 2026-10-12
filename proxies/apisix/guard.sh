@@ -14,7 +14,8 @@
 #   GUARD_EMPTY_GRACE     seconds a file without model routes waits    300
 #                         before it replaces one that has them
 #   GUARD_RECHECK         set when the pod runs this script again during a hold (see 6.)
-#   GUARD_LOCK_WAIT       seconds to wait for another guard to finish   60
+#   GUARD_LOCK_WAIT       seconds to wait for another guard to finish   20
+#                         (under consul-template's command_timeout of 30 s)
 #
 # consul-template exits when this script fails, and Kubernetes restarts its container, which
 # renders again: that is the retry of a rejected file. A hold (below) is not a failure.
@@ -40,25 +41,57 @@ fi
 
 # One guard at a time: consul-template's render command and the pod's recheck loop (6.) may
 # both run this script, on the same files. The lock is a directory next to the target, which
-# mkdir creates atomically; one left behind by a guard that was killed is taken over after
-# 120 s.
+# mkdir creates atomically, with the owner's PID in it. A guard removes only the lock it owns.
+# One whose owner is gone (killed with its container; the loop and consul-template share the
+# PID namespace) is taken over; so is one without an owner for more than 120 s.
 LOCK="$TARGET.lock"
-LOCK_WAIT="${GUARD_LOCK_WAIT:-60}"
+LOCK_WAIT="${GUARD_LOCK_WAIT:-20}"
 waited=0
 until mkdir "$LOCK" 2>/dev/null; do
-    if [ -d "$LOCK" ] && [ $(( $(date +%s) - $(stat -c %Y "$LOCK") )) -gt 120 ]; then
-        echo "guard: warning: taking over the lock '$LOCK', left behind more than 120 s ago" >&2
+    owner=$(cat "$LOCK/pid" 2>/dev/null || true)
+    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+        echo "guard: warning: taking over the lock '$LOCK' of guard $owner, which is gone" >&2
+        rm -f "$LOCK/pid" && rmdir "$LOCK" 2>/dev/null || true
+        continue
+    fi
+    if [ -z "$owner" ] && [ -d "$LOCK" ] && [ $(( $(date +%s) - $(stat -c %Y "$LOCK") )) -gt 120 ]; then
+        echo "guard: warning: taking over the lock '$LOCK', without an owner for more than 120 s" >&2
         rmdir "$LOCK" 2>/dev/null || true
         continue
     fi
     if [ "$waited" -ge "$LOCK_WAIT" ]; then
-        echo "guard: error: another guard has held '$LOCK' for ${LOCK_WAIT}s" >&2
+        echo "guard: error: another guard (${owner:-unknown}) has held '$LOCK' for ${LOCK_WAIT}s" >&2
         exit 1
     fi
     sleep 1
     waited=$((waited + 1))
 done
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+echo $$ > "$LOCK/pid"
+# release: the lock, if still this guard's, and the snapshot of a recheck (below).
+release() {
+    if [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ]; then
+        rm -f "$LOCK/pid"
+        rmdir "$LOCK" 2>/dev/null || true
+    fi
+    if [ -n "$SNAPSHOT" ]; then
+        rm -f "$SNAPSHOT"
+    fi
+    # The trap must not change the exit status of the guard.
+    return 0
+}
+SNAPSHOT=""
+trap release EXIT
+
+# A recheck works on a snapshot of the staged file: consul-template may replace the staged
+# file at any moment outside the lock, and the guard reads it more than once. The original is
+# removed after a promotion only if it is still what was promoted; otherwise it is a newer
+# render, which consul-template's own command, waiting on the lock, checks next.
+ORIGINAL="$STAGED"
+if [ -n "$GUARD_RECHECK" ]; then
+    SNAPSHOT="$STAGED.recheck"
+    cp "$STAGED" "$SNAPSHOT"
+    STAGED="$SNAPSHOT"
+fi
 
 if [ ! -s "$STAGED" ]; then
     echo "guard: error: staged file '$STAGED' is empty" >&2
@@ -99,6 +132,15 @@ fi
 CONTROL="${GUARD_CONTROL_URL:-http://127.0.0.1:9090}"
 TIMEOUT="${GUARD_VERIFY_TIMEOUT:-10}"
 GRACE="${GUARD_EMPTY_GRACE:-300}"
+# promote: the staged file (a recheck's snapshot) becomes the target; the original staged file
+# goes too, unless a newer render replaced it meanwhile.
+promote() {
+    mv -f "$STAGED" "$TARGET"
+    SNAPSHOT=""
+    if [ "$ORIGINAL" != "$TARGET" ] && [ -f "$ORIGINAL" ] && cmp -s "$ORIGINAL" "$TARGET"; then
+        rm -f "$ORIGINAL"
+    fi
+}
 # route_ids <file>: the IDs of the routes, from the items of the top-level routes section only
 # (global_rules has IDs too).
 route_ids() {
@@ -113,8 +155,8 @@ IDS=$(route_ids "$STAGED")
 
 # The first render, before APISIX starts: nothing to compare with and nothing to go back to.
 if [ ! -f "$TARGET" ]; then
-    mv -f "$STAGED" "$TARGET"
-    echo "guard: promoted '$STAGED' -> '$TARGET' (first render, not checked against APISIX)"
+    promote
+    echo "guard: promoted '$ORIGINAL' -> '$TARGET' (first render, not checked against APISIX)"
     exit 0
 fi
 
@@ -160,16 +202,17 @@ done
 VERSION=$(stat -c %Y "$STAGED")
 LAST_GOOD="$TARGET.last-good"
 cp "$TARGET" "$LAST_GOOD"
-mv -f "$STAGED" "$TARGET"
+promote
 
 # missing: prints the routes of the new file that APISIX has not loaded, or "unreachable".
+# Each call of the Control API is bounded, so a guard never outlives the lock's takeover.
 missing() {
-    if ! wget -q -O /dev/null "$CONTROL/v1/routes" 2>/dev/null; then
+    if ! timeout 5 wget -q -O /dev/null -T 5 "$CONTROL/v1/routes" 2>/dev/null; then
         echo unreachable
         return
     fi
     for id in $IDS; do
-        loaded=$(wget -q -O - "$CONTROL/v1/route/$id" 2>/dev/null | sed -n 's/.*"modifiedIndex":\([0-9]*\).*/\1/p')
+        loaded=$(timeout 5 wget -q -O - -T 5 "$CONTROL/v1/route/$id" 2>/dev/null | sed -n 's/.*"modifiedIndex":\([0-9]*\).*/\1/p')
         [ "$loaded" = "$VERSION" ] || echo "$id"
     done
 }

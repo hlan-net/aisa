@@ -87,18 +87,38 @@ routes:
   - id: no-backend
 #END
 EOF
-mkdir "$TARGET.lock"
+sleep 300 &
+HOLDER=$!
+mkdir "$TARGET.lock" && echo "$HOLDER" > "$TARGET.lock/pid"
+touch -d '-10 minutes' "$TARGET.lock" # old, but its owner is alive: not taken over
 if out=$(GUARD_LOCK_WAIT=2 "$GUARD" "$STAGED" "$TARGET" 2>&1); then
   echo "FAIL: the guard ran while another held the lock" >&2
   exit 1
 fi
-grep -q 'another guard' <<< "$out" || { echo "FAIL: no error about the lock: $out" >&2; exit 1; }
+grep -q "another guard ($HOLDER)" <<< "$out" || { echo "FAIL: no error naming the lock's owner: $out" >&2; exit 1; }
 [[ "$(cat "$TARGET")" == "initial-good-config" ]] || { echo "FAIL: the target changed under a lock" >&2; exit 1; }
-echo "== guard.sh: a lock left behind is taken over"
+[[ "$(cat "$TARGET.lock/pid")" == "$HOLDER" ]] || { echo "FAIL: the lock of a live guard was touched" >&2; exit 1; }
+echo "== guard.sh: the lock of a guard that is gone is taken over"
+kill "$HOLDER"; wait "$HOLDER" 2>/dev/null || true
+out=$(GUARD_LOCK_WAIT=2 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: the lock of a dead guard stopped the guard: $out" >&2; exit 1; }
+grep -q "taking over the lock.*$HOLDER, which is gone" <<< "$out" || { echo "FAIL: no warning about the takeover: $out" >&2; exit 1; }
+grep -q 'id: client' "$TARGET" || { echo "FAIL: the file was not promoted after the takeover" >&2; exit 1; }
+[[ ! -d "$TARGET.lock" ]] || { echo "FAIL: the lock was not released" >&2; exit 1; }
+echo "== guard.sh: a lock without an owner is taken over after 120 s, not before"
+echo "initial-good-config" > "$TARGET"
+cat << 'EOF' > "$STAGED"
+routes:
+  - id: client
+  - id: no-backend
+#END
+EOF
+mkdir "$TARGET.lock"
+if GUARD_LOCK_WAIT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1; then
+  echo "FAIL: a fresh lock without an owner was taken over" >&2
+  exit 1
+fi
 touch -d '-10 minutes' "$TARGET.lock"
-out=$(GUARD_LOCK_WAIT=2 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a stale lock stopped the guard: $out" >&2; exit 1; }
-grep -q 'taking over' <<< "$out" || { echo "FAIL: no warning about the stale lock: $out" >&2; exit 1; }
-grep -q 'id: client' "$TARGET" || { echo "FAIL: the file was not promoted after the stale lock" >&2; exit 1; }
+GUARD_LOCK_WAIT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: an old lock without an owner was not taken over" >&2; exit 1; }
 [[ ! -d "$TARGET.lock" ]] || { echo "FAIL: the lock was not released" >&2; exit 1; }
 
 echo "== guard.sh: first render, before APISIX runs"
@@ -160,6 +180,33 @@ if grep -q 'model-qwen3' "$TARGET"; then
   exit 1
 fi
 [[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the mark of the hold was left behind" >&2; exit 1; }
+echo "== guard.sh: a recheck promotes what it checked, and leaves a newer render alone"
+export GUARD_EMPTY_GRACE=1
+with_models "$TARGET"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold did not start" >&2; exit 1; }
+sleep 2
+# consul-template renders a new file with model routes just as the recheck runs: the recheck
+# promotes the empty file it checked, and the new file stays for consul-template's command.
+cp "$STAGED" "$STAGED.empty"
+with_models "$STAGED"
+echo "# newer" >> "$STAGED"
+# The recheck's snapshot is taken from $STAGED; stage the empty file first, then swap in the
+# newer one behind the snapshot by running the recheck on a copy that the test controls.
+cp "$STAGED" "$STAGED.newer"
+cp "$STAGED.empty" "$STAGED"
+( sleep 0.3; cp "$STAGED.newer" "$STAGED" ) &
+GUARD_RECHECK=1 GUARD_VERIFY_TIMEOUT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the recheck failed" >&2; exit 1; }
+wait
+if grep -q 'model-qwen3' "$TARGET"; then
+  echo "FAIL: the recheck promoted something other than the file it checked" >&2
+  exit 1
+fi
+[[ -f "$STAGED" ]] && grep -q '# newer' "$STAGED" || { echo "FAIL: the newer render was removed by the recheck" >&2; exit 1; }
+[[ ! -e "$STAGED.recheck" ]] || { echo "FAIL: the snapshot was left behind" >&2; exit 1; }
+rm -f "$STAGED.empty" "$STAGED.newer" "$STAGED" # the newer render is consul-template's to check
+unset GUARD_EMPTY_GRACE
+
 echo "== guard.sh: a recheck with nothing staged is quiet"
 out=$(GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a recheck with nothing staged failed: $out" >&2; exit 1; }
 [[ -z "$out" ]] || { echo "FAIL: a recheck with nothing staged is not quiet: $out" >&2; exit 1; }
