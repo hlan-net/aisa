@@ -162,7 +162,7 @@ A rejected render or an empty catalog must show in aisa's metrics and alerts, no
 | Field | Meaning |
 |---|---|
 | `id` | names the report (max 256 bytes), so that one sent again counts once; optional, and without it every delivery counts |
-| `ts` | when the render ended, ISO 8601; now when missing or in the future |
+| `ts` | when the render ended, ISO 8601; now when missing, unreadable or in the future |
 | `result` | **required**: `promoted` (the gateway runs the file), `rejected` (the check failed and the previous file stays or is back) or `held` (a file without model routes waits for the grace period) |
 | `reason` | why a render was rejected or held, for the log (max 1024 bytes) |
 | `backends`, `models` | what the rendered file holds: the backends its routes name, and the models with a route; non-negative |
