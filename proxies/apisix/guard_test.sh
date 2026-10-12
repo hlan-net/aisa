@@ -201,6 +201,7 @@ grep -q '# newer' "$STAGED" || { echo "FAIL: the newer render was consumed by th
 grep -q '# newer' "$TARGET" || { echo "FAIL: the newer render was not promoted" >&2; exit 1; }
 [[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not end with the newer render" >&2; exit 1; }
 echo "== guard.sh: a second held render during a hold is the one a recheck checks"
+export GUARD_EMPTY_GRACE=1
 with_models "$TARGET"
 without_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold did not start" >&2; exit 1; }
