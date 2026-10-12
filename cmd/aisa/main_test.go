@@ -108,7 +108,7 @@ func TestRoutesUsageWrongMethod(t *testing.T) {
 	m := metrics.New("test")
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := server.New(log, m.Handler(), time.Second)
-	routes(srv, http.NotFoundHandler(), ledger.New(m, ledger.NewDedup(10, time.Minute), nil, log))
+	routes(srv, http.NotFoundHandler(), ledger.New(m, ledger.NewDedup(10, time.Minute), nil, log, ledger.Options{}))
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/usage", nil))

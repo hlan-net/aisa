@@ -104,6 +104,10 @@ type Ledger struct {
 	DedupCapacity int
 	// DedupTTL is how long a request ID is kept before expiring (AISA_LEDGER_DEDUP_TTL).
 	DedupTTL time.Duration
+	// EstimateDefaultTokens is charged for a successful request whose usage event has no
+	// token counts when aisa knows nothing yet of its consumer and model
+	// (AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS). Zero charges nothing then.
+	EstimateDefaultTokens int64
 }
 
 // Defaults are the values used for variables that are unset or empty.
@@ -210,6 +214,13 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return cfg, fmt.Errorf("AISA_LEDGER_DEDUP_CAPACITY: want a positive integer, got %q", v)
 		}
 		cfg.Ledger.DedupCapacity = n
+	}
+	if v := getenv("AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			return cfg, fmt.Errorf("AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS: want a non-negative integer, got %q", v)
+		}
+		cfg.Ledger.EstimateDefaultTokens = n
 	}
 	if cfg.Consumers.MaxStale < cfg.Consumers.Refresh {
 		return cfg, fmt.Errorf("AISA_CONSUMER_MAX_STALE (%s) must not be shorter than AISA_CONSUMER_REFRESH (%s)",

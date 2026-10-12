@@ -30,21 +30,31 @@ type Charger interface {
 
 // Handler ingests usage events from gateways at POST /v1/usage.
 type Handler struct {
-	metrics *metrics.Metrics
-	dedup   *Dedup
-	charger Charger
-	log     *slog.Logger
-	now     func() time.Time
+	metrics   *metrics.Metrics
+	dedup     *Dedup
+	charger   Charger
+	estimator *Estimator
+	log       *slog.Logger
+	now       func() time.Time
+}
+
+// Options set how the handler accounts usage.
+type Options struct {
+	// EstimateDefaultTokens is charged for a successful request whose event has no token
+	// counts when nothing is known yet of its consumer and model (AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS).
+	// Zero charges nothing in that case.
+	EstimateDefaultTokens int64
 }
 
 // New returns a usage handler. With a nil charger, tokens are not counted towards quotas.
-func New(m *metrics.Metrics, dedup *Dedup, charger Charger, log *slog.Logger) *Handler {
+func New(m *metrics.Metrics, dedup *Dedup, charger Charger, log *slog.Logger, opts Options) *Handler {
 	return &Handler{
-		metrics: m,
-		dedup:   dedup,
-		charger: charger,
-		log:     log,
-		now:     time.Now,
+		metrics:   m,
+		dedup:     dedup,
+		charger:   charger,
+		estimator: NewEstimator(opts.EstimateDefaultTokens),
+		log:       log,
+		now:       time.Now,
 	}
 }
 
@@ -115,8 +125,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		h.metrics.UsageEvents.WithLabelValues(metrics.EventAccepted).Inc()
-		h.recordEvent(ev)
-		if tokens := quotas.AddTokens(int64(ev.PromptTokens), int64(ev.CompletionTokens)); tokens > 0 && ev.Consumer != "" {
+		if tokens := h.recordEvent(ev); tokens > 0 && ev.Consumer != "" {
 			key := charge{ev.Consumer, h.eventTime(ev).UTC().Truncate(time.Minute)}
 			charges[key] = quotas.AddTokens(charges[key], tokens)
 		}
@@ -208,8 +217,9 @@ func validateEvent(ev Event) error {
 	return nil
 }
 
-// recordEvent updates the metrics for a valid, non-duplicate event.
-func (h *Handler) recordEvent(ev Event) {
+// recordEvent updates the metrics for a valid, non-duplicate event and returns the tokens to
+// charge for it: the event's own, or an estimate when a successful request has none.
+func (h *Handler) recordEvent(ev Event) int64 {
 	consumer := ev.Consumer
 	if consumer == "" {
 		consumer = metrics.ConsumerUnknown
@@ -218,10 +228,23 @@ func (h *Handler) recordEvent(ev Event) {
 
 	h.metrics.Requests.WithLabelValues(consumer, ev.Model, ev.Backend, statusStr).Inc()
 
+	tokens := quotas.AddTokens(int64(ev.PromptTokens), int64(ev.CompletionTokens))
 	if usageMissing(ev) {
 		// The tokens were used but not reported: a backend that does not stream usage, or a
-		// client that disconnected mid-stream (#12). Counted, so it is not silently free.
+		// client that disconnected mid-stream (#12). Counted, and charged by estimate, so the
+		// request is not silently free. The estimate is kept apart from the exact tokens; the
+		// latency and the time to the first token below are the request's own.
 		h.metrics.UsageMissing.WithLabelValues(consumer, ev.Model, ev.Backend).Inc()
+		var source string
+		tokens, source = h.estimator.Estimate(consumer, ev.Model)
+		if tokens > 0 {
+			h.metrics.TokensEstimated.WithLabelValues(consumer, ev.Model, ev.Backend).Add(float64(tokens))
+		}
+		h.log.Debug("usage missing, estimated",
+			"consumer", consumer, "model", ev.Model, "backend", ev.Backend,
+			"tokens", tokens, "source", source, "request_id", ev.RequestID)
+	} else if ev.Status >= 200 && ev.Status < 300 {
+		h.estimator.Observe(consumer, ev.Model, tokens)
 	}
 
 	if ev.PromptTokens > 0 {
@@ -247,6 +270,7 @@ func (h *Handler) recordEvent(ev Event) {
 		"completion_tokens", ev.CompletionTokens,
 		"request_id", ev.RequestID,
 	)
+	return tokens
 }
 
 // usageMissing reports whether ev is a successful response without token counts. The contract
