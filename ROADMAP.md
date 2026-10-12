@@ -98,6 +98,7 @@ Improvements that belong in the gateways rather than in aisa:
 4. `ai-proxy-multi`: select the instance by model or by a request header, which would remove the internal hop the proxy needs today (spike S8)
 5. `forward-auth`: clear the `upstream_headers` also when `allow_degradation` lets a request through (spike S8)
 6. Anything the spikes uncover, e.g. token usage in log variables for streaming responses
+7. `ai-proxy-multi`: separate connect and read timeouts, and a maximum above 600 s or a configurable one. With one timeout, a request to a backend that has just gone away waits as long as a slow model may take; and a non-streamed answer of more than 10 minutes cannot succeed ([#14](https://github.com/hlan-net/aisa/issues/14), [#52](https://github.com/hlan-net/aisa/issues/52))
 
 ## Principles
 
