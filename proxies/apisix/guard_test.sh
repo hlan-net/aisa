@@ -180,31 +180,39 @@ if grep -q 'model-qwen3' "$TARGET"; then
   exit 1
 fi
 [[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the mark of the hold was left behind" >&2; exit 1; }
-echo "== guard.sh: a recheck promotes what it checked, and leaves a newer render alone"
+echo "== guard.sh: a recheck leaves a newer render to consul-template's own command"
 export GUARD_EMPTY_GRACE=1
 with_models "$TARGET"
 without_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold did not start" >&2; exit 1; }
+grep -q "^[0-9]* [0-9a-f]\{64\}$" "$TARGET.empty-since" || { echo "FAIL: the mark of the hold does not name the held render: $(cat "$TARGET.empty-since")" >&2; exit 1; }
 sleep 2
-# consul-template renders a new file with model routes just as the recheck runs: the recheck
-# promotes the empty file it checked, and the new file stays for consul-template's command.
-cp "$STAGED" "$STAGED.empty"
+# consul-template renders a new file with model routes before the recheck runs: the recheck
+# is not the one to check it, and leaves everything as it is.
 with_models "$STAGED"
 echo "# newer" >> "$STAGED"
-# The recheck's snapshot is taken from $STAGED; stage the empty file first, then swap in the
-# newer one behind the snapshot by running the recheck on a copy that the test controls.
-cp "$STAGED" "$STAGED.newer"
-cp "$STAGED.empty" "$STAGED"
-( sleep 0.3; cp "$STAGED.newer" "$STAGED" ) &
-GUARD_RECHECK=1 GUARD_VERIFY_TIMEOUT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the recheck failed" >&2; exit 1; }
-wait
-if grep -q 'model-qwen3' "$TARGET"; then
-  echo "FAIL: the recheck promoted something other than the file it checked" >&2
-  exit 1
-fi
-[[ -f "$STAGED" ]] && grep -q '# newer' "$STAGED" || { echo "FAIL: the newer render was removed by the recheck" >&2; exit 1; }
+out=$(GUARD_RECHECK=1 GUARD_VERIFY_TIMEOUT=1 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: the recheck failed: $out" >&2; exit 1; }
+[[ -z "$out" ]] || { echo "FAIL: a recheck that finds a newer render is not quiet: $out" >&2; exit 1; }
+grep -q '# newer' "$STAGED" || { echo "FAIL: the newer render was consumed by the recheck" >&2; exit 1; }
+[[ -f "$TARGET.empty-since" ]] || { echo "FAIL: the recheck ended the hold" >&2; exit 1; }
 [[ ! -e "$STAGED.recheck" ]] || { echo "FAIL: the snapshot was left behind" >&2; exit 1; }
-rm -f "$STAGED.empty" "$STAGED.newer" "$STAGED" # the newer render is consul-template's to check
+# consul-template's own command then checks the newer render, which ends the hold.
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the newer render failed" >&2; exit 1; }
+grep -q '# newer' "$TARGET" || { echo "FAIL: the newer render was not promoted" >&2; exit 1; }
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not end with the newer render" >&2; exit 1; }
+echo "== guard.sh: a second held render during a hold is the one a recheck checks"
+with_models "$TARGET"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold did not start" >&2; exit 1; }
+since=$(cut -d' ' -f1 "$TARGET.empty-since")
+without_models "$STAGED"
+echo "# still empty, rendered again" >> "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the second held render failed" >&2; exit 1; }
+[[ "$(cut -d' ' -f1 "$TARGET.empty-since")" == "$since" ]] || { echo "FAIL: the second held render reset the clock" >&2; exit 1; }
+sleep 2
+GUARD_RECHECK=1 GUARD_VERIFY_TIMEOUT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the recheck of the second held render failed" >&2; exit 1; }
+grep -q '# still empty, rendered again' "$TARGET" || { echo "FAIL: the recheck did not promote the second held render" >&2; exit 1; }
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not end" >&2; exit 1; }
 unset GUARD_EMPTY_GRACE
 
 echo "== guard.sh: a recheck with nothing staged is quiet"

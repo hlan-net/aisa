@@ -83,14 +83,24 @@ SNAPSHOT=""
 trap release EXIT
 
 # A recheck works on a snapshot of the staged file: consul-template may replace the staged
-# file at any moment outside the lock, and the guard reads it more than once. The original is
-# removed after a promotion only if it is still what was promoted; otherwise it is a newer
-# render, which consul-template's own command, waiting on the lock, checks next.
+# file at any moment outside the lock, and the guard reads it more than once. It checks only
+# the render that is held, which the mark of the hold names by its hash (6.): a newer render
+# is consul-template's own command's to check, which waits on the lock, and a recheck that
+# finds one leaves quietly. The original is removed after a promotion only if it is still what
+# was promoted.
+EMPTY_SINCE="$TARGET.empty-since"
+# hash <file>: names a rendered file.
+hash() {
+    sha256sum < "$1" | cut -c1-64
+}
 ORIGINAL="$STAGED"
 if [ -n "$GUARD_RECHECK" ]; then
     SNAPSHOT="$STAGED.recheck"
     cp "$STAGED" "$SNAPSHOT"
     STAGED="$SNAPSHOT"
+    if [ "$(cut -d' ' -f2 "$EMPTY_SINCE" 2>/dev/null)" != "$(hash "$STAGED")" ]; then
+        exit 0
+    fi
 fi
 
 if [ ! -s "$STAGED" ]; then
@@ -167,16 +177,17 @@ fi
 # consul-template runs this script again only when the rendered file changes, so the pod runs
 # it again every 30 s while the mark exists (chart/templates/deployment.yaml), with
 # GUARD_RECHECK set; outside the pod, the tests do. A hold is not a failure: exit 0.
-EMPTY_SINCE="$TARGET.empty-since"
+# The mark of a hold holds when it began and the hash of the held render; a render during the
+# hold keeps the time and names itself.
 NOW=$(date +%s)
 if [ "$(model_routes "$STAGED")" -eq 0 ] && [ "$(model_routes "$TARGET")" -gt 0 ]; then
-    if [ ! -f "$EMPTY_SINCE" ]; then
-        echo "$NOW" > "$EMPTY_SINCE"
-    fi
-    SINCE=$(cat "$EMPTY_SINCE")
+    SINCE=$(cut -d' ' -f1 "$EMPTY_SINCE" 2>/dev/null || true)
     case "$SINCE" in
-        ''|*[!0-9]*) SINCE=$NOW; echo "$NOW" > "$EMPTY_SINCE" ;;
+        ''|*[!0-9]*) SINCE=$NOW ;;
     esac
+    if [ -z "$GUARD_RECHECK" ]; then
+        echo "$SINCE $(hash "$STAGED")" > "$EMPTY_SINCE"
+    fi
     REMAINING=$((GRACE - (NOW - SINCE)))
     if [ "$REMAINING" -gt 0 ]; then
         if [ -z "$GUARD_RECHECK" ]; then
