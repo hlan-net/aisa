@@ -20,6 +20,8 @@
 //	AISA_CONSUMER_MAX_STALE     age of the consumers after which aisa fails closed 15m
 //	AISA_LEDGER_DEDUP_CAPACITY  request IDs kept for dedup                        100000
 //	AISA_LEDGER_DEDUP_TTL       how long request IDs are kept for dedup           15m
+//	AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS  tokens charged for missing usage with no
+//	                            history of the consumer and model (0: nothing)    0
 //	CONSUL_HTTP_ADDR            Consul's address; with AISA_REDIS_ADDR, turns token quotas on
 //	CONSUL_CACERT               CA certificate of Consul, PEM                     system CAs
 //	CONSUL_HTTP_TOKEN           a fixed Consul ACL token, for development

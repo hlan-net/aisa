@@ -161,7 +161,7 @@ aisa exports its own normalized metrics, so the dashboards and alerts work with 
 | `aisa_usage_events_total` | result (`accepted`/`duplicate`/`rejected`) |
 | `aisa_usage_requests_rejected_total` | reason (`malformed`/`too_large`/`unreadable`): usage requests rejected as a whole, whose events are in no other metric |
 | `aisa_usage_missing_total` | consumer, model, backend: successful requests reported without token counts, which aisa charges by estimate |
-| `aisa_tokens_estimated_total` | consumer, model, backend: the tokens charged as an estimate for those requests; not in `aisa_tokens_total` |
+| `aisa_tokens_estimated_total` | consumer, model, backend: the estimated tokens of those requests, charged to the consumer's quota when there is one (a fail-open request, under `unknown`, is estimated and charged to nobody); not in `aisa_tokens_total` |
 
 Gateway-native metrics (e.g. `apisix_llm_*`) are still scraped, but they only serve as a cross-check and for gateway internals.
 

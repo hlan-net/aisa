@@ -85,8 +85,9 @@ type Metrics struct {
 	// UsageMissing counts successful requests whose event has no token counts, by consumer,
 	// model and backend: usage the gateway did not see, which aisa charges by estimate.
 	UsageMissing *prometheus.CounterVec
-	// TokensEstimated counts the tokens charged as an estimate for those requests, by consumer,
-	// model and backend. They are not in Tokens.
+	// TokensEstimated counts the estimated tokens of those requests, by consumer, model and
+	// backend: charged to the consumer's quota when the request has one (a fail-open request,
+	// under the consumer unknown, is estimated and charged to nobody). They are not in Tokens.
 	TokensEstimated *prometheus.CounterVec
 
 	// Consumers, ConsumerKeys and ConsumersUnreadable describe the consumers in memory: how
@@ -171,7 +172,7 @@ func New(version string) *Metrics {
 		}, []string{"consumer", "model", "backend"}),
 		TokensEstimated: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "aisa_tokens_estimated_total",
-			Help: "Tokens charged as an estimate for successful requests reported without token counts; not in aisa_tokens_total.",
+			Help: "Estimated tokens of successful requests reported without token counts, charged to the consumer's quota when there is one; not in aisa_tokens_total.",
 		}, []string{"consumer", "model", "backend"}),
 		Consumers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers",

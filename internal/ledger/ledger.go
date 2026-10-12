@@ -232,18 +232,18 @@ func (h *Handler) recordEvent(ev Event) int64 {
 	if usageMissing(ev) {
 		// The tokens were used but not reported: a backend that does not stream usage, or a
 		// client that disconnected mid-stream (#12). Counted, and charged by estimate, so the
-		// request is not silently free. The estimate is kept apart from the exact tokens.
+		// request is not silently free. The estimate is kept apart from the exact tokens; the
+		// latency and the time to the first token below are the request's own.
 		h.metrics.UsageMissing.WithLabelValues(consumer, ev.Model, ev.Backend).Inc()
-		estimate, source := h.estimator.Estimate(consumer, ev.Model)
-		if estimate > 0 {
-			h.metrics.TokensEstimated.WithLabelValues(consumer, ev.Model, ev.Backend).Add(float64(estimate))
+		var source string
+		tokens, source = h.estimator.Estimate(consumer, ev.Model)
+		if tokens > 0 {
+			h.metrics.TokensEstimated.WithLabelValues(consumer, ev.Model, ev.Backend).Add(float64(tokens))
 		}
 		h.log.Debug("usage missing, estimated",
 			"consumer", consumer, "model", ev.Model, "backend", ev.Backend,
-			"tokens", estimate, "source", source, "request_id", ev.RequestID)
-		return estimate
-	}
-	if ev.Status >= 200 && ev.Status < 300 {
+			"tokens", tokens, "source", source, "request_id", ev.RequestID)
+	} else if ev.Status >= 200 && ev.Status < 300 {
 		h.estimator.Observe(consumer, ev.Model, tokens)
 	}
 

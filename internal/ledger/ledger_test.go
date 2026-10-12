@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/hlan-net/aisa/internal/metrics"
 )
@@ -441,8 +443,18 @@ func TestHandlerChargesAnEstimateForMissingUsage(t *testing.T) {
 		return testutil.ToFloat64(m.TokensEstimated.WithLabelValues(consumer, model, "ollama-1"))
 	}
 
-	// Nothing is known of chat-ui and qwen3: the default is charged.
-	post(`{"request_id": "m1", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 200, "stream": "true"}`)
+	// Nothing is known of chat-ui and qwen3: the default is charged. The request's latency and
+	// time to the first token are observed as for any other request.
+	post(`{"request_id": "m1", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 200, "stream": "true", "latency_ms": 2500, "ttft_ms": 300}`)
+	for name, h := range map[string]prometheus.Observer{"aisa_latency_seconds": m.Latency.WithLabelValues("qwen3", "ollama-1"), "aisa_ttft_seconds": m.TTFT.WithLabelValues("qwen3", "ollama-1")} {
+		var d dto.Metric
+		if err := h.(prometheus.Metric).Write(&d); err != nil {
+			t.Fatal(err)
+		}
+		if got := d.GetHistogram().GetSampleCount(); got != 1 {
+			t.Errorf("%s has %d samples after a request with missing usage, want 1", name, got)
+		}
+	}
 	if got := c.charges["chat-ui@12:30:00"]; got != 300 {
 		t.Fatalf("charged %d for the first missing usage, want the default 300", got)
 	}
