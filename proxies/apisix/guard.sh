@@ -13,6 +13,7 @@
 #   GUARD_VERIFY_TIMEOUT  seconds to wait for APISIX to load the file  10
 #   GUARD_EMPTY_GRACE     seconds a file without model routes waits    300
 #                         before it replaces one that has them
+#   GUARD_RECHECK         set when the pod runs this script again during a hold (see 6.)
 #
 # consul-template exits when this script fails, and Kubernetes restarts its container, which
 # renders again: that is the retry of a rejected file. A hold (below) is not a failure.
@@ -29,7 +30,7 @@ fi
 
 if [ ! -f "$STAGED" ]; then
     if [ -n "$GUARD_RECHECK" ]; then
-        # The recheck of a hold, and a newer render was promoted meanwhile: nothing to do.
+        # A recheck, and a newer render was promoted meanwhile: nothing to do.
         exit 0
     fi
     echo "guard: error: staged file '$STAGED' does not exist" >&2
@@ -97,11 +98,11 @@ fi
 # 6. A file without model routes replaces one that has them only after a grace period
 # (PROXY_CONTRACT.md, Checking the rendered config). The catalog can come back empty although
 # the backends are fine: a render token that may not read the service, a Consul that lost its
-# data. Until the period is over the current file stays, and the hold is rechecked when it ends:
-# consul-template runs this script again only when the rendered file changes, so the recheck
-# is left behind as a process of its own. A hold is not a failure; this script then exits 0.
+# data. Until the period is over the current file stays, marked by the time the hold began.
+# consul-template runs this script again only when the rendered file changes, so the pod runs
+# it again every 30 s while the mark exists (chart/templates/deployment.yaml), with
+# GUARD_RECHECK set; outside the pod, the tests do. A hold is not a failure: exit 0.
 EMPTY_SINCE="$TARGET.empty-since"
-RECHECK="$TARGET.recheck"
 NOW=$(date +%s)
 if [ "$(model_routes "$STAGED")" -eq 0 ] && [ "$(model_routes "$TARGET")" -gt 0 ]; then
     if [ ! -f "$EMPTY_SINCE" ]; then
@@ -113,20 +114,15 @@ if [ "$(model_routes "$STAGED")" -eq 0 ] && [ "$(model_routes "$TARGET")" -gt 0 
     esac
     REMAINING=$((GRACE - (NOW - SINCE)))
     if [ "$REMAINING" -gt 0 ]; then
-        echo "guard: warning: the rendered file has no model route; the current file with $(model_routes "$TARGET") stays for another ${REMAINING}s (GUARD_EMPTY_GRACE=$GRACE)" >&2
-        # One recheck per hold; a new one when the last is gone (the container restarted).
-        if [ -z "$GUARD_RECHECK" ] && ! { [ -f "$RECHECK" ] && kill -0 "$(cat "$RECHECK")" 2>/dev/null; }; then
-            # Its output goes to the container's log (the streams of PID 1) where that is allowed.
-            OUT=/proc/1/fd/1; [ -w "$OUT" ] || OUT=/dev/null
-            ERR=/proc/1/fd/2; [ -w "$ERR" ] || ERR=/dev/null
-            GUARD_RECHECK=1 setsid sh -c "sleep $REMAINING; exec \"$0\" \"$STAGED\" \"$TARGET\"" >"$OUT" 2>"$ERR" </dev/null &
-            echo $! > "$RECHECK"
+        if [ -z "$GUARD_RECHECK" ]; then
+            # A recheck that finds the hold still on is quiet: one line per render, not per 30 s.
+            echo "guard: warning: the rendered file has no model route; the current file with $(model_routes "$TARGET") stays for another ${REMAINING}s (GUARD_EMPTY_GRACE=$GRACE)" >&2
         fi
         exit 0
     fi
     echo "guard: warning: the rendered file has had no model route for $((NOW - SINCE))s; promoting it, every model now gets the gateway's 503" >&2
 fi
-rm -f "$EMPTY_SINCE" "$RECHECK"
+rm -f "$EMPTY_SINCE"
 
 # APISIX reloads the file when its modification time, in seconds, changes, and reports that
 # time as the modifiedIndex of every route it loaded from it. Two renders within a second

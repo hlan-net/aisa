@@ -101,6 +101,21 @@ spec:
         - name: consul-template
           image: {{ printf "%s:%s" .Values.consulTemplate.image.repository .Values.consulTemplate.image.tag | quote }}
           imagePullPolicy: {{ .Values.consulTemplate.image.pullPolicy }}
+          # consul-template runs guard.sh only when the rendered file changes. A hold (a rendered
+          # file without model routes, guard.sh step 6) ends on its own because this loop runs
+          # the guard again every 30 s while the mark of the hold exists; it restarts with the
+          # container, so a hold survives a restart. The args are consul-template's.
+          command:
+            - sh
+            - -c
+            - |
+              while sleep 30; do
+                if [ -f /rendered/apisix.yaml.empty-since ]; then
+                  GUARD_RECHECK=1 /etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml
+                fi
+              done &
+              exec /bin/consul-template "$@"
+            - consul-template
           args:
             {{- include "proxy.renderArgs" . | nindent 12 }}
           env:

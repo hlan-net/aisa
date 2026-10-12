@@ -90,8 +90,9 @@ EOF
 "$GUARD" "$STAGED" "$TARGET" >/dev/null
 grep -q 'id: client' "$TARGET" || { echo "FAIL: the first render was not promoted" >&2; exit 1; }
 
-# A file without model routes replaces one that has them only after GUARD_EMPTY_GRACE seconds,
-# and the hold ends on its own: the first held render leaves a recheck behind.
+# A file without model routes replaces one that has them only after GUARD_EMPTY_GRACE seconds.
+# In the pod a loop runs the guard again every 30 s during a hold, with GUARD_RECHECK set; here
+# the test does.
 with_models() {
   cat << 'EOF' > "$1"
 routes:
@@ -120,24 +121,26 @@ grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the current file was replaced w
 [[ -s "$TARGET.empty-since" ]] || { echo "FAIL: no mark of when the model routes went" >&2; exit 1; }
 grep -q 'stays for another' <<< "$out" || { echo "FAIL: no warning about the hold: $out" >&2; exit 1; }
 since=$(cat "$TARGET.empty-since")
-recheck=$(cat "$TARGET.recheck")
 sleep 1
-echo "== guard.sh: a second render during the hold is held too, on the same clock"
+echo "== guard.sh: a second render and a recheck during the hold are held too, on the same clock"
 without_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the second held render failed" >&2; exit 1; }
 grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the second render ended the hold early" >&2; exit 1; }
 [[ "$(cat "$TARGET.empty-since")" == "$since" ]] || { echo "FAIL: the second render reset the clock" >&2; exit 1; }
-[[ "$(cat "$TARGET.recheck")" == "$recheck" ]] || { echo "FAIL: the second render left another recheck behind" >&2; exit 1; }
-echo "== guard.sh: the hold ends on its own"
-for _ in $(seq 1 20); do
-  grep -q 'model-qwen3' "$TARGET" || break
-  sleep 0.5
-done
+out=$(GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a recheck during the hold failed: $out" >&2; exit 1; }
+grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: a recheck ended the hold early" >&2; exit 1; }
+[[ -z "$out" ]] || { echo "FAIL: a recheck that finds the hold still on is not quiet: $out" >&2; exit 1; }
+echo "== guard.sh: a recheck after the grace period promotes the file"
+sleep 2
+GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the recheck after the grace period failed" >&2; exit 1; }
 if grep -q 'model-qwen3' "$TARGET"; then
   echo "FAIL: the file without model routes was not promoted when the grace period ended" >&2
   exit 1
 fi
-[[ ! -e "$TARGET.empty-since" && ! -e "$TARGET.recheck" ]] || { echo "FAIL: the marks of the hold were left behind" >&2; exit 1; }
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the mark of the hold was left behind" >&2; exit 1; }
+echo "== guard.sh: a recheck with nothing staged is quiet"
+out=$(GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a recheck with nothing staged failed: $out" >&2; exit 1; }
+[[ -z "$out" ]] || { echo "FAIL: a recheck with nothing staged is not quiet: $out" >&2; exit 1; }
 
 echo "== guard.sh: model routes come back during a hold"
 export GUARD_EMPTY_GRACE=60
@@ -145,11 +148,9 @@ with_models "$TARGET"
 without_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1
 [[ -f "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not start" >&2; exit 1; }
-recheck=$(cat "$TARGET.recheck")
 with_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: a file with model routes was not promoted during a hold" >&2; exit 1; }
-[[ ! -e "$TARGET.empty-since" && ! -e "$TARGET.recheck" ]] || { echo "FAIL: the hold was not ended by the file with model routes" >&2; exit 1; }
-kill "$recheck" 2>/dev/null || true
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold was not ended by the file with model routes" >&2; exit 1; }
 
 echo "== guard.sh: a file without model routes replaces one without them at once"
 without_models "$TARGET"
