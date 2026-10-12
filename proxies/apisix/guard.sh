@@ -14,6 +14,7 @@
 #   GUARD_EMPTY_GRACE     seconds a file without model routes waits    300
 #                         before it replaces one that has them
 #   GUARD_RECHECK         set when the pod runs this script again during a hold (see 6.)
+#   GUARD_LOCK_WAIT       seconds to wait for another guard to finish   60
 #
 # consul-template exits when this script fails, and Kubernetes restarts its container, which
 # renders again: that is the retry of a rejected file. A hold (below) is not a failure.
@@ -36,6 +37,28 @@ if [ ! -f "$STAGED" ]; then
     echo "guard: error: staged file '$STAGED' does not exist" >&2
     exit 1
 fi
+
+# One guard at a time: consul-template's render command and the pod's recheck loop (6.) may
+# both run this script, on the same files. The lock is a directory next to the target, which
+# mkdir creates atomically; one left behind by a guard that was killed is taken over after
+# 120 s.
+LOCK="$TARGET.lock"
+LOCK_WAIT="${GUARD_LOCK_WAIT:-60}"
+waited=0
+until mkdir "$LOCK" 2>/dev/null; do
+    if [ -d "$LOCK" ] && [ $(( $(date +%s) - $(stat -c %Y "$LOCK") )) -gt 120 ]; then
+        echo "guard: warning: taking over the lock '$LOCK', left behind more than 120 s ago" >&2
+        rmdir "$LOCK" 2>/dev/null || true
+        continue
+    fi
+    if [ "$waited" -ge "$LOCK_WAIT" ]; then
+        echo "guard: error: another guard has held '$LOCK' for ${LOCK_WAIT}s" >&2
+        exit 1
+    fi
+    sleep 1
+    waited=$((waited + 1))
+done
+trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 
 if [ ! -s "$STAGED" ]; then
     echo "guard: error: staged file '$STAGED' is empty" >&2

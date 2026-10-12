@@ -79,6 +79,28 @@ if "$GUARD" "$STAGED" "$TARGET" 2>/dev/null; then
   exit 1
 fi
 
+echo "== guard.sh: another guard holds the lock"
+echo "initial-good-config" > "$TARGET"
+cat << 'EOF' > "$STAGED"
+routes:
+  - id: client
+  - id: no-backend
+#END
+EOF
+mkdir "$TARGET.lock"
+if out=$(GUARD_LOCK_WAIT=2 "$GUARD" "$STAGED" "$TARGET" 2>&1); then
+  echo "FAIL: the guard ran while another held the lock" >&2
+  exit 1
+fi
+grep -q 'another guard' <<< "$out" || { echo "FAIL: no error about the lock: $out" >&2; exit 1; }
+[[ "$(cat "$TARGET")" == "initial-good-config" ]] || { echo "FAIL: the target changed under a lock" >&2; exit 1; }
+echo "== guard.sh: a lock left behind is taken over"
+touch -d '-10 minutes' "$TARGET.lock"
+out=$(GUARD_LOCK_WAIT=2 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a stale lock stopped the guard: $out" >&2; exit 1; }
+grep -q 'taking over' <<< "$out" || { echo "FAIL: no warning about the stale lock: $out" >&2; exit 1; }
+grep -q 'id: client' "$TARGET" || { echo "FAIL: the file was not promoted after the stale lock" >&2; exit 1; }
+[[ ! -d "$TARGET.lock" ]] || { echo "FAIL: the lock was not released" >&2; exit 1; }
+
 echo "== guard.sh: first render, before APISIX runs"
 rm -f "$TARGET"
 cat << 'EOF' > "$STAGED"

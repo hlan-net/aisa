@@ -21,7 +21,7 @@
 # Skipped backend {{ .ID | toJSON }}: missing 'models' metadata
   {{- else if not (eq (index .ServiceMeta "provider") "openai-compatible") }}
 # Skipped backend {{ .ID | toJSON }}: unsupported provider {{ index .ServiceMeta "provider" | toJSON }}
-  {{- else if and $timeout (not (regexMatch "^[1-9][0-9]{0,8}$" $timeout)) }}
+  {{- else if and $timeout (not (regexMatch "^[1-9][0-9]{0,17}$" $timeout)) }}
 # Skipped backend {{ .ID | toJSON }}: invalid 'timeout' metadata {{ $timeout | toJSON }} (want whole seconds)
   {{- else }}
     {{- scratch.MapSet "valid" .ID "1" }}
