@@ -11,6 +11,11 @@
 #
 #   GUARD_CONTROL_URL     APISIX's Control API, from the same pod     http://127.0.0.1:9090
 #   GUARD_VERIFY_TIMEOUT  seconds to wait for APISIX to load the file  10
+#   GUARD_EMPTY_GRACE     seconds a file without model routes waits    300
+#                         before it replaces one that has them
+#
+# consul-template exits when this script fails, and Kubernetes restarts its container, which
+# renders again: that is the retry of a rejected file. A hold (below) is not a failure.
 
 set -e
 
@@ -23,6 +28,10 @@ if [ -z "$STAGED" ] || [ -z "$TARGET" ]; then
 fi
 
 if [ ! -f "$STAGED" ]; then
+    if [ -n "$GUARD_RECHECK" ]; then
+        # The recheck of a hold, and a newer render was promoted meanwhile: nothing to do.
+        exit 0
+    fi
     echo "guard: error: staged file '$STAGED' does not exist" >&2
     exit 1
 fi
@@ -65,9 +74,18 @@ fi
 
 CONTROL="${GUARD_CONTROL_URL:-http://127.0.0.1:9090}"
 TIMEOUT="${GUARD_VERIFY_TIMEOUT:-10}"
-# The IDs of the routes: the items of the top-level routes section only (global_rules has IDs too).
-IDS=$(awk '/^routes:/ { f = 1; next } /^[^[:space:]#]/ { f = 0 } f && /^[[:space:]]*- id:/' "$STAGED" |
-    sed -E 's/^[[:space:]]*- id:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')
+GRACE="${GUARD_EMPTY_GRACE:-300}"
+# route_ids <file>: the IDs of the routes, from the items of the top-level routes section only
+# (global_rules has IDs too).
+route_ids() {
+    awk '/^routes:/ { f = 1; next } /^[^[:space:]#]/ { f = 0 } f && /^[[:space:]]*- id:/' "$1" |
+        sed -E 's/^[[:space:]]*- id:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/'
+}
+# model_routes <file>: how many routes serve a model (the template prefixes them with "model-").
+model_routes() {
+    route_ids "$1" | grep -c '^model-' || true
+}
+IDS=$(route_ids "$STAGED")
 
 # The first render, before APISIX starts: nothing to compare with and nothing to go back to.
 if [ ! -f "$TARGET" ]; then
@@ -75,6 +93,40 @@ if [ ! -f "$TARGET" ]; then
     echo "guard: promoted '$STAGED' -> '$TARGET' (first render, not checked against APISIX)"
     exit 0
 fi
+
+# 6. A file without model routes replaces one that has them only after a grace period
+# (PROXY_CONTRACT.md, Checking the rendered config). The catalog can come back empty although
+# the backends are fine: a render token that may not read the service, a Consul that lost its
+# data. Until the period is over the current file stays, and the hold is rechecked when it ends:
+# consul-template runs this script again only when the rendered file changes, so the recheck
+# is left behind as a process of its own. A hold is not a failure; this script then exits 0.
+EMPTY_SINCE="$TARGET.empty-since"
+RECHECK="$TARGET.recheck"
+NOW=$(date +%s)
+if [ "$(model_routes "$STAGED")" -eq 0 ] && [ "$(model_routes "$TARGET")" -gt 0 ]; then
+    if [ ! -f "$EMPTY_SINCE" ]; then
+        echo "$NOW" > "$EMPTY_SINCE"
+    fi
+    SINCE=$(cat "$EMPTY_SINCE")
+    case "$SINCE" in
+        ''|*[!0-9]*) SINCE=$NOW; echo "$NOW" > "$EMPTY_SINCE" ;;
+    esac
+    REMAINING=$((GRACE - (NOW - SINCE)))
+    if [ "$REMAINING" -gt 0 ]; then
+        echo "guard: warning: the rendered file has no model route; the current file with $(model_routes "$TARGET") stays for another ${REMAINING}s (GUARD_EMPTY_GRACE=$GRACE)" >&2
+        # One recheck per hold; a new one when the last is gone (the container restarted).
+        if [ -z "$GUARD_RECHECK" ] && ! { [ -f "$RECHECK" ] && kill -0 "$(cat "$RECHECK")" 2>/dev/null; }; then
+            # Its output goes to the container's log (the streams of PID 1) where that is allowed.
+            OUT=/proc/1/fd/1; [ -w "$OUT" ] || OUT=/dev/null
+            ERR=/proc/1/fd/2; [ -w "$ERR" ] || ERR=/dev/null
+            GUARD_RECHECK=1 setsid sh -c "sleep $REMAINING; exec \"$0\" \"$STAGED\" \"$TARGET\"" >"$OUT" 2>"$ERR" </dev/null &
+            echo $! > "$RECHECK"
+        fi
+        exit 0
+    fi
+    echo "guard: warning: the rendered file has had no model route for $((NOW - SINCE))s; promoting it, every model now gets the gateway's 503" >&2
+fi
+rm -f "$EMPTY_SINCE" "$RECHECK"
 
 # APISIX reloads the file when its modification time, in seconds, changes, and reports that
 # time as the modifiedIndex of every route it loaded from it. Two renders within a second
