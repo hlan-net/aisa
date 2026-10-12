@@ -52,7 +52,7 @@ Three contracts connect aisa to its proxy: a **decision API** (forward-auth patt
 | [ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md) | Components, traffic path, failure modes, reference deployment |
 | [PROXY_CONTRACT.md](docs/concepts/PROXY_CONTRACT.md) | The three aisa ↔ proxy contracts, the `aisa_*` metrics and the proxy checklist |
 | [VAULT.md](docs/concepts/VAULT.md) | Consumer credentials and provider keys from Vault |
-| [CONSUL.md](docs/concepts/CONSUL.md) | Backends, prices and budgets in Consul |
+| [CONSUL.md](docs/concepts/CONSUL.md) | Backends, prices, budgets and consumers in Consul |
 | [KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md) | What applications see: `Model` objects and a Secret with their key (draft) |
 | **Features** | |
 | [quotas-and-budgets.md](docs/features/quotas-and-budgets.md) | Token quotas and monthly budgets, both in tokens |
