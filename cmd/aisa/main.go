@@ -56,6 +56,7 @@ import (
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/quotas"
+	"github.com/hlan-net/aisa/internal/render"
 	"github.com/hlan-net/aisa/internal/server"
 	"github.com/hlan-net/aisa/internal/vault"
 	"github.com/hlan-net/aisa/internal/version"
@@ -136,7 +137,8 @@ func run(args []string) error {
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide")),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
-			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens}))
+			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens}),
+		render.New(m, log.With("component", "render")))
 	if err := srv.Run(ctx, cfg.Addr, cfg.MetricsAddr); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
@@ -176,10 +178,11 @@ func observeProfiles(m *metrics.Metrics, s quotas.LoadStats) {
 }
 
 // routes registers the contract endpoints.
-func routes(srv *server.Server, decision, usage http.Handler) {
+func routes(srv *server.Server, decision, usage, renders http.Handler) {
 	srv.Handle("POST /v1/decide", decision)
 	srv.Handle("GET /v1/decide", decision)
 	srv.Handle("POST /v1/usage", usage)
+	srv.Handle("POST /v1/render", renders)
 }
 
 // observeLoad puts the result of a load of the consumers into the metrics.

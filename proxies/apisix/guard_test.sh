@@ -341,4 +341,183 @@ fi
 grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the new file was not kept" >&2; exit 1; }
 grep -q 'not checked' <<< "$out" || { echo "FAIL: no warning that the routes are not checked: $out" >&2; exit 1; }
 
+# Every render is reported to AISA_RENDER_URI when it is set (PROXY_CONTRACT.md, Reporting a
+# render): a receiver that keeps the bodies it is sent.
+REPORTS="${TMPDIR}/reports"
+RPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 - "$RPORT" "$REPORTS" << 'EOF' &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+port, out = int(sys.argv[1]), sys.argv[2]
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        with open(out, "ab") as f:
+            f.write(self.path.encode() + b" " + body + b"\n")
+        self.send_response(204)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+HTTPServer(("127.0.0.1", port), H).serve_forever()
+EOF
+RECEIVER=$!
+trap 'kill "$RECEIVER" 2>/dev/null || true; rm -rf "$TMPDIR"' EXIT
+export AISA_RENDER_URI="http://127.0.0.1:$RPORT/v1/render"
+for _ in $(seq 1 20); do curl -s -o /dev/null -X POST "$AISA_RENDER_URI" && break; sleep 0.2; done
+: > "$REPORTS"
+
+echo "== guard.sh: a promoted render is reported"
+echo "$PREVIOUS" > "$TARGET"
+cat << 'EOF' > "$STAGED"
+routes:
+  - id: client
+  - id: "model-qwen3"
+    plugins:
+      ai-proxy-multi:
+        instances:
+          - name: "ollama-1"
+          - name: "ollama-2"
+  - id: "model-llama"
+    plugins:
+      ai-proxy-multi:
+        instances:
+          - name: "ollama-1"
+  - id: no-backend
+#END
+EOF
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || true # the Control API is gone: promoted with a warning
+grep -q '"result":"promoted","reason":"","backends":2,"models":2}' "$REPORTS" || { echo "FAIL: the promoted render was not reported with its backends and models: $(cat "$REPORTS")" >&2; exit 1; }
+grep -q '^/v1/render {"id":"[0-9]*-[0-9a-f]*","ts":"[0-9T:-]*Z",' "$REPORTS" || { echo "FAIL: the report has no time or went to the wrong path: $(cat "$REPORTS")" >&2; exit 1; }
+
+echo "== guard.sh: a rejected render is reported with the reason"
+: > "$REPORTS"
+cat << 'EOF' > "$STAGED"
+routes:
+  - id: client
+  - id: client
+  - id: no-backend
+#END
+EOF
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 && { echo "FAIL: duplicate route IDs were accepted" >&2; exit 1; }
+grep -q '"result":"rejected","reason":"staged file .* contains duplicate route IDs: client ","backends":0,"models":0}' "$REPORTS" || { echo "FAIL: the rejected render was not reported with its reason: $(cat "$REPORTS")" >&2; exit 1; }
+
+echo "== guard.sh: a long reason is cut to what aisa takes"
+: > "$REPORTS"
+{
+  echo "routes:"
+  echo "  - id: client"
+  for i in $(seq 1 40); do printf '  - id: "model-%s-%02d"\n' "$(printf 'x%.0s' $(seq 1 50))" "$i"; done
+  for i in $(seq 1 40); do printf '  - id: "model-%s-%02d"\n' "$(printf 'x%.0s' $(seq 1 50))" "$i"; done
+  echo "  - id: no-backend"
+  echo "#END"
+} > "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 && { echo "FAIL: 40 duplicate route IDs were accepted" >&2; exit 1; }
+# The reason as aisa reads it, after JSON unquoting: the quotes of the route IDs are escaped.
+reason_len=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print(len(json.loads(sys.stdin.readline())["reason"]))')
+[[ "$reason_len" -gt 900 && "$reason_len" -le 1024 ]] || { echo "FAIL: the reason was not cut to 1024 bytes: $reason_len" >&2; exit 1; }
+grep -q '"result":"rejected"' "$REPORTS" || { echo "FAIL: the rejected render with a long reason was not reported" >&2; exit 1; }
+
+echo "== guard.sh: a held render is reported"
+: > "$REPORTS"
+export GUARD_EMPTY_GRACE=60
+with_models "$TARGET"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold failed" >&2; exit 1; }
+grep -q '"result":"held","reason":"the rendered file has no model route; .*","backends":0,"models":0}' "$REPORTS" || { echo "FAIL: the held render was not reported: $(cat "$REPORTS")" >&2; exit 1; }
+unset GUARD_EMPTY_GRACE
+
+echo "== guard.sh: reports that cannot be delivered do not fail the render, and wait in order"
+export AISA_RENDER_URI="http://127.0.0.1:1/v1/render"
+rm -rf "$TARGET.reports"
+echo "$PREVIOUS" > "$TARGET"
+stage
+if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
+  echo "FAIL: a render failed because its report could not be delivered: $out" >&2
+  exit 1
+fi
+grep -q 'was not reported' <<< "$out" || { echo "FAIL: no warning about the undelivered report: $out" >&2; exit 1; }
+# A second render, held, while aisa is still away: both reports wait, the held one after the promoted one.
+export GUARD_EMPTY_GRACE=60
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the held render failed" >&2; exit 1; }
+unset GUARD_EMPTY_GRACE
+queued=$(ls "$TARGET.reports" | grep -c '\.json$')
+[[ "$queued" == 2 ]] || { echo "FAIL: $queued reports wait, want 2" >&2; exit 1; }
+echo "== guard.sh: --resend delivers the waiting reports in order, each with an id"
+: > "$REPORTS"
+export AISA_RENDER_URI="http://127.0.0.1:$RPORT/v1/render"
+"$GUARD" --resend "$TARGET" || { echo "FAIL: --resend failed" >&2; exit 1; }
+[[ "$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print(" ".join(json.loads(l)["result"] for l in sys.stdin))')" == "promoted held" ]] ||
+  { echo "FAIL: the waiting reports were not delivered in order: $(cat "$REPORTS")" >&2; exit 1; }
+ids=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print("\n".join(json.loads(l)["id"] for l in sys.stdin))')
+[[ "$(sort -u <<< "$ids" | grep -c .)" == 2 ]] || { echo "FAIL: the reports do not have ids of their own: $ids" >&2; exit 1; }
+[[ -z "$(ls "$TARGET.reports" | grep '\.json$')" ]] || { echo "FAIL: delivered reports were not removed" >&2; exit 1; }
+"$GUARD" --resend "$TARGET" || { echo "FAIL: --resend with nothing waiting failed" >&2; exit 1; }
+[[ "$(grep -c . "$REPORTS")" == 2 ]] || { echo "FAIL: --resend with nothing waiting sent something" >&2; exit 1; }
+rm -f "$TARGET.empty-since"
+echo "== guard.sh: a slow aisa gets 3 s of a render, and the rest of the queue waits for --resend"
+SPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 - "$SPORT" "$REPORTS" << 'EOF' &
+import sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+port, out = int(sys.argv[1]), sys.argv[2]
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        time.sleep(2)
+        with open(out, "ab") as f:
+            f.write(self.path.encode() + b" " + body + b"\n")
+        self.send_response(204)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+HTTPServer(("127.0.0.1", port), H).serve_forever()
+EOF
+SLOW=$!
+trap 'kill "$RECEIVER" "$SLOW" 2>/dev/null || true; rm -rf "$TMPDIR"' EXIT
+for _ in $(seq 1 20); do curl -s -o /dev/null -X POST "http://127.0.0.1:$SPORT/" && break; sleep 0.2; done
+export AISA_RENDER_URI="http://127.0.0.1:1/v1/render"
+rm -rf "$TARGET.reports"
+echo "$PREVIOUS" > "$TARGET"
+for i in 1 2 3; do stage; "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1; done
+[[ "$(ls "$TARGET.reports" | grep -c '\.json$')" == 3 ]] || { echo "FAIL: 3 reports should wait" >&2; exit 1; }
+export AISA_RENDER_URI="http://127.0.0.1:$SPORT/v1/render"
+: > "$REPORTS"
+stage
+started=$(date +%s)
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the render failed with a slow aisa" >&2; exit 1; }
+took=$(( $(date +%s) - started ))
+[[ "$took" -le 6 ]] || { echo "FAIL: a render waited ${took}s for a slow aisa, want 3 s or so" >&2; exit 1; }
+[[ "$(ls "$TARGET.reports" | grep -c '\.json$')" -ge 2 ]] || { echo "FAIL: a render sent more of the queue than its 3 s allow" >&2; exit 1; }
+"$GUARD" --resend "$TARGET" >/dev/null 2>&1 || { echo "FAIL: --resend failed with a slow aisa" >&2; exit 1; }
+[[ -z "$(ls "$TARGET.reports" | grep '\.json$')" ]] || { echo "FAIL: --resend did not drain the queue within its time" >&2; exit 1; }
+# A report whose answer came too late is sent again, and arrives twice: that is what the ids
+# are for, and aisa counts it once. Every report arrived at least once.
+unique=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print(len({json.loads(l)["id"] for l in sys.stdin}))')
+[[ "$unique" == 4 ]] || { echo "FAIL: $unique distinct reports arrived, want 4" >&2; exit 1; }
+kill $SLOW 2>/dev/null; wait $SLOW 2>/dev/null || true
+export AISA_RENDER_URI="http://127.0.0.1:$RPORT/v1/render"
+
+echo "== guard.sh: a queue that cannot be written does not fail the render"
+rm -rf "$TARGET.reports" && mkdir "$TARGET.reports" && chmod 500 "$TARGET.reports"
+echo "$PREVIOUS" > "$TARGET"
+stage
+if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
+  echo "FAIL: a render failed because its report could not be queued: $out" >&2
+  exit 1
+fi
+grep -q 'could not be queued' <<< "$out" || { echo "FAIL: no warning about the queue: $out" >&2; exit 1; }
+chmod 700 "$TARGET.reports" && rm -rf "$TARGET.reports"
+echo "== guard.sh: --resend steps aside while another guard runs"
+mkdir -p "$TARGET.reports" && echo '{"id":"x","result":"promoted"}' > "$TARGET.reports/0000000001.json"
+sleep 300 &
+HOLDER=$!
+mkdir "$TARGET.lock" && echo "$HOLDER" > "$TARGET.lock/pid"
+: > "$REPORTS"
+GUARD_LOCK_WAIT=1 "$GUARD" --resend "$TARGET" 2>/dev/null || { echo "FAIL: --resend failed under another guard's lock" >&2; exit 1; }
+[[ ! -s "$REPORTS" ]] || { echo "FAIL: --resend sent under another guard's lock" >&2; exit 1; }
+kill "$HOLDER"; wait "$HOLDER" 2>/dev/null || true
+rm -rf "$TARGET.lock" "$TARGET.reports"
+unset AISA_RENDER_URI
+
 echo "ok: all guard tests passed"

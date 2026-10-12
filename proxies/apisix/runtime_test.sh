@@ -55,14 +55,20 @@ expect() {
 # sent to <decide uri> and usage to the stub.
 render() {
     local dir=$1 decide=$2
-    mkdir -p "$dir"
-    chmod 777 "$dir" # consul-template runs as a user of its own in the container
+    mkdir -p "$dir" "$dir/apisix.yaml.reports"
+    chmod 777 "$dir" "$dir/apisix.yaml.reports" # consul-template runs as a user of its own in the container
     docker run --rm --network "$NETWORK" \
         -e CONSUL_HTTP_ADDR=consul:8500 -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN=dev-root \
         -e AISA_DECIDE_URI="$decide" -e AISA_USAGE_URI=http://stub-aisa:8080/v1/usage \
+        -e AISA_RENDER_URI=http://stub-aisa:8080/v1/render \
         -v "$SCRIPT_DIR":/etc/apisix/aisa:ro -v "$dir":/rendered \
         "$CT_IMAGE" -config=/etc/apisix/aisa/consul-template.hcl -once
     [[ -s "$dir/apisix.yaml" ]] || fail "guard.sh promoted nothing in $dir"
+}
+
+# renders: the render reports the stub received since the last clear, as "result backends models".
+renders() {
+    curl -fsS "$STUB/debug/requests?kind=render" | jq -r '.[].body | "\(.result) \(.backends) \(.models)"'
 }
 
 # proxy <dir>: (re)starts APISIX on the config rendered into <dir> and waits for its routes.
@@ -135,7 +141,10 @@ curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
 EOF
 
 echo "== aisa reachable"
+curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
 render "$OUT/reachable" http://stub-aisa:8080/v1/decide
+# The first render is promoted unchecked, and reported: the dev backends and the test's.
+expect "the first render is reported as promoted" "promoted 3 4" "$(renders)"
 proxy "$OUT/reachable"
 one "allowed" dev-key-chat-ui qwen3 200 chat-ui
 one "denied by a quota" dev-key-blocked qwen3 429 ""
@@ -154,6 +163,7 @@ echo "== guard.sh against APISIX"
 guard() {
     local dir=$1
     docker run --rm --network "container:$CONTAINER" --entrypoint sh \
+        -e AISA_RENDER_URI=http://stub-aisa:8080/v1/render \
         -v "$SCRIPT_DIR":/etc/apisix/aisa:ro -v "$dir":/rendered \
         "$CT_IMAGE" /etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml
 }
@@ -174,6 +184,7 @@ grep -q 'model-qwen3' <<<"$out" || fail "guard.sh did not name the route APISIX 
 ok "guard.sh: a route APISIX rejects is found, and the file is not kept"
 cmp -s "$dir/apisix.yaml" "$OUT/previous.yaml" || fail "guard.sh did not put the previous file back"
 ok "guard.sh: the previous file is back"
+expect "guard.sh: the rejected render is reported" "rejected 2 3" "$(renders | tail -n1)"
 sleep 2 # APISIX loads the restored file
 one "served after the rejected file" dev-key-chat-ui qwen3 200 chat-ui
 cp "$OUT/previous.yaml" "$dir/apisix.yaml.staged"
@@ -181,6 +192,7 @@ chmod 666 "$dir/apisix.yaml.staged"
 sleep 1
 out=$(guard "$dir" 2>&1) || fail "guard.sh rejected a file APISIX loads: $out"
 ok "guard.sh: a file APISIX loads in full is kept"
+expect "guard.sh: the promoted render is reported" "promoted 2 3" "$(renders | tail -n1)"
 
 echo "== aisa unreachable"
 # Nothing listens on this port: forward-auth fails and degrades to the internal hop.

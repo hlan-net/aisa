@@ -89,9 +89,9 @@ serviceAccount:
   # Empty: the chart's full name.
   name: ""
 
-# aisa's Services are always ClusterIPs: port 8080 for the proxy (/v1/decide, and /v1/usage, which
-# takes usage events without authentication), and port 9090 for /metrics. Neither is published
-# outside the cluster.
+# aisa's Services are always ClusterIPs: port 8080 for the proxy (/v1/decide, and /v1/usage and
+# /v1/render, which take usage events and render reports without authentication), and port 9090
+# for /metrics. Neither is published outside the cluster.
 
 # aisa's API answers only its proxy. The peers in extraFrom (NetworkPolicy "from" peers), such as
 # Prometheus, reach the metrics port 9090 only, not the API: they cannot send usage events (#46).

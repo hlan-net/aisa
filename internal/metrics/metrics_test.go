@@ -24,13 +24,18 @@ func TestContractMetrics(t *testing.T) {
 	m.UsageRequestsRejected.WithLabelValues(UsageRequestMalformed).Inc()
 	m.UsageMissing.WithLabelValues("chat-ui", "qwen3", "ollama-1").Inc()
 	m.TokensEstimated.WithLabelValues("chat-ui", "qwen3", "ollama-1").Add(60)
+	m.ConfigRenders.WithLabelValues(RenderPromoted).Inc()
+	m.ConfigRendered.WithLabelValues().Set(1)
+	m.ConfigBackends.WithLabelValues().Set(1)
+	m.ConfigModels.WithLabelValues().Set(1)
 
 	// The names of contract 4. A renamed metric breaks dashboards and alerts.
 	for _, name := range []string{
 		"aisa_requests_total", "aisa_tokens_total", "aisa_cost_total", "aisa_budget_limit",
 		"aisa_budget_spent", "aisa_latency_seconds", "aisa_ttft_seconds", "aisa_decisions_total",
 		"aisa_usage_events_total", "aisa_usage_requests_rejected_total", "aisa_usage_missing_total",
-		"aisa_tokens_estimated_total", "aisa_build_info",
+		"aisa_tokens_estimated_total", "aisa_config_renders_total", "aisa_config_rendered_timestamp_seconds",
+		"aisa_config_backends", "aisa_config_models", "aisa_build_info",
 	} {
 		n, err := testutil.GatherAndCount(m.Gatherer(), name)
 		if err != nil {
