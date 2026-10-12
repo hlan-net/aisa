@@ -401,6 +401,22 @@ EOF
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 && { echo "FAIL: duplicate route IDs were accepted" >&2; exit 1; }
 grep -q '"result":"rejected","reason":"staged file .* contains duplicate route IDs: client ","backends":0,"models":0}' "$REPORTS" || { echo "FAIL: the rejected render was not reported with its reason: $(cat "$REPORTS")" >&2; exit 1; }
 
+echo "== guard.sh: a long reason is cut to what aisa takes"
+: > "$REPORTS"
+{
+  echo "routes:"
+  echo "  - id: client"
+  for i in $(seq 1 40); do printf '  - id: "model-%s-%02d"\n' "$(printf 'x%.0s' $(seq 1 50))" "$i"; done
+  for i in $(seq 1 40); do printf '  - id: "model-%s-%02d"\n' "$(printf 'x%.0s' $(seq 1 50))" "$i"; done
+  echo "  - id: no-backend"
+  echo "#END"
+} > "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 && { echo "FAIL: 40 duplicate route IDs were accepted" >&2; exit 1; }
+# The reason as aisa reads it, after JSON unquoting: the quotes of the route IDs are escaped.
+reason_len=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print(len(json.loads(sys.stdin.readline())["reason"]))')
+[[ "$reason_len" -gt 900 && "$reason_len" -le 1024 ]] || { echo "FAIL: the reason was not cut to 1024 bytes: $reason_len" >&2; exit 1; }
+grep -q '"result":"rejected"' "$REPORTS" || { echo "FAIL: the rejected render with a long reason was not reported" >&2; exit 1; }
+
 echo "== guard.sh: a held render is reported"
 : > "$REPORTS"
 export GUARD_EMPTY_GRACE=60
@@ -408,7 +424,6 @@ with_models "$TARGET"
 without_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold failed" >&2; exit 1; }
 grep -q '"result":"held","reason":"the rendered file has no model route; .*","backends":0,"models":0}' "$REPORTS" || { echo "FAIL: the held render was not reported: $(cat "$REPORTS")" >&2; exit 1; }
-kill "$(cat "$TARGET.recheck")" 2>/dev/null || true
 unset GUARD_EMPTY_GRACE
 
 echo "== guard.sh: a report that cannot be delivered does not fail the render"

@@ -97,15 +97,15 @@ func validate(rep Report) error {
 }
 
 // record puts a valid report into the metrics and the log. The gauges describe the config
-// the gateway runs, so only a promoted render sets them.
+// the gateway runs, so only a promoted render sets them, and they stay absent until one.
 func (h *Handler) record(rep Report) {
 	h.metrics.ConfigRenders.WithLabelValues(rep.Result).Inc()
 	at := h.when(rep.Timestamp)
 	switch rep.Result {
 	case metrics.RenderPromoted:
-		h.metrics.ConfigRendered.Set(float64(at.Unix()))
-		h.metrics.ConfigBackends.Set(float64(rep.Backends))
-		h.metrics.ConfigModels.Set(float64(rep.Models))
+		h.metrics.ConfigRendered.WithLabelValues().Set(float64(at.Unix()))
+		h.metrics.ConfigBackends.WithLabelValues().Set(float64(rep.Backends))
+		h.metrics.ConfigModels.WithLabelValues().Set(float64(rep.Models))
 		h.log.Info("config render promoted", "backends", rep.Backends, "models", rep.Models, "at", at)
 	default:
 		h.log.Warn("config render not promoted",

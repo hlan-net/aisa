@@ -131,10 +131,11 @@ backends() {
 
 # report <result> <reason> <file>: tells aisa what became of this render, with the backends and
 # models of <file>, when AISA_RENDER_URI is set. Best effort: aisa may be down, and a render
-# does not wait for it. The reason is a fixed phrase and route IDs, quoted for JSON anyway.
+# waits for it 3 s at most. The reason is a fixed phrase and route IDs, quoted for JSON anyway
+# and cut to the 1024 bytes aisa takes: a file with many rejected routes names the first ones.
 report() {
     [ -n "$AISA_RENDER_URI" ] || return 0
-    reason=$(printf '%s' "$2" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
+    reason=$(printf '%.1000s' "$2" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
     body=$(printf '{"ts":"%s","result":"%s","reason":"%s","backends":%s,"models":%s}' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$reason" "$(backends "$3")" "$(model_routes "$3")")
     wget -q -O /dev/null -T 3 --header 'Content-Type: application/json' --post-data "$body" "$AISA_RENDER_URI" 2>/dev/null ||

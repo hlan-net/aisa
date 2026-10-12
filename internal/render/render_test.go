@@ -30,19 +30,34 @@ func TestHandler(t *testing.T) {
 		return testutil.ToFloat64(m.ConfigRenders.WithLabelValues(result))
 	}
 
+	// Before the first report the gauges are absent, and every result series starts at zero.
+	for _, name := range []string{"aisa_config_rendered_timestamp_seconds", "aisa_config_backends", "aisa_config_models"} {
+		if n, err := testutil.GatherAndCount(m.Gatherer(), name); err != nil || n != 0 {
+			t.Errorf("%s before the first report: %d series, %v; want none", name, n, err)
+		}
+	}
+	for _, result := range []string{metrics.RenderPromoted, metrics.RenderRejected, metrics.RenderHeld} {
+		if got := renders(result); got != 0 {
+			t.Errorf("aisa_config_renders_total{%s} = %v before any report, want 0 and present", result, got)
+		}
+	}
+	if n, _ := testutil.GatherAndCount(m.Gatherer(), "aisa_config_renders_total"); n != 3 {
+		t.Errorf("aisa_config_renders_total has %d series before any report, want 3", n)
+	}
+
 	if got := post(`{"ts": "2026-10-12T11:59:00Z", "result": "promoted", "backends": 2, "models": 3}`); got != http.StatusNoContent {
 		t.Fatalf("promoted: status = %d, want 204", got)
 	}
 	if got := renders(metrics.RenderPromoted); got != 1 {
 		t.Errorf("aisa_config_renders_total{promoted} = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(m.ConfigRendered); got != float64(now.Add(-time.Minute).Unix()) {
+	if got := testutil.ToFloat64(m.ConfigRendered.WithLabelValues()); got != float64(now.Add(-time.Minute).Unix()) {
 		t.Errorf("aisa_config_rendered_timestamp_seconds = %v, want the report's time", got)
 	}
-	if got := testutil.ToFloat64(m.ConfigBackends); got != 2 {
+	if got := testutil.ToFloat64(m.ConfigBackends.WithLabelValues()); got != 2 {
 		t.Errorf("aisa_config_backends = %v, want 2", got)
 	}
-	if got := testutil.ToFloat64(m.ConfigModels); got != 3 {
+	if got := testutil.ToFloat64(m.ConfigModels.WithLabelValues()); got != 3 {
 		t.Errorf("aisa_config_models = %v, want 3", got)
 	}
 
@@ -59,7 +74,7 @@ func TestHandler(t *testing.T) {
 	if got := renders(metrics.RenderHeld); got != 1 {
 		t.Errorf("aisa_config_renders_total{held} = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(m.ConfigModels); got != 3 {
+	if got := testutil.ToFloat64(m.ConfigModels.WithLabelValues()); got != 3 {
 		t.Errorf("aisa_config_models = %v after a rejected render, want 3 still", got)
 	}
 
@@ -67,10 +82,10 @@ func TestHandler(t *testing.T) {
 	if got := post(`{"ts": "2030-01-01T00:00:00Z", "result": "promoted"}`); got != http.StatusNoContent {
 		t.Fatalf("future: status = %d, want 204", got)
 	}
-	if got := testutil.ToFloat64(m.ConfigRendered); got != float64(now.Unix()) {
+	if got := testutil.ToFloat64(m.ConfigRendered.WithLabelValues()); got != float64(now.Unix()) {
 		t.Errorf("aisa_config_rendered_timestamp_seconds = %v for a future ts, want now", got)
 	}
-	if got := testutil.ToFloat64(m.ConfigModels); got != 0 {
+	if got := testutil.ToFloat64(m.ConfigModels.WithLabelValues()); got != 0 {
 		t.Errorf("aisa_config_models = %v, want 0", got)
 	}
 

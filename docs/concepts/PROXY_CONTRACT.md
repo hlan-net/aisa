@@ -165,7 +165,7 @@ A rejected render or an empty catalog must show in aisa's metrics and alerts, no
 | `reason` | why a render was rejected or held, for the log (max 1024 bytes) |
 | `backends`, `models` | what the rendered file holds: the backends its routes name, and the models with a route; non-negative |
 
-aisa answers `204 No Content`, or `400` for a report it cannot use. It counts every report in `aisa_config_renders_total{result}` and, for a promoted one, sets `aisa_config_rendered_timestamp_seconds`, `aisa_config_backends` and `aisa_config_models` to describe the config the gateway runs. The report is best effort: the proxy does not wait for aisa, and a render while aisa is down goes unreported, which `aisa_config_rendered_timestamp_seconds` shows as a config older than the backends' changes in Consul. In the APISIX proxy, `guard.sh` sends the report when `AISA_RENDER_URI` is set, which the chart does.
+aisa answers `204 No Content`, or `400` for a report it cannot use. It counts every report in `aisa_config_renders_total{result}` and, for a promoted one, sets `aisa_config_rendered_timestamp_seconds`, `aisa_config_backends` and `aisa_config_models` to describe the config the gateway runs; the three gauges are absent until the first promoted report since aisa started, because a restart forgets the config. The report is best effort: the proxy waits for aisa's answer a few seconds at most (3 s in the APISIX proxy) and goes on without it, and a render while aisa is down goes unreported until the next render. In the APISIX proxy, `guard.sh` sends the report when `AISA_RENDER_URI` is set, which the chart does.
 
 ## 4. Metrics (output of aisa)
 

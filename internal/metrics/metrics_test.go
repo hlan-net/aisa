@@ -25,6 +25,9 @@ func TestContractMetrics(t *testing.T) {
 	m.UsageMissing.WithLabelValues("chat-ui", "qwen3", "ollama-1").Inc()
 	m.TokensEstimated.WithLabelValues("chat-ui", "qwen3", "ollama-1").Add(60)
 	m.ConfigRenders.WithLabelValues(RenderPromoted).Inc()
+	m.ConfigRendered.WithLabelValues().Set(1)
+	m.ConfigBackends.WithLabelValues().Set(1)
+	m.ConfigModels.WithLabelValues().Set(1)
 
 	// The names of contract 4. A renamed metric breaks dashboards and alerts.
 	for _, name := range []string{

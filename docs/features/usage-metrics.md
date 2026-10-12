@@ -15,7 +15,7 @@ Full list in [`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md#4-metrics-outpu
 - `aisa_usage_missing_total{consumer,model,backend}`: successful requests whose event has no token counts, because the backend did not stream usage or the client disconnected mid-stream. aisa charges them to the quota by estimate: the consumer's recent average for the model, else the model's across consumers, else `AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS` (0: nothing). The estimates are in `aisa_tokens_estimated_total{consumer,model,backend}`, apart from the exact `aisa_tokens_total`, so a dashboard shows how much of the usage is a guess ([#12](https://github.com/hlan-net/aisa/issues/12))
 - `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `unavailable` (aisa cannot verify credentials, under the consumer `unknown`, or cannot know a consumer's token quota, and answers 503), `deny_quota`, `deny_budget`, `downgrade`
 
-aisa serves `/metrics` on its own address when `AISA_METRICS_ADDR` is set (the chart sets `:9090`, with a Service `<release>-metrics` that its ServiceMonitor scrapes); `AISA_ADDR` then serves only the proxy's endpoints, `/v1/decide` and `/v1/usage`. Allow Prometheus the metrics port only: a scraper that reaches `/v1/usage` could send usage events that charge consumers' quotas ([#46](https://github.com/hlan-net/aisa/issues/46)).
+aisa serves `/metrics` on its own address when `AISA_METRICS_ADDR` is set (the chart sets `:9090`, with a Service `<release>-metrics` that its ServiceMonitor scrapes); `AISA_ADDR` then serves only the proxy's endpoints, `/v1/decide`, `/v1/usage` and `/v1/render`. Allow Prometheus the metrics port only: a scraper that reaches `/v1/usage` could send usage events that charge consumers' quotas ([#46](https://github.com/hlan-net/aisa/issues/46)).
 
 Cost is computed in aisa from the Consul prices, so no Prometheus rules with hardcoded prices are needed.
 
@@ -32,8 +32,8 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
 | `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
 | `aisa_config_renders_total{result}` | The proxy's renders of the gateway config: `promoted`, `rejected` (the check failed; the previous config stays) or `held` (a config without model routes waits for the grace period) |
-| `aisa_config_rendered_timestamp_seconds` | When the proxy last promoted a rendered config |
-| `aisa_config_backends`, `aisa_config_models` | The backends and the models with a route in that config |
+| `aisa_config_rendered_timestamp_seconds` | When the proxy last promoted a rendered config. Absent until the first report since aisa started: a restart forgets the config, and an absent gauge says so where a zero would claim an empty one |
+| `aisa_config_backends`, `aisa_config_models` | The backends and the models with a route in that config; absent until the first report, like the timestamp |
 
 Keep label cardinality in mind: `consumer` × `model` × `backend`. For large deployments, consumers can be aggregated into groups.
 
@@ -67,8 +67,7 @@ Shipped as a `PrometheusRule`:
 | `AisaBudgetExhausted` | a consumer is being denied or downgraded because its budget is used up |
 | `AisaBackendDown` | Consul health check for an `aisa-backend` is critical for more than 10 min |
 | `AisaConfigRenderRejected` | `aisa_config_renders_total{result="rejected"}` increases: a value in Consul or Vault renders a config the gateway cannot load in full; the gateway keeps the previous one until it is fixed |
-| `AisaConfigEmpty` | `aisa_config_models == 0` for 5 min, or `aisa_config_renders_total{result="held"}` increases: the catalog has no backend the proxy can render; held, the gateway serves the last config, promoted, every model gets 503 |
-| `AisaConfigStale` | `aisa_config_rendered_timestamp_seconds` is older than the last change of the `aisa-backend` services in Consul by more than 10 min: the proxy is not rendering, or not reporting |
+| `AisaConfigEmpty` | `aisa_config_models == 0` for 5 min, or `aisa_config_renders_total{result="held"}` increases: the catalog has no backend the proxy can render; held, the gateway serves the last config, promoted, every model gets 503. The gauge is absent until the proxy's first report after an aisa restart, so the alert does not fire on a restart |
 | `AisaDown` | aisa's scrape target is down for 2 min (fail policies are now in effect) |
 | `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |

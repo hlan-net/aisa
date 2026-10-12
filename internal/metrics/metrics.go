@@ -112,11 +112,14 @@ type Metrics struct {
 
 	// ConfigRenders counts the proxy's renders of the gateway config by result: promoted,
 	// rejected or held. ConfigRendered is when a render was last promoted, in seconds since
-	// the epoch, and ConfigBackends and ConfigModels are what that config holds.
+	// the epoch, and ConfigBackends and ConfigModels are what that config holds. The three
+	// gauges have no labels and are absent until the first promoted render since aisa
+	// started: a restart forgets the config, and an absent gauge says so where a zero would
+	// claim the gateway runs an empty one.
 	ConfigRenders  *prometheus.CounterVec
-	ConfigRendered prometheus.Gauge
-	ConfigBackends prometheus.Gauge
-	ConfigModels   prometheus.Gauge
+	ConfigRendered *prometheus.GaugeVec
+	ConfigBackends *prometheus.GaugeVec
+	ConfigModels   *prometheus.GaugeVec
 }
 
 // Values of the result label of aisa_consumer_loads_total.
@@ -229,18 +232,18 @@ func New(version string) *Metrics {
 			Name: "aisa_config_renders_total",
 			Help: "Renders of the gateway config reported by the proxy, by result: promoted, rejected or held.",
 		}, []string{"result"}),
-		ConfigRendered: prometheus.NewGauge(prometheus.GaugeOpts{
+		ConfigRendered: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "aisa_config_rendered_timestamp_seconds",
-			Help: "When the proxy last promoted a rendered gateway config, in seconds since the epoch.",
-		}),
-		ConfigBackends: prometheus.NewGauge(prometheus.GaugeOpts{
+			Help: "When the proxy last promoted a rendered gateway config, in seconds since the epoch; absent until the first report since aisa started.",
+		}, nil),
+		ConfigBackends: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "aisa_config_backends",
-			Help: "Backends in the gateway config the proxy last promoted.",
-		}),
-		ConfigModels: prometheus.NewGauge(prometheus.GaugeOpts{
+			Help: "Backends in the gateway config the proxy last promoted; absent until the first report since aisa started.",
+		}, nil),
+		ConfigModels: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "aisa_config_models",
-			Help: "Models with a route in the gateway config the proxy last promoted.",
-		}),
+			Help: "Models with a route in the gateway config the proxy last promoted; absent until the first report since aisa started.",
+		}, nil),
 	}
 
 	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -263,6 +266,9 @@ func New(version string) *Metrics {
 	// alert on increase() or rate() can see.
 	for _, reason := range UsageRequestReasons {
 		m.UsageRequestsRejected.WithLabelValues(reason)
+	}
+	for _, result := range []string{RenderPromoted, RenderRejected, RenderHeld} {
+		m.ConfigRenders.WithLabelValues(result)
 	}
 	return m
 }

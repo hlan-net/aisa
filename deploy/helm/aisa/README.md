@@ -15,7 +15,7 @@ Applications call the proxy's Service, `aisa-apisix` for a release named `aisa`,
 | Object | What it is |
 |---|---|
 | Deployment `<release>` | aisa, and a Vault Agent next to it that keeps a Consul ACL token in memory (`consul.token.fromVault`) |
-| Service `<release>` | `/v1/decide` and `/v1/usage` on port 8080, for the proxy; always a ClusterIP, because `/v1/usage` has no authentication |
+| Service `<release>` | `/v1/decide`, `/v1/usage` and `/v1/render` on port 8080, for the proxy; always a ClusterIP, because `/v1/usage` and `/v1/render` have no authentication |
 | Service `<release>-metrics` | `/metrics` (and the probes) on port 9090, for Prometheus; a ClusterIP. aisa serves them apart from the API (`AISA_METRICS_ADDR`, #46) |
 | Deployment, Service `<release>-redis` | Redis for the quota counters, nothing on disk (`redis.enabled`) |
 | NetworkPolicies | Only the proxy reaches aisa's API; the peers in `networkPolicy.extraFrom` (none by default) reach its metrics port only; only aisa reaches Redis |
