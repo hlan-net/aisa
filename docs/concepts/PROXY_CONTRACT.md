@@ -144,7 +144,28 @@ A value in Consul or Vault must not be able to change what the gateway serves be
 2. **consul-template renders to a staging file**, and its `command` checks that file and only then moves it to the path the gateway reads. The check uses the gateway's own validation where it has one, otherwise a schema the proxy ships, and also requires the client-facing route. A file that fails the check is not promoted: the gateway keeps serving the last good config.
 3. **An empty catalog is promoted only after a grace period** (5 minutes by default). Until then the last config stays. The catalog can come back empty although the backends are fine, for example when the render token may not read the service or Consul lost its data; after the grace period the empty config is promoted, and every model gets the gateway's 503. The same delay applies when every backend fails its health check at once: requests during it get the gateway's error for an unreachable backend instead of 503.
 
-How the proxy reports a rejected render or an empty catalog to aisa, so that it shows in `aisa_*` metrics and alerts and not only in a log, is still open ([#18](https://github.com/hlan-net/aisa/issues/18)).
+### Reporting a render
+
+A rejected render or an empty catalog must show in aisa's metrics and alerts, not only in the proxy's log ([#18](https://github.com/hlan-net/aisa/issues/18)). After each render, the check above reports its outcome to `POST /v1/render`:
+
+```json
+{
+  "ts": "2026-10-12T12:00:00Z",
+  "result": "promoted",
+  "reason": "",
+  "backends": 2,
+  "models": 3
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `ts` | when the render ended, ISO 8601; now when missing or in the future |
+| `result` | **required**: `promoted` (the gateway runs the file), `rejected` (the check failed and the previous file stays or is back) or `held` (a file without model routes waits for the grace period) |
+| `reason` | why a render was rejected or held, for the log (max 1024 bytes) |
+| `backends`, `models` | what the rendered file holds: the backends its routes name, and the models with a route; non-negative |
+
+aisa answers `204 No Content`, or `400` for a report it cannot use. It counts every report in `aisa_config_renders_total{result}` and, for a promoted one, sets `aisa_config_rendered_timestamp_seconds`, `aisa_config_backends` and `aisa_config_models` to describe the config the gateway runs. The report is best effort: the proxy does not wait for aisa, and a render while aisa is down goes unreported, which `aisa_config_rendered_timestamp_seconds` shows as a config older than the backends' changes in Consul. In the APISIX proxy, `guard.sh` sends the report when `AISA_RENDER_URI` is set, which the chart does.
 
 ## 4. Metrics (output of aisa)
 
@@ -162,6 +183,8 @@ aisa exports its own normalized metrics, so the dashboards and alerts work with 
 | `aisa_usage_requests_rejected_total` | reason (`malformed`/`too_large`/`unreadable`): usage requests rejected as a whole, whose events are in no other metric |
 | `aisa_usage_missing_total` | consumer, model, backend: successful requests reported without token counts, which aisa charges by estimate |
 | `aisa_tokens_estimated_total` | consumer, model, backend: the estimated tokens of those requests, charged to the consumer's quota when there is one (a fail-open request, under `unknown`, is estimated and charged to nobody); not in `aisa_tokens_total` |
+| `aisa_config_renders_total` | result (`promoted`/`rejected`/`held`): the proxy's renders of the gateway config, as [reported](#reporting-a-render) |
+| `aisa_config_rendered_timestamp_seconds`, `aisa_config_backends`, `aisa_config_models` | when the proxy last promoted a rendered config, and the backends and models in it |
 
 Gateway-native metrics (e.g. `apisix_llm_*`) are still scraped, but they only serve as a cross-check and for gateway internals.
 
@@ -170,7 +193,7 @@ Gateway-native metrics (e.g. `apisix_llm_*`) are still scraped, but they only se
 A proxy is complete when it provides:
 1. a way to call `/v1/decide` before proxying, including the model name, and to apply the returned headers following the [proxy rules](#proxy-rules-for-the-decision)
 2. a usage log sink with an explicit format that maps to the event schema, including streaming token counts, and carries no credentials
-3. a consul-template template for the gateway config, with an explicit upstream timeout and the [check](#checking-the-rendered-config) before the gateway loads it
+3. a consul-template template for the gateway config, with an explicit upstream timeout, the [check](#checking-the-rendered-config) before the gateway loads it, and the [report](#reporting-a-render) of each render
 4. an example deployment and an integration test against a mock backend
 5. the client-facing paths of the OpenAI-compatible API: `POST /v1/chat/completions` through the decision, and `GET /v1/models` from the rendered models
 

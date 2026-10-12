@@ -51,6 +51,8 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
   value: {{ printf "%s/v1/decide" (include "proxy.aisaURL" .) | quote }}
 - name: AISA_USAGE_URI
   value: {{ printf "%s/v1/usage" (include "proxy.aisaURL" .) | quote }}
+- name: AISA_RENDER_URI
+  value: {{ printf "%s/v1/render" (include "proxy.aisaURL" .) | quote }}
 - name: GUARD_EMPTY_GRACE
   value: {{ .Values.consulTemplate.emptyCatalogGrace | int | quote }}
 {{- with .Values.extraEnv }}

@@ -16,6 +16,8 @@
 #   GUARD_RECHECK         set when the pod runs this script again during a hold (see 6.)
 #   GUARD_LOCK_WAIT       seconds to wait for another guard to finish   20
 #                         (consul-template.hcl sets command_timeout to 60 s for the whole guard)
+#   AISA_RENDER_URI       where each render is reported, aisa's         unset: no report
+#                         POST /v1/render (PROXY_CONTRACT.md, Reporting a render)
 #
 # consul-template exits when this script fails, and Kubernetes restarts its container, which
 # renders again: that is the retry of a rejected file. A hold (below) is not a failure.
@@ -103,45 +105,6 @@ if [ -n "$GUARD_RECHECK" ]; then
     fi
 fi
 
-if [ ! -s "$STAGED" ]; then
-    echo "guard: error: staged file '$STAGED' is empty" >&2
-    exit 1
-fi
-
-# 1. Ensure file write is complete (ends with #END marker).
-if ! tail -n 5 "$STAGED" | grep -q '^#END'; then
-    echo "guard: error: staged file '$STAGED' is incomplete (missing #END marker)" >&2
-    exit 1
-fi
-
-# 2. Ensure routes block exists.
-if ! grep -q '^[[:space:]]*routes:' "$STAGED"; then
-    echo "guard: error: staged file '$STAGED' has no routes section" >&2
-    exit 1
-fi
-
-# 3. Ensure client-facing route exists (prevents dropping client route on empty/broken catalog).
-if ! grep -E -q '^[[:space:]]*- id: *"client"' "$STAGED" && ! grep -E -q '^[[:space:]]*- id: *client' "$STAGED"; then
-    echo "guard: error: staged file '$STAGED' is missing required client route (id: client)" >&2
-    exit 1
-fi
-
-# 4. Ensure fallback no-backend route exists.
-if ! grep -E -q '^[[:space:]]*- id: *"no-backend"' "$STAGED" && ! grep -E -q '^[[:space:]]*- id: *no-backend' "$STAGED"; then
-    echo "guard: error: staged file '$STAGED' is missing required fallback route (id: no-backend)" >&2
-    exit 1
-fi
-
-# 5. Check for duplicate route IDs.
-DUPLICATES=$(grep -E '^[[:space:]]*- id:' "$STAGED" | awk '{print $NF}' | sort | uniq -d || true)
-if [ -n "$DUPLICATES" ]; then
-    echo "guard: error: staged file '$STAGED' contains duplicate route IDs: $DUPLICATES" >&2
-    exit 1
-fi
-
-CONTROL="${GUARD_CONTROL_URL:-http://127.0.0.1:9090}"
-TIMEOUT="${GUARD_VERIFY_TIMEOUT:-10}"
-GRACE="${GUARD_EMPTY_GRACE:-300}"
 # promote: the staged file (a recheck's snapshot) becomes the target; the original staged file
 # goes too, unless a newer render replaced it meanwhile.
 promote() {
@@ -161,12 +124,69 @@ route_ids() {
 model_routes() {
     route_ids "$1" | grep -c '^model-' || true
 }
+# backends <file>: how many backends the routes name (the instances of ai-proxy-multi).
+backends() {
+    grep -E '^[[:space:]]+- name: ' "$1" | sort -u | wc -l | tr -d ' '
+}
+
+# report <result> <reason> <file>: tells aisa what became of this render, with the backends and
+# models of <file>, when AISA_RENDER_URI is set. Best effort: aisa may be down, and a render
+# does not wait for it. The reason is a fixed phrase and route IDs, quoted for JSON anyway.
+report() {
+    [ -n "$AISA_RENDER_URI" ] || return 0
+    reason=$(printf '%s' "$2" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
+    body=$(printf '{"ts":"%s","result":"%s","reason":"%s","backends":%s,"models":%s}' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$reason" "$(backends "$3")" "$(model_routes "$3")")
+    wget -q -O /dev/null -T 3 --header 'Content-Type: application/json' --post-data "$body" "$AISA_RENDER_URI" 2>/dev/null ||
+        echo "guard: warning: the render was not reported to $AISA_RENDER_URI" >&2
+}
+# reject <message>: the staged file is not promoted; the current one stays.
+reject() {
+    echo "guard: error: $1" >&2
+    report rejected "$1" "$STAGED"
+    exit 1
+}
+
+if [ ! -s "$STAGED" ]; then
+    reject "staged file '$STAGED' is empty"
+fi
+
+# 1. Ensure file write is complete (ends with #END marker).
+if ! tail -n 5 "$STAGED" | grep -q '^#END'; then
+    reject "staged file '$STAGED' is incomplete (missing #END marker)"
+fi
+
+# 2. Ensure routes block exists.
+if ! grep -q '^[[:space:]]*routes:' "$STAGED"; then
+    reject "staged file '$STAGED' has no routes section"
+fi
+
+# 3. Ensure client-facing route exists (prevents dropping client route on empty/broken catalog).
+if ! grep -E -q '^[[:space:]]*- id: *"client"' "$STAGED" && ! grep -E -q '^[[:space:]]*- id: *client' "$STAGED"; then
+    reject "staged file '$STAGED' is missing required client route (id: client)"
+fi
+
+# 4. Ensure fallback no-backend route exists.
+if ! grep -E -q '^[[:space:]]*- id: *"no-backend"' "$STAGED" && ! grep -E -q '^[[:space:]]*- id: *no-backend' "$STAGED"; then
+    reject "staged file '$STAGED' is missing required fallback route (id: no-backend)"
+fi
+
+# 5. Check for duplicate route IDs.
+DUPLICATES=$(grep -E '^[[:space:]]*- id:' "$STAGED" | awk '{print $NF}' | sort | uniq -d || true)
+if [ -n "$DUPLICATES" ]; then
+    reject "staged file '$STAGED' contains duplicate route IDs: $(echo "$DUPLICATES" | tr '\n' ' ')"
+fi
+
+CONTROL="${GUARD_CONTROL_URL:-http://127.0.0.1:9090}"
+TIMEOUT="${GUARD_VERIFY_TIMEOUT:-10}"
+GRACE="${GUARD_EMPTY_GRACE:-300}"
 IDS=$(route_ids "$STAGED")
 
 # The first render, before APISIX starts: nothing to compare with and nothing to go back to.
 if [ ! -f "$TARGET" ]; then
     promote
     echo "guard: promoted '$ORIGINAL' -> '$TARGET' (first render, not checked against APISIX)"
+    report promoted "" "$TARGET"
     exit 0
 fi
 
@@ -191,8 +211,11 @@ if [ "$(model_routes "$STAGED")" -eq 0 ] && [ "$(model_routes "$TARGET")" -gt 0 
     REMAINING=$((GRACE - (NOW - SINCE)))
     if [ "$REMAINING" -gt 0 ]; then
         if [ -z "$GUARD_RECHECK" ]; then
-            # A recheck that finds the hold still on is quiet: one line per render, not per 30 s.
-            echo "guard: warning: the rendered file has no model route; the current file with $(model_routes "$TARGET") stays for another ${REMAINING}s (GUARD_EMPTY_GRACE=$GRACE)" >&2
+            # A recheck that finds the hold still on is quiet, and reports nothing: one line and
+            # one report per render, not per 30 s.
+            HOLD="the rendered file has no model route; the current file with $(model_routes "$TARGET") stays for another ${REMAINING}s (GUARD_EMPTY_GRACE=$GRACE)"
+            echo "guard: warning: $HOLD" >&2
+            report held "$HOLD" "$STAGED"
         fi
         exit 0
     fi
@@ -253,6 +276,7 @@ done
 if [ -z "$MISSING" ]; then
     rm -f "$LAST_GOOD"
     echo "guard: promoted '$TARGET'; APISIX loaded all $(echo "$IDS" | wc -w) routes"
+    report promoted "" "$TARGET"
     exit 0
 fi
 
@@ -261,13 +285,18 @@ if [ "$MISSING" = "unreachable" ]; then
     # which passed the checks above, so it stays.
     rm -f "$LAST_GOOD"
     echo "guard: warning: promoted '$TARGET', but APISIX's Control API at $CONTROL did not answer; the routes are not checked" >&2
+    report promoted "" "$TARGET"
     exit 0
 fi
 
 # APISIX left routes out: go back to the previous file. A copy gets a new modification time,
 # so APISIX loads it again.
+cp "$TARGET" "$TARGET.rejected"
 cp "$LAST_GOOD" "$TARGET.restore"
 mv -f "$TARGET.restore" "$TARGET"
 rm -f "$LAST_GOOD"
-echo "guard: error: APISIX did not load these routes of the new file: $(echo "$MISSING" | tr '\n' ' '); the previous file is back in place (see APISIX's log for the schema error)" >&2
+WHY="APISIX did not load these routes of the new file: $(echo "$MISSING" | tr '\n' ' '); the previous file is back in place (see APISIX's log for the schema error)"
+echo "guard: error: $WHY" >&2
+report rejected "$WHY" "$TARGET.rejected"
+rm -f "$TARGET.rejected"
 exit 1

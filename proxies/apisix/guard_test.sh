@@ -341,4 +341,85 @@ fi
 grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the new file was not kept" >&2; exit 1; }
 grep -q 'not checked' <<< "$out" || { echo "FAIL: no warning that the routes are not checked: $out" >&2; exit 1; }
 
+# Every render is reported to AISA_RENDER_URI when it is set (PROXY_CONTRACT.md, Reporting a
+# render): a receiver that keeps the bodies it is sent.
+REPORTS="${TMPDIR}/reports"
+RPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 - "$RPORT" "$REPORTS" << 'EOF' &
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+port, out = int(sys.argv[1]), sys.argv[2]
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        with open(out, "ab") as f:
+            f.write(self.path.encode() + b" " + body + b"\n")
+        self.send_response(204)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+HTTPServer(("127.0.0.1", port), H).serve_forever()
+EOF
+RECEIVER=$!
+trap 'kill "$RECEIVER" 2>/dev/null || true; rm -rf "$TMPDIR"' EXIT
+export AISA_RENDER_URI="http://127.0.0.1:$RPORT/v1/render"
+for _ in $(seq 1 20); do curl -s -o /dev/null -X POST "$AISA_RENDER_URI" && break; sleep 0.2; done
+: > "$REPORTS"
+
+echo "== guard.sh: a promoted render is reported"
+echo "$PREVIOUS" > "$TARGET"
+cat << 'EOF' > "$STAGED"
+routes:
+  - id: client
+  - id: "model-qwen3"
+    plugins:
+      ai-proxy-multi:
+        instances:
+          - name: "ollama-1"
+          - name: "ollama-2"
+  - id: "model-llama"
+    plugins:
+      ai-proxy-multi:
+        instances:
+          - name: "ollama-1"
+  - id: no-backend
+#END
+EOF
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || true # the Control API is gone: promoted with a warning
+grep -q '"result":"promoted","reason":"","backends":2,"models":2}' "$REPORTS" || { echo "FAIL: the promoted render was not reported with its backends and models: $(cat "$REPORTS")" >&2; exit 1; }
+grep -q '^/v1/render {"ts":"[0-9T:-]*Z",' "$REPORTS" || { echo "FAIL: the report has no time or went to the wrong path: $(cat "$REPORTS")" >&2; exit 1; }
+
+echo "== guard.sh: a rejected render is reported with the reason"
+: > "$REPORTS"
+cat << 'EOF' > "$STAGED"
+routes:
+  - id: client
+  - id: client
+  - id: no-backend
+#END
+EOF
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 && { echo "FAIL: duplicate route IDs were accepted" >&2; exit 1; }
+grep -q '"result":"rejected","reason":"staged file .* contains duplicate route IDs: client ","backends":0,"models":0}' "$REPORTS" || { echo "FAIL: the rejected render was not reported with its reason: $(cat "$REPORTS")" >&2; exit 1; }
+
+echo "== guard.sh: a held render is reported"
+: > "$REPORTS"
+export GUARD_EMPTY_GRACE=60
+with_models "$TARGET"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold failed" >&2; exit 1; }
+grep -q '"result":"held","reason":"the rendered file has no model route; .*","backends":0,"models":0}' "$REPORTS" || { echo "FAIL: the held render was not reported: $(cat "$REPORTS")" >&2; exit 1; }
+kill "$(cat "$TARGET.recheck")" 2>/dev/null || true
+unset GUARD_EMPTY_GRACE
+
+echo "== guard.sh: a report that cannot be delivered does not fail the render"
+export AISA_RENDER_URI="http://127.0.0.1:1/v1/render"
+echo "$PREVIOUS" > "$TARGET"
+stage
+if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
+  echo "FAIL: a render failed because its report could not be delivered: $out" >&2
+  exit 1
+fi
+grep -q 'was not reported' <<< "$out" || { echo "FAIL: no warning about the undelivered report: $out" >&2; exit 1; }
+unset AISA_RENDER_URI
+
 echo "ok: all guard tests passed"

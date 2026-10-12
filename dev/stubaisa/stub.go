@@ -33,7 +33,7 @@ type Config struct {
 // Record is one request received by the stub, as returned by /debug/requests.
 type Record struct {
 	Time    time.Time         `json:"time"`
-	Kind    string            `json:"kind"` // "decide" or "usage"
+	Kind    string            `json:"kind"` // "decide", "usage" or "render"
 	Method  string            `json:"method"`
 	Path    string            `json:"path"`
 	Headers map[string]string `json:"headers"`
@@ -81,6 +81,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /v1/decide", s.decide)
 	mux.HandleFunc("GET /v1/decide", s.decide)
 	mux.HandleFunc("POST /v1/usage", s.usage)
+	mux.HandleFunc("POST /v1/render", s.render)
 	mux.HandleFunc("GET /debug/requests", s.listRecords)
 	mux.HandleFunc("DELETE /debug/requests", s.clearRecords)
 	return mux
@@ -176,6 +177,19 @@ func (s *server) usage(w http.ResponseWriter, r *http.Request) {
 		s.log.Info("usage event", "event", redactJSON(ev))
 	}
 	devutil.WriteJSON(w, http.StatusOK, map[string]int{"accepted": len(events)})
+}
+
+// render records what the proxy's guard reports of a render (contract 3) and answers 204, as
+// aisa does.
+func (s *server) render(w http.ResponseWriter, r *http.Request) {
+	rec, _, err := s.newRecord(r, "render")
+	if err != nil {
+		devutil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.store(rec)
+	s.log.Info("render report", "body", rec.Body)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // parseEvents accepts one JSON object or an array of objects, as http-logger style sinks send

@@ -31,6 +31,9 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_quota_profiles`, `aisa_quota_profiles_invalid` | Quota profiles read from Consul, and those that could not be parsed |
 | `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
 | `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
+| `aisa_config_renders_total{result}` | The proxy's renders of the gateway config: `promoted`, `rejected` (the check failed; the previous config stays) or `held` (a config without model routes waits for the grace period) |
+| `aisa_config_rendered_timestamp_seconds` | When the proxy last promoted a rendered config |
+| `aisa_config_backends`, `aisa_config_models` | The backends and the models with a route in that config |
 
 Keep label cardinality in mind: `consumer` × `model` × `backend`. For large deployments, consumers can be aggregated into groups.
 
@@ -63,6 +66,9 @@ Shipped as a `PrometheusRule`:
 | `AisaBudgetSoftLimit` | `aisa_budget_spent / aisa_budget_limit > 0.8` |
 | `AisaBudgetExhausted` | a consumer is being denied or downgraded because its budget is used up |
 | `AisaBackendDown` | Consul health check for an `aisa-backend` is critical for more than 10 min |
+| `AisaConfigRenderRejected` | `aisa_config_renders_total{result="rejected"}` increases: a value in Consul or Vault renders a config the gateway cannot load in full; the gateway keeps the previous one until it is fixed |
+| `AisaConfigEmpty` | `aisa_config_models == 0` for 5 min, or `aisa_config_renders_total{result="held"}` increases: the catalog has no backend the proxy can render; held, the gateway serves the last config, promoted, every model gets 503 |
+| `AisaConfigStale` | `aisa_config_rendered_timestamp_seconds` is older than the last change of the `aisa-backend` services in Consul by more than 10 min: the proxy is not rendering, or not reporting |
 | `AisaDown` | aisa's scrape target is down for 2 min (fail policies are now in effect) |
 | `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |

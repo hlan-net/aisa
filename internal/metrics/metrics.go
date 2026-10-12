@@ -109,12 +109,27 @@ type Metrics struct {
 	QuotaProfileLoads *prometheus.CounterVec
 	// QuotaErrors counts failed calls to the quota counters in Redis, by op.
 	QuotaErrors *prometheus.CounterVec
+
+	// ConfigRenders counts the proxy's renders of the gateway config by result: promoted,
+	// rejected or held. ConfigRendered is when a render was last promoted, in seconds since
+	// the epoch, and ConfigBackends and ConfigModels are what that config holds.
+	ConfigRenders  *prometheus.CounterVec
+	ConfigRendered prometheus.Gauge
+	ConfigBackends prometheus.Gauge
+	ConfigModels   prometheus.Gauge
 }
 
 // Values of the result label of aisa_consumer_loads_total.
 const (
 	LoadOK    = "ok"
 	LoadError = "error"
+)
+
+// Values of the result label of aisa_config_renders_total.
+const (
+	RenderPromoted = "promoted"
+	RenderRejected = "rejected"
+	RenderHeld     = "held"
 )
 
 // New returns aisa's metrics, registered in a new registry together with the Go runtime and
@@ -210,6 +225,22 @@ func New(version string) *Metrics {
 			Name: "aisa_quota_errors_total",
 			Help: "Failed reads and writes of the quota counters in Redis.",
 		}, []string{"op"}),
+		ConfigRenders: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_config_renders_total",
+			Help: "Renders of the gateway config reported by the proxy, by result: promoted, rejected or held.",
+		}, []string{"result"}),
+		ConfigRendered: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_config_rendered_timestamp_seconds",
+			Help: "When the proxy last promoted a rendered gateway config, in seconds since the epoch.",
+		}),
+		ConfigBackends: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_config_backends",
+			Help: "Backends in the gateway config the proxy last promoted.",
+		}),
+		ConfigModels: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_config_models",
+			Help: "Models with a route in the gateway config the proxy last promoted.",
+		}),
 	}
 
 	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -224,6 +255,7 @@ func New(version string) *Metrics {
 		buildInfo,
 		m.Requests, m.Tokens, m.Cost, m.BudgetLimit, m.BudgetSpent, m.Latency, m.TTFT, m.Decisions,
 		m.UsageEvents, m.UsageRequestsRejected, m.UsageMissing, m.TokensEstimated,
+		m.ConfigRenders, m.ConfigRendered, m.ConfigBackends, m.ConfigModels,
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 		m.QuotaProfiles, m.QuotaProfilesInvalid, m.QuotaProfileLoads, m.QuotaErrors,
 	)
