@@ -37,7 +37,8 @@ const (
 type Report struct {
 	// ID names the report, so that one sent again counts once; optional.
 	ID string `json:"id"`
-	// Timestamp is when the render ended, ISO 8601; now when missing.
+	// Timestamp is when the render ended, ISO 8601; taken as now when missing, unreadable or
+	// in the future.
 	Timestamp string `json:"ts"`
 	// Result is promoted, rejected or held.
 	Result string `json:"result"`
