@@ -1,4 +1,4 @@
-{{- if and .Values.quotas.enabled .Values.consul.token.fromVault }}
+{{- if .Values.consul.token.fromVault }}
 # The Vault Agent next to aisa: it logs in with aisa's role and keeps a Consul ACL token from
 # Vault's Consul secrets engine in a file in memory, renewing it, which aisa reads for every
 # request to Consul (CONSUL_HTTP_TOKEN_FILE). aisa logs in to Vault by itself for its consumers.

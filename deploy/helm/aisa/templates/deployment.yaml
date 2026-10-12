@@ -1,4 +1,4 @@
-{{- $consulToken := and .Values.quotas.enabled .Values.consul.token.fromVault }}
+{{- $consulToken := .Values.consul.token.fromVault }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -93,7 +93,7 @@ spec:
               value: {{ .Values.vault.kvMount | quote }}
             - name: AISA_VAULT_PREFIX
               value: {{ .Values.vault.prefix | quote }}
-            {{- if .Values.quotas.enabled }}
+            # Consul always: the consumers are declared there. Redis only with quotas.
             - name: CONSUL_HTTP_ADDR
               value: {{ required "global.consul.addr is required: the address of Consul" .Values.global.consul.addr | quote }}
             - name: AISA_CONSUL_PREFIX
@@ -102,6 +102,7 @@ spec:
             - name: CONSUL_HTTP_TOKEN_FILE
               value: /vault/consul-token
             {{- end }}
+            {{- if .Values.quotas.enabled }}
             - name: AISA_REDIS_ADDR
               value: {{ include "aisa.redisAddr" . | quote }}
             {{- end }}

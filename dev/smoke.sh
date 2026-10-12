@@ -47,8 +47,10 @@ done
 curl -fsS -X DELETE "$STUB/debug/requests" >/dev/null
 
 echo "== sources of truth"
-expect "vault: consumer chat-ui seeded" "interactive" \
-    "$(curl -fsS -H 'X-Vault-Token: dev-root' "$VAULT/v1/secret/data/aisa/consumers/chat-ui" | jq -r .data.data.quota_profile)"
+expect "consul: consumer chat-ui declared" "interactive" \
+    "$(curl -fsS "$CONSUL/v1/kv/aisa/consumers/chat-ui?raw" | jq -r .quota_profile)"
+expect "vault: consumer chat-ui has a key" "1" \
+    "$(curl -fsS -H 'X-Vault-Token: dev-root' "$VAULT/v1/secret/data/aisa/consumers/chat-ui" | jq -r '.data.data.key_sha256 | length / 64')"
 expect "consul: mock-local fails open" "open" \
     "$(curl -fsS "$CONSUL/v1/catalog/service/aisa-backend" | jq -r '.[] | select(.ServiceID == "mock-local") | .ServiceMeta.fail_policy')"
 expect "consul: pricing for cloud-large" "0.015" \
@@ -57,12 +59,12 @@ expect "consul: two healthy aisa-backend instances" "2" \
     "$(curl -fsS "$CONSUL/v1/health/service/aisa-backend?passing" | jq length)"
 expect "redis: ping" "PONG" "$("${COMPOSE[@]}" exec -T redis redis-cli ping | tr -d '\r')"
 
-echo "== aisa: /v1/decide with the consumers in Vault"
+echo "== aisa: /v1/decide with the consumers declared in Consul and their keys in Vault"
 for _ in $(seq 1 30); do
     [[ "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")" == 200 ]] && break
     sleep 1
 done
-expect "aisa: ready (consumers and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
+expect "aisa: ready (consumers, declarations and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
 # decide <key> <json body> [extra curl args...]: prints "<status> <X-Aisa-Consumer> <X-Aisa-Model>"
 decide() {
     local key=$1 body=$2
@@ -131,14 +133,16 @@ expect "aisa: usage without token counts accepted" "200" \
 expect "aisa: missing usage counted" "$((missing_before + 1))" "$(missing_metric)"
 
 echo "== aisa: token quotas"
-# A new consumer for each run, so a window left by an earlier run does not matter.
+# A new consumer for each run, so a window left by an earlier run does not matter: declared in
+# Consul with the tiny profile, its key's hash in Vault.
 quota_consumer="quota-${smoke_run_id}"
 quota_key="dev-key-${quota_consumer}"
+curl -fsS -o /dev/null -X PUT -d '{"quota_profile": "tiny"}' "$CONSUL/v1/kv/aisa/consumers/$quota_consumer"
 curl -fsS -o /dev/null -H 'X-Vault-Token: dev-root' -H "$JSON" \
-    -d "{\"data\":{\"key_sha256\":\"$(printf %s "$quota_key" | sha256sum | cut -d' ' -f1)\",\"quota_profile\":\"tiny\"}}" \
+    -d "{\"data\":{\"key_sha256\":\"$(printf %s "$quota_key" | sha256sum | cut -d' ' -f1)\"}}" \
     "$VAULT/v1/secret/data/aisa/consumers/$quota_consumer"
-# aisa reloads its consumers for an unknown key at most every 5 s (AISA_CONSUMER_MISS_REFRESH),
-# and the unknown key above has just used that reload.
+# aisa follows the declarations at once, and reloads its consumers from Vault for an unknown key
+# at most every 5 s (AISA_CONSUMER_MISS_REFRESH); the unknown key above has just used that reload.
 for _ in $(seq 1 15); do
     [[ "$(decide "$quota_key" "$QWEN")" == 401* ]] || break
     sleep 1

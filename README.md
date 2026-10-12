@@ -9,7 +9,7 @@ Pick the A that fits your day:
 
 **aisa** offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, on HashiCorp-based infrastructure. It stands between the applications and the model providers, with an existing AI gateway as its proxy, and adds:
 
-- **identities and provider keys from Vault**, and **backends, prices and budgets from Consul**
+- **credentials and provider keys from Vault**, and **consumers, backends, prices and budgets from Consul**
 - **token quotas and budgets** per client, both enforced in tokens and shown in currency, with optional downgrade to a local model when a budget runs out
 - **normalized usage metrics** per client and model, with a Grafana dashboard and alert rules
 - **a proxy it does not write itself**: an existing AI gateway carries the traffic. [Apache APISIX](https://apisix.apache.org/) is the first.
@@ -51,7 +51,7 @@ Three contracts connect aisa to its proxy: a **decision API** (forward-auth patt
 | **Concepts** | |
 | [ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md) | Components, traffic path, failure modes, reference deployment |
 | [PROXY_CONTRACT.md](docs/concepts/PROXY_CONTRACT.md) | The three aisa ↔ proxy contracts, the `aisa_*` metrics and the proxy checklist |
-| [VAULT.md](docs/concepts/VAULT.md) | Identities and provider keys from Vault |
+| [VAULT.md](docs/concepts/VAULT.md) | Consumer credentials and provider keys from Vault |
 | [CONSUL.md](docs/concepts/CONSUL.md) | Backends, prices and budgets in Consul |
 | [KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md) | What applications see: `Model` objects and a Secret with their key (draft) |
 | **Features** | |

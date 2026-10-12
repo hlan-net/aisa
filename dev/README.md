@@ -49,7 +49,8 @@ The data follows the paths in [`VAULT.md`](../docs/concepts/VAULT.md) and [`CONS
 
 | Where | Path | Contents |
 |---|---|---|
-| Vault | `secret/aisa/consumers/chat-ui`, `…/batch-jobs` | `key_sha256` of `dev-key-chat-ui` / `dev-key-batch-jobs`, `quota_profile` |
+| Consul KV | `aisa/consumers/<consumer>` | `chat-ui` with the profile `interactive`, `batch-jobs` with `batch` |
+| Vault | `secret/aisa/consumers/chat-ui`, `…/batch-jobs` | `key_sha256` of `dev-key-chat-ui` / `dev-key-batch-jobs` |
 | Vault | `secret/aisa/providers/cloud` | `api_key=dev-provider-key` |
 | Consul KV | `aisa/pricing/<model>` | `qwen3` and `llama3.2` free, `cloud-large` priced |
 | Consul KV | `aisa/budgets/<consumer>` | `chat-ui` rejects when exhausted, `batch-jobs` downgrades to `qwen3` |

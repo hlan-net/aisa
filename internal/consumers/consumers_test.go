@@ -69,17 +69,45 @@ func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// fakeDeclared declares consumers by name; a nil map is "not loaded yet". With all set, every
+// other name is declared without a quota, for the tests that are about Vault.
+type fakeDeclared struct {
+	decls   map[string]Declaration
+	invalid map[string]error
+	all     bool
+}
+
+func (f *fakeDeclared) Get(name string) (Declaration, error) {
+	if f.decls == nil {
+		return Declaration{}, ErrDeclarationsNotLoaded
+	}
+	if err, ok := f.invalid[name]; ok {
+		return Declaration{}, err
+	}
+	if d, ok := f.decls[name]; ok {
+		return d, nil
+	}
+	if f.all {
+		return Declaration{}, nil
+	}
+	return Declaration{}, ErrUndeclared
+}
+
 func newStore(src Source) (*Store, *clock) {
 	c := &clock{t: time.Unix(1_700_000_000, 0)}
 	s := New(src, quiet(), Options{
 		Refresh: time.Minute, MissRefresh: 5 * time.Second, MaxStale: 15 * time.Minute, Now: c.now,
+		Declared: &fakeDeclared{all: true, decls: map[string]Declaration{
+			"chat-ui":    {QuotaProfile: "interactive", Namespace: "chat", Secret: "aisa"},
+			"batch-jobs": {QuotaProfile: "batch"},
+		}},
 	})
 	return s, c
 }
 
 func TestLookup(t *testing.T) {
 	src := &fakeSource{data: map[string]map[string]any{
-		"chat-ui":    {"key_sha256": hashOf("key-chat"), "quota_profile": "interactive"},
+		"chat-ui":    {"key_sha256": hashOf("key-chat"), "quota_profile": "ignored: it is in Consul now"},
 		"batch-jobs": {"key_sha256": strings.ToUpper(hashOf("key-batch"))},
 	}}
 	s, _ := newStore(src)
@@ -89,7 +117,7 @@ func TestLookup(t *testing.T) {
 	}
 
 	c, res := s.Lookup(ctx, "key-chat")
-	if res != Found || c.Name != "chat-ui" || c.QuotaProfile != "interactive" {
+	if res != Found || c.Name != "chat-ui" || c.QuotaProfile != "interactive" || c.Namespace != "chat" || c.Secret != "aisa" {
 		t.Errorf("key-chat: %+v, %v", c, res)
 	}
 	if c, res := s.Lookup(ctx, "key-batch"); res != Found || c.Name != "batch-jobs" {
@@ -662,5 +690,54 @@ func TestRetryStopsDoublingAtRefresh(t *testing.T) {
 	}
 	if retry != time.Minute {
 		t.Errorf("retry = %s after 100 failures, want 1m", retry)
+	}
+}
+
+func TestLookupNeedsADeclaration(t *testing.T) {
+	src := &fakeSource{data: map[string]map[string]any{
+		"chat-ui": {"key_sha256": hashOf("key-chat")},
+		"ghost":   {"key_sha256": hashOf("key-ghost")},
+		"broken":  {"key_sha256": hashOf("key-broken")},
+	}}
+	decl := &fakeDeclared{}
+	c := &clock{t: time.Unix(1_700_000_000, 0)}
+	s := New(src, quiet(), Options{
+		Refresh: time.Minute, MissRefresh: 5 * time.Second, MaxStale: 15 * time.Minute, Now: c.now, Declared: decl,
+	})
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before the declarations are read, no key can be decided: fail closed.
+	if _, res := s.Lookup(context.Background(), "key-chat"); res != Unavailable {
+		t.Fatalf("before the declarations: %v, want Unavailable", res)
+	}
+
+	decl.decls = map[string]Declaration{"chat-ui": {QuotaProfile: "interactive"}}
+	decl.invalid = map[string]error{"broken": errors.New("want a JSON object")}
+	got, res := s.Lookup(context.Background(), "key-chat")
+	if res != Found || got.QuotaProfile != "interactive" {
+		t.Fatalf("a declared consumer: %v %+v, want Found with its profile", res, got)
+	}
+
+	// A key whose consumer Vault has and Consul does not declare is unknown, and does not make
+	// aisa reload from Vault: the key is not new, the declaration is missing.
+	listings := src.listing
+	if _, res := s.Lookup(context.Background(), "key-ghost"); res != Unknown {
+		t.Fatalf("an undeclared consumer: %v, want Unknown", res)
+	}
+	if src.listing != listings {
+		t.Fatalf("an undeclared consumer's key made aisa reload from Vault (%d listings, was %d)", src.listing, listings)
+	}
+
+	// A declaration that cannot be read answers 503, so a typo does not lift a quota.
+	if _, res := s.Lookup(context.Background(), "key-broken"); res != Unavailable {
+		t.Fatalf("an invalid declaration: %v, want Unavailable", res)
+	}
+
+	// A declaration added later is seen on the next lookup, without a reload from Vault.
+	decl.decls["ghost"] = Declaration{}
+	if got, res := s.Lookup(context.Background(), "key-ghost"); res != Found || got.Name != "ghost" || got.QuotaProfile != "" {
+		t.Fatalf("a consumer declared later: %v %+v, want Found without a quota", res, got)
 	}
 }

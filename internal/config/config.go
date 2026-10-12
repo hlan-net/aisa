@@ -28,7 +28,8 @@ type Config struct {
 	Vault     Vault
 	Consumers Consumers
 	Ledger    Ledger
-	// Quotas are enabled when both Consul and Redis are configured.
+	// Consul is required: the consumers are declared there. Quotas are enabled when Redis is
+	// configured too.
 	Consul Consul
 	Redis  Redis
 }
@@ -60,8 +61,8 @@ type Redis struct {
 	Password string
 }
 
-// QuotasEnabled reports whether quotas are configured.
-func (c Config) QuotasEnabled() bool { return c.Consul.Addr != "" && c.Redis.Addr != "" }
+// QuotasEnabled reports whether quotas are configured: Consul is always there, Redis is not.
+func (c Config) QuotasEnabled() bool { return c.Redis.Addr != "" }
 
 // Vault is where aisa reads consumers from (docs/concepts/VAULT.md).
 type Vault struct {
@@ -236,11 +237,14 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	return cfg, nil
 }
 
-// quotasFromEnv reads the Consul and Redis configuration. Quotas need both, so one without the
-// other is an error rather than quotas that are silently off.
+// quotasFromEnv reads the Consul and Redis configuration. Consul is required, since the
+// consumers are declared there; quotas need Redis too, and are off without it.
 func quotasFromEnv(getenv func(string) string, cfg *Config) error {
 	c := &cfg.Consul
 	c.Addr = getenv("CONSUL_HTTP_ADDR")
+	if c.Addr == "" {
+		return fmt.Errorf("CONSUL_HTTP_ADDR is required: the consumers are declared in Consul KV")
+	}
 	c.CACert = getenv("CONSUL_CACERT")
 	c.Token = getenv("CONSUL_HTTP_TOKEN")
 	c.TokenFile = getenv("CONSUL_HTTP_TOKEN_FILE")
@@ -262,12 +266,6 @@ func quotasFromEnv(getenv func(string) string, cfg *Config) error {
 		if _, _, err := net.SplitHostPort(r.Addr); err != nil {
 			return fmt.Errorf("AISA_REDIS_ADDR: want host:port, got %q: %w", r.Addr, err)
 		}
-	}
-	switch {
-	case c.Addr != "" && r.Addr == "":
-		return fmt.Errorf("CONSUL_HTTP_ADDR is set but AISA_REDIS_ADDR is not: token quotas need both")
-	case c.Addr == "" && r.Addr != "":
-		return fmt.Errorf("AISA_REDIS_ADDR is set but CONSUL_HTTP_ADDR is not: token quotas need both")
 	}
 	return nil
 }

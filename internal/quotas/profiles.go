@@ -23,11 +23,8 @@ type Profile struct {
 	TokensPerHour int64
 }
 
-// Lister reads the quota profiles, from Consul KV outside tests. It works like consul.List:
-// with index 0 it answers at once, with an earlier index it waits for a change.
-type Lister interface {
-	List(ctx context.Context, index uint64) ([]consul.Pair, uint64, error)
-}
+// Lister reads the quota profiles, from Consul KV outside tests; see consul.Lister.
+type Lister = consul.Lister
 
 // ConsulSource reads the profiles under a prefix of Consul KV, such as "aisa/quotas/".
 type ConsulSource struct {
@@ -134,54 +131,12 @@ func (p *Profiles) Ready(context.Context) error {
 // be read, the profiles read before stay in use and it tries again after RetryMin, doubling up
 // to RetryMax.
 func (p *Profiles) Run(ctx context.Context) {
-	var index uint64
-	applied := false
-	retry := p.opts.RetryMin
-	for {
-		started := time.Now()
-		pairs, next, err := p.src.List(ctx, index)
-		if ctx.Err() != nil {
-			return
+	consul.Follow(ctx, p.src, consul.FollowOptions{RetryMin: p.opts.RetryMin, RetryMax: p.opts.RetryMax}, p.apply, func(err error) {
+		p.log.Error("reading quota profiles failed; keeping the ones read before", "error", err)
+		if p.opts.OnLoad != nil {
+			p.opts.OnLoad(LoadStats{Err: err})
 		}
-		wait := time.Duration(0)
-		if err != nil {
-			p.log.Error("reading quota profiles failed; keeping the ones read before",
-				"error", err, "retry_in", retry.String())
-			if p.opts.OnLoad != nil {
-				p.opts.OnLoad(LoadStats{Err: err})
-			}
-			wait = retry
-			retry = min(retry*2, p.opts.RetryMax)
-		} else {
-			retry = p.opts.RetryMin
-			// A blocking query that timed out answers with the same index and nothing new.
-			if !applied || next != index {
-				p.apply(pairs)
-				applied = true
-			}
-			index = nextIndex(index, next)
-			wait = p.opts.RetryMin - time.Since(started)
-		}
-		if wait > 0 {
-			t := time.NewTimer(wait)
-			select {
-			case <-ctx.Done():
-				t.Stop()
-				return
-			case <-t.C:
-			}
-		}
-	}
-}
-
-// nextIndex is the index of the next blocking query, following Consul's advice: an index that
-// went backwards, as after a restore of Consul's data, starts over with a query that answers
-// at once, and an index is never below 1.
-func nextIndex(prev, next uint64) uint64 {
-	if next < prev {
-		return 0
-	}
-	return max(next, 1)
+	})
 }
 
 // apply replaces the profiles with those read.

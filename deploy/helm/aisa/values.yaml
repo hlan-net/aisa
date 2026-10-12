@@ -11,8 +11,8 @@ global:
     # Vault's address, e.g. https://vault.vault.svc:8200. Required.
     addr: ""
   consul:
-    # Consul's address, e.g. consul-server.consul.svc:8500. Required: quota profiles are there,
-    # and the proxy renders its routes from its catalog.
+    # Consul's address, e.g. consul-server.consul.svc:8500. Required: the consumers and their
+    # quota profiles are declared there, and the proxy renders its routes from its catalog.
     addr: ""
 
 image:
@@ -42,7 +42,8 @@ vault:
   prefix: aisa
 
 consul:
-  # aisa's keys in Consul KV: quota profiles under <prefix>/quotas/.
+  # aisa's keys in Consul KV: consumers under <prefix>/consumers/, quota profiles under
+  # <prefix>/quotas/.
   prefix: aisa
   # A Consul ACL token from Vault's Consul secrets engine, which a Vault Agent next to aisa
   # writes to a file in memory and renews (docs/concepts/CONSUL.md, ACLs). The agent logs in with
@@ -53,6 +54,8 @@ consul:
 
 # Token quotas need Consul and Redis. Off: aisa authenticates and keeps the books, but no
 # consumer is limited.
+# Token quotas need Redis for their counters; off, aisa still reads its consumers and their
+# quota profiles from Consul but enforces no quota.
 quotas:
   enabled: true
 

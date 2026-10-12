@@ -198,8 +198,11 @@ vault secrets enable consul >/dev/null 2>&1 || true
 vault write consul/config/access address=consul:8500 token=test-root >/dev/null
 vault write consul/roles/aisa consul_policies=aisa ttl=1h >/dev/null
 vault write consul/roles/aisa-render consul_policies=aisa-render ttl=1h >/dev/null
-# The consumer's key: the plaintext stays in .local/ (git-ignored), Vault gets its hash. Until
-# ROADMAP v0.2.0 PR 12, which has aisa generate the key, this is done here by hand.
+# The consumer is declared in Consul, with the namespace and Secret of its application, as
+# KUBERNETES_OBJECTS.md describes. Its key: the plaintext stays in .local/ (git-ignored), Vault
+# gets its hash. Until ROADMAP v0.2.0 PR 12, which has aisa generate the key, this is done
+# here by hand.
+consul kv put "aisa/consumers/$CONSUMER" "$(jq -cn --arg ns "$APP_NS" '{quota_profile: "interactive", namespace: $ns, secret: "aisa"}')" >/dev/null
 KEYFILE="$ROOT/.local/$CONSUMER.key"
 if [[ ! -s "$KEYFILE" ]]; then
     mkdir -p "$ROOT/.local"
@@ -209,7 +212,7 @@ fi
 chmod 600 "$KEYFILE" # a key from an earlier run, or put there by hand, too
 KEY=$(cat "$KEYFILE")
 HASH=$(sha256 "$KEY")
-vault kv put "secret/aisa/consumers/$CONSUMER" key_sha256="$HASH" quota_profile=interactive >/dev/null
+vault kv put "secret/aisa/consumers/$CONSUMER" key_sha256="$HASH" >/dev/null
 ok "consumer $CONSUMER (its key is in $KEYFILE)"
 
 echo "== aisa's chart"
