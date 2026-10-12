@@ -304,8 +304,24 @@ cp -p "$STAGED" "$TARGET"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || true
 [[ "$(stat -c %Y "$TARGET")" -gt 1700000100 ]] || { echo "FAIL: the new file is not newer than the current one" >&2; exit 1; }
 
-echo "== guard.sh: the Control API does not answer"
+echo "== guard.sh: a Control API that hangs does not keep the guard past its deadline"
 kill $SERVER; wait $SERVER 2>/dev/null || true
+# A port that accepts connections and never answers.
+HPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 -c "import socket, time; s=socket.socket(); s.bind(('127.0.0.1', $HPORT)); s.listen(50); time.sleep(600)" &
+HANG=$!
+export GUARD_CONTROL_URL="http://127.0.0.1:$HPORT"
+echo "$PREVIOUS" > "$TARGET"
+touch -d @1700000000 "$TARGET"
+stage
+started=$(date +%s)
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || true
+took=$(( $(date +%s) - started ))
+kill $HANG 2>/dev/null; wait $HANG 2>/dev/null || true
+[[ "$took" -le 8 ]] || { echo "FAIL: the guard took ${took}s with a hanging Control API, want a few seconds (GUARD_VERIFY_TIMEOUT=1)" >&2; exit 1; }
+export GUARD_CONTROL_URL="http://127.0.0.1:$PORT"
+
+echo "== guard.sh: the Control API does not answer"
 echo "$PREVIOUS" > "$TARGET"
 touch -d @1700000000 "$TARGET"
 stage

@@ -204,28 +204,34 @@ LAST_GOOD="$TARGET.last-good"
 cp "$TARGET" "$LAST_GOOD"
 promote
 
+# The whole verification, every call of the Control API included, ends by this time: a slow
+# Control API cannot keep the guard past consul-template's command_timeout.
+DEADLINE=$(( $(date +%s) + TIMEOUT ))
+# remaining: the seconds left to the deadline, at least 1.
+remaining() {
+    r=$(( DEADLINE - $(date +%s) ))
+    [ "$r" -gt 0 ] && echo "$r" || echo 1
+}
 # missing: prints the routes of the new file that APISIX has not loaded, or "unreachable".
-# Each call of the Control API is bounded, so a guard never outlives the lock's takeover.
+# Each call is bounded by the time left.
 missing() {
-    if ! timeout 5 wget -q -O /dev/null -T 5 "$CONTROL/v1/routes" 2>/dev/null; then
+    if ! timeout "$(remaining)" wget -q -O /dev/null -T "$(remaining)" "$CONTROL/v1/routes" 2>/dev/null; then
         echo unreachable
         return
     fi
     for id in $IDS; do
-        loaded=$(timeout 5 wget -q -O - -T 5 "$CONTROL/v1/route/$id" 2>/dev/null | sed -n 's/.*"modifiedIndex":\([0-9]*\).*/\1/p')
+        loaded=$(timeout "$(remaining)" wget -q -O - -T "$(remaining)" "$CONTROL/v1/route/$id" 2>/dev/null | sed -n 's/.*"modifiedIndex":\([0-9]*\).*/\1/p')
         [ "$loaded" = "$VERSION" ] || echo "$id"
     done
 }
 
-waited=0
 while :; do
     MISSING=$(missing)
     [ -z "$MISSING" ] && break
-    if [ "$waited" -ge "$TIMEOUT" ]; then
+    if [ "$(date +%s)" -ge "$DEADLINE" ]; then
         break
     fi
     sleep 1
-    waited=$((waited + 1))
 done
 
 if [ -z "$MISSING" ]; then

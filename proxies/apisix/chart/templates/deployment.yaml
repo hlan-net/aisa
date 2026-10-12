@@ -110,6 +110,9 @@ spec:
             - sh
             - -c
             - |
+              # No guard of this container's last life can still run, but its lock can remain
+              # on the volume, and the PID in it may belong to a new process now.
+              rm -rf /rendered/apisix.yaml.lock
               while sleep 30; do
                 if [ -f /rendered/apisix.yaml.empty-since ]; then
                   GUARD_RECHECK=1 /etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml ||
