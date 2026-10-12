@@ -117,6 +117,8 @@ func TestFromEnvRejects(t *testing.T) {
 		"dedup capacity negative": {"AISA_LEDGER_DEDUP_CAPACITY": "-1"},
 		"dedup ttl not duration":  {"AISA_LEDGER_DEDUP_TTL": "forever"},
 		"dedup ttl zero":          {"AISA_LEDGER_DEDUP_TTL": "0s"},
+		"estimate not int":        {"AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS": "some"},
+		"estimate negative":       {"AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS": "-1"},
 		"consul without redis":    {"CONSUL_HTTP_ADDR": "consul:8500"},
 		"redis without consul":    {"AISA_REDIS_ADDR": "redis:6379"},
 		"redis without a port":    {"CONSUL_HTTP_ADDR": "consul:8500", "AISA_REDIS_ADDR": "redis"},
@@ -131,9 +133,18 @@ func TestFromEnvRejects(t *testing.T) {
 }
 
 func TestFromEnvLedger(t *testing.T) {
-	cfg, err := FromEnv(env(map[string]string{
-		"AISA_LEDGER_DEDUP_CAPACITY": "50000",
-		"AISA_LEDGER_DEDUP_TTL":      "10m",
+	cfg, err := FromEnv(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Ledger.EstimateDefaultTokens != 0 {
+		t.Errorf("EstimateDefaultTokens = %d by default, want 0: nothing is charged without an estimate", cfg.Ledger.EstimateDefaultTokens)
+	}
+
+	cfg, err = FromEnv(env(map[string]string{
+		"AISA_LEDGER_DEDUP_CAPACITY":          "50000",
+		"AISA_LEDGER_DEDUP_TTL":               "10m",
+		"AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS": "1000",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -143,6 +154,9 @@ func TestFromEnvLedger(t *testing.T) {
 	}
 	if cfg.Ledger.DedupTTL != 10*time.Minute {
 		t.Errorf("DedupTTL = %v, want 10m", cfg.Ledger.DedupTTL)
+	}
+	if cfg.Ledger.EstimateDefaultTokens != 1000 {
+		t.Errorf("EstimateDefaultTokens = %d, want 1000", cfg.Ledger.EstimateDefaultTokens)
 	}
 }
 

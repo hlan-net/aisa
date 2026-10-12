@@ -133,7 +133,8 @@ func run(args []string) error {
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide")),
-		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger")))
+		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
+			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens}))
 	if err := srv.Run(ctx, cfg.Addr, cfg.MetricsAddr); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}

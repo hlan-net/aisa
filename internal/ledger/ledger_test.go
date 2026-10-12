@@ -22,7 +22,7 @@ func TestHandlerServeHTTP(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, nil, log)
+	h := New(m, dedup, nil, log, Options{})
 
 	body := []byte(`{
 		"request_id": "r1",
@@ -69,7 +69,7 @@ func TestHandlerDedup(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, nil, log)
+	h := New(m, dedup, nil, log, Options{})
 
 	body := []byte(`{
 		"request_id": "r-dup",
@@ -118,7 +118,7 @@ func TestHandlerInvalidEventsSkipped(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, nil, log)
+	h := New(m, dedup, nil, log, Options{})
 
 	body := []byte(`[
 		{
@@ -171,7 +171,7 @@ func TestHandlerRejects(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, nil, log)
+	h := New(m, dedup, nil, log, Options{})
 
 	// GET method not allowed
 	reqGet := httptest.NewRequest(http.MethodGet, "/v1/usage", nil)
@@ -208,7 +208,7 @@ func TestHandlerRejects(t *testing.T) {
 // recorded (#27).
 func TestHandlerValueErrorRejectsOnlyItsEvent(t *testing.T) {
 	m := metrics.New("test")
-	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 
 	body := `[
 		{"request_id":"a","consumer":"chat-ui","model":"qwen3","backend":"ollama-1","status":200,"prompt_tokens":7},
@@ -241,7 +241,7 @@ func TestHandlerBodyTooLarge(t *testing.T) {
 	m := metrics.New("test")
 	dedup := NewDedup(100, 5*time.Minute)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := New(m, dedup, nil, log)
+	h := New(m, dedup, nil, log, Options{})
 
 	// Create body exceeding maxBody (16 MiB)
 	largeBody := io.MultiReader(
@@ -267,7 +267,7 @@ func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connectio
 
 func TestHandlerUnreadableBody(t *testing.T) {
 	m := metrics.New("test")
-	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/usage", io.MultiReader(strings.NewReader(`[{"request_id":"a",`), failingReader{}))
 	rec := httptest.NewRecorder()
@@ -288,7 +288,7 @@ func TestHandlerUnreadableBody(t *testing.T) {
 // sink may put a credential in any field.
 func TestHandlerLogsRejectedEventsOncePerRequest(t *testing.T) {
 	var buf bytes.Buffer
-	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(&buf, nil)))
+	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(&buf, nil)), Options{})
 
 	var body strings.Builder
 	body.WriteString("[")
@@ -328,7 +328,7 @@ func (f *fakeCharger) Charge(_ context.Context, consumer string, tokens int64, a
 func TestHandlerCharges(t *testing.T) {
 	m := metrics.New("test")
 	c := &fakeCharger{charges: map[string]int64{}}
-	h := New(m, NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(m, NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 	h.now = func() time.Time { return time.Date(2026, 9, 29, 12, 30, 20, 0, time.UTC) }
 
 	body := `[
@@ -365,7 +365,7 @@ func TestHandlerCharges(t *testing.T) {
 
 func TestHandlerChargesSaturate(t *testing.T) {
 	c := &fakeCharger{charges: map[string]int64{}}
-	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(metrics.New("test"), NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 	body := `[
 		{"request_id": "a", "consumer": "chat-ui", "status": 200, "prompt_tokens": 9223372036854775807, "completion_tokens": 1, "ts": "2026-09-29T12:00:10Z"},
 		{"request_id": "b", "consumer": "chat-ui", "status": 200, "prompt_tokens": 9223372036854775807, "ts": "2026-09-29T12:00:20Z"}
@@ -395,7 +395,7 @@ func TestHandlerCountsMissingUsage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := metrics.New("test")
-			h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 			body := `{"request_id":"r1","consumer":"chat-ui","model":"qwen3","backend":"ollama-1",` + tt.event + `}`
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
@@ -411,7 +411,7 @@ func TestHandlerCountsMissingUsage(t *testing.T) {
 
 func TestHandlerCountsMissingUsageOnce(t *testing.T) {
 	m := metrics.New("test")
-	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 	body := `[{"request_id":"r1","model":"qwen3","status":200},{"request_id":"r1","model":"qwen3","status":200}]`
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
@@ -420,5 +420,90 @@ func TestHandlerCountsMissingUsageOnce(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(m.UsageMissing.WithLabelValues(metrics.ConsumerUnknown, "qwen3", "")); got != 1 {
 		t.Errorf("UsageMissing = %v, want 1: a retried event is counted once", got)
+	}
+}
+
+func TestHandlerChargesAnEstimateForMissingUsage(t *testing.T) {
+	m := metrics.New("test")
+	c := &fakeCharger{charges: map[string]int64{}}
+	h := New(m, NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{EstimateDefaultTokens: 300})
+	h.now = func() time.Time { return time.Date(2026, 10, 12, 12, 30, 20, 0, time.UTC) }
+
+	post := func(body string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+	estimated := func(consumer, model string) float64 {
+		return testutil.ToFloat64(m.TokensEstimated.WithLabelValues(consumer, model, "ollama-1"))
+	}
+
+	// Nothing is known of chat-ui and qwen3: the default is charged.
+	post(`{"request_id": "m1", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 200, "stream": "true"}`)
+	if got := c.charges["chat-ui@12:30:00"]; got != 300 {
+		t.Fatalf("charged %d for the first missing usage, want the default 300", got)
+	}
+	if got := estimated("chat-ui", "qwen3"); got != 300 {
+		t.Fatalf("aisa_tokens_estimated_total = %v, want 300", got)
+	}
+	if got := testutil.ToFloat64(m.UsageMissing.WithLabelValues("chat-ui", "qwen3", "ollama-1")); got != 1 {
+		t.Fatalf("aisa_usage_missing_total = %v, want 1", got)
+	}
+
+	// Exact events teach the estimator; a failed request with tokens does not count as a sample.
+	post(`[{"request_id": "e1", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 200, "prompt_tokens": 40, "completion_tokens": 60},
+	       {"request_id": "e2", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 200, "prompt_tokens": 10, "completion_tokens": 10},
+	       {"request_id": "e3", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 500, "prompt_tokens": 9000, "completion_tokens": 0}]`)
+	post(`{"request_id": "m2", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 200, "prompt_tokens": "0", "completion_tokens": "0"}`)
+	// 300 (default) + 100 + 20 + 9000 (a 500 with tokens is still charged) + 60 (the mean of 100 and 20).
+	if got := c.charges["chat-ui@12:30:00"]; got != 9480 {
+		t.Fatalf("charged %d in all, want 9480", got)
+	}
+	if got := estimated("chat-ui", "qwen3"); got != 360 {
+		t.Fatalf("aisa_tokens_estimated_total = %v, want 360", got)
+	}
+	// The exact tokens stay exact: the estimates are not among them.
+	exact := testutil.ToFloat64(m.Tokens.WithLabelValues("chat-ui", "qwen3", "ollama-1", metrics.DirectionPrompt)) +
+		testutil.ToFloat64(m.Tokens.WithLabelValues("chat-ui", "qwen3", "ollama-1", metrics.DirectionCompletion))
+	if exact != 9120 {
+		t.Fatalf("aisa_tokens_total = %v, want 9120", exact)
+	}
+
+	// Another consumer of the model gets the model's mean; a request without a consumer (fail
+	// open) is estimated for the metric but charged to nobody.
+	post(`{"request_id": "m3", "consumer": "batch-jobs", "model": "qwen3", "backend": "ollama-1", "status": 200}`)
+	post(`{"request_id": "m4", "consumer": "", "model": "qwen3", "backend": "ollama-1", "status": 200}`)
+	if got := c.charges["batch-jobs@12:30:00"]; got != 60 {
+		t.Fatalf("charged %d to batch-jobs, want the model's mean 60", got)
+	}
+	if got := estimated(metrics.ConsumerUnknown, "qwen3"); got != 60 {
+		t.Fatalf("aisa_tokens_estimated_total{unknown} = %v, want 60", got)
+	}
+	if _, ok := c.charges["@12:30:00"]; ok {
+		t.Fatalf("a request without a consumer was charged")
+	}
+}
+
+func TestHandlerChargesNothingWithoutAnEstimate(t *testing.T) {
+	m := metrics.New("test")
+	c := &fakeCharger{charges: map[string]int64{}}
+	h := New(m, NewDedup(100, 5*time.Minute), c, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage",
+		strings.NewReader(`{"request_id": "m1", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 200}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if c.calls != 0 {
+		t.Fatalf("charged %d times with nothing to go by, want 0", c.calls)
+	}
+	if got := testutil.ToFloat64(m.UsageMissing.WithLabelValues("chat-ui", "qwen3", "ollama-1")); got != 1 {
+		t.Fatalf("aisa_usage_missing_total = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.TokensEstimated.WithLabelValues("chat-ui", "qwen3", "ollama-1")); got != 0 {
+		t.Fatalf("aisa_tokens_estimated_total = %v, want 0", got)
 	}
 }
