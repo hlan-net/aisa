@@ -89,6 +89,22 @@ func TestHandler(t *testing.T) {
 		t.Errorf("aisa_config_models = %v, want 0", got)
 	}
 
+	// A report sent again with the same id counts once; reports without an id all count.
+	if got := post(`{"id": "0000000007-abc", "result": "rejected", "reason": "x"}`); got != http.StatusNoContent {
+		t.Fatalf("with an id: status = %d, want 204", got)
+	}
+	if got := post(`{"id": "0000000007-abc", "result": "rejected", "reason": "x"}`); got != http.StatusNoContent {
+		t.Fatalf("sent again: status = %d, want 204", got)
+	}
+	if got := renders(metrics.RenderRejected); got != 2 {
+		t.Errorf("aisa_config_renders_total{rejected} = %v after a report sent twice, want 2", got)
+	}
+	post(`{"result": "rejected", "reason": "no id"}`)
+	post(`{"result": "rejected", "reason": "no id"}`)
+	if got := renders(metrics.RenderRejected); got != 4 {
+		t.Errorf("aisa_config_renders_total{rejected} = %v after two reports without an id, want 4", got)
+	}
+
 	for name, body := range map[string]string{
 		"unknown result":    `{"result": "maybe"}`,
 		"no result":         `{"backends": 1}`,
@@ -96,6 +112,7 @@ func TestHandler(t *testing.T) {
 		"not JSON":          `promoted`,
 		"an array":          `[{"result": "promoted"}]`,
 		"a long reason":     `{"result": "rejected", "reason": "` + strings.Repeat("x", maxReason+1) + `"}`,
+		"a long id":         `{"result": "rejected", "id": "` + strings.Repeat("x", maxID+1) + `"}`,
 	} {
 		if got := post(body); got != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400", name, got)

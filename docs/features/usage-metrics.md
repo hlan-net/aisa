@@ -46,7 +46,7 @@ No dashboard panel or alert depends only on gateway metrics, so swapping the pro
 
 ## Grafana dashboard
 
-Shipped as JSON in `dashboards/`:
+To be shipped as JSON in `dashboards/` (`ROADMAP.md`, v0.2.0 PR 7):
 
 1. **Tokens per model**, stacked prompt and completion, split by consumer
 2. **Requests and decisions**: allow, deny_quota, deny_budget and downgrade over time
@@ -58,7 +58,7 @@ Shipped as JSON in `dashboards/`:
 
 ## Alerts
 
-Shipped as a `PrometheusRule`:
+To be shipped as a `PrometheusRule` with the dashboard (`ROADMAP.md`, v0.2.0 PR 7); none exists in the repository yet. The conditions:
 
 | Alert | Condition |
 |---|---|

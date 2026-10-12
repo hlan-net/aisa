@@ -150,6 +150,7 @@ A rejected render or an empty catalog must show in aisa's metrics and alerts, no
 
 ```json
 {
+  "id": "0000000012-9f3a1c40b2e7",
   "ts": "2026-10-12T12:00:00Z",
   "result": "promoted",
   "reason": "",
@@ -160,12 +161,13 @@ A rejected render or an empty catalog must show in aisa's metrics and alerts, no
 
 | Field | Meaning |
 |---|---|
+| `id` | names the report (max 256 bytes), so that one sent again counts once; optional, and without it every delivery counts |
 | `ts` | when the render ended, ISO 8601; now when missing or in the future |
 | `result` | **required**: `promoted` (the gateway runs the file), `rejected` (the check failed and the previous file stays or is back) or `held` (a file without model routes waits for the grace period) |
 | `reason` | why a render was rejected or held, for the log (max 1024 bytes) |
 | `backends`, `models` | what the rendered file holds: the backends its routes name, and the models with a route; non-negative |
 
-aisa answers `204 No Content`, or `400` for a report it cannot use. It counts every report in `aisa_config_renders_total{result}` and, for a promoted one, sets `aisa_config_rendered_timestamp_seconds`, `aisa_config_backends` and `aisa_config_models` to describe the config the gateway runs; the three gauges are absent until the first promoted report since aisa started, because a restart forgets the config. The proxy waits for aisa's answer a few seconds at most (3 s in the APISIX proxy) and goes on without it; a report aisa did not take is kept and sent again until it answers, so the first render, which comes before aisa is up, is reported too. In the APISIX proxy, `guard.sh` sends the report when `AISA_RENDER_URI` is set, which the chart does, and the pod sends a kept report again every 30 s.
+aisa answers `204 No Content`; `400` for a report it cannot use, and `413` for one above 64 KiB. It counts every report in `aisa_config_renders_total{result}`, a report with an id it has taken within 24 hours once, and, for a promoted one, sets `aisa_config_rendered_timestamp_seconds`, `aisa_config_backends` and `aisa_config_models` to describe the config the gateway runs; the three gauges are absent until the first promoted report since aisa started, because a restart forgets the config. The proxy waits for aisa's answer a few seconds at most (3 s in the APISIX proxy) and goes on without it; reporting never fails a render. Reports aisa did not take are kept, in order, and sent again until it answers, so the first render, which comes before aisa is up, is reported too. In the APISIX proxy, `guard.sh` queues the report in `apisix.yaml.reports/` (at most 100, the oldest giving way) and sends the queue when `AISA_RENDER_URI` is set, which the chart does, and the pod sends the queue again every 30 s.
 
 ## 4. Metrics (output of aisa)
 

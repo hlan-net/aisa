@@ -387,7 +387,7 @@ routes:
 EOF
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || true # the Control API is gone: promoted with a warning
 grep -q '"result":"promoted","reason":"","backends":2,"models":2}' "$REPORTS" || { echo "FAIL: the promoted render was not reported with its backends and models: $(cat "$REPORTS")" >&2; exit 1; }
-grep -q '^/v1/render {"ts":"[0-9T:-]*Z",' "$REPORTS" || { echo "FAIL: the report has no time or went to the wrong path: $(cat "$REPORTS")" >&2; exit 1; }
+grep -q '^/v1/render {"id":"[0-9]*-[0-9a-f]*","ts":"[0-9T:-]*Z",' "$REPORTS" || { echo "FAIL: the report has no time or went to the wrong path: $(cat "$REPORTS")" >&2; exit 1; }
 
 echo "== guard.sh: a rejected render is reported with the reason"
 : > "$REPORTS"
@@ -426,8 +426,9 @@ without_models "$STAGED"
 grep -q '"result":"held","reason":"the rendered file has no model route; .*","backends":0,"models":0}' "$REPORTS" || { echo "FAIL: the held render was not reported: $(cat "$REPORTS")" >&2; exit 1; }
 unset GUARD_EMPTY_GRACE
 
-echo "== guard.sh: a report that cannot be delivered does not fail the render, and is kept"
+echo "== guard.sh: reports that cannot be delivered do not fail the render, and wait in order"
 export AISA_RENDER_URI="http://127.0.0.1:1/v1/render"
+rm -rf "$TARGET.reports"
 echo "$PREVIOUS" > "$TARGET"
 stage
 if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
@@ -435,15 +436,45 @@ if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
   exit 1
 fi
 grep -q 'was not reported' <<< "$out" || { echo "FAIL: no warning about the undelivered report: $out" >&2; exit 1; }
-[[ -s "$TARGET.report" ]] || { echo "FAIL: the undelivered report was not kept" >&2; exit 1; }
-echo "== guard.sh: --resend delivers the kept report once aisa answers"
+# A second render, held, while aisa is still away: both reports wait, the held one after the promoted one.
+export GUARD_EMPTY_GRACE=60
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the held render failed" >&2; exit 1; }
+unset GUARD_EMPTY_GRACE
+queued=$(ls "$TARGET.reports" | grep -c '\.json$')
+[[ "$queued" == 2 ]] || { echo "FAIL: $queued reports wait, want 2" >&2; exit 1; }
+echo "== guard.sh: --resend delivers the waiting reports in order, each with an id"
 : > "$REPORTS"
 export AISA_RENDER_URI="http://127.0.0.1:$RPORT/v1/render"
 "$GUARD" --resend "$TARGET" || { echo "FAIL: --resend failed" >&2; exit 1; }
-grep -q '"result":"promoted"' "$REPORTS" || { echo "FAIL: the kept report was not delivered: $(cat "$REPORTS")" >&2; exit 1; }
-[[ ! -e "$TARGET.report" ]] || { echo "FAIL: the delivered report was not removed" >&2; exit 1; }
-"$GUARD" --resend "$TARGET" || { echo "FAIL: --resend with nothing kept failed" >&2; exit 1; }
-[[ "$(grep -c . "$REPORTS")" == 1 ]] || { echo "FAIL: --resend with nothing kept sent something" >&2; exit 1; }
+[[ "$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print(" ".join(json.loads(l)["result"] for l in sys.stdin))')" == "promoted held" ]] ||
+  { echo "FAIL: the waiting reports were not delivered in order: $(cat "$REPORTS")" >&2; exit 1; }
+ids=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print("\n".join(json.loads(l)["id"] for l in sys.stdin))')
+[[ "$(sort -u <<< "$ids" | grep -c .)" == 2 ]] || { echo "FAIL: the reports do not have ids of their own: $ids" >&2; exit 1; }
+[[ -z "$(ls "$TARGET.reports" | grep '\.json$')" ]] || { echo "FAIL: delivered reports were not removed" >&2; exit 1; }
+"$GUARD" --resend "$TARGET" || { echo "FAIL: --resend with nothing waiting failed" >&2; exit 1; }
+[[ "$(grep -c . "$REPORTS")" == 2 ]] || { echo "FAIL: --resend with nothing waiting sent something" >&2; exit 1; }
+rm -f "$TARGET.empty-since"
+echo "== guard.sh: a queue that cannot be written does not fail the render"
+rm -rf "$TARGET.reports" && mkdir "$TARGET.reports" && chmod 500 "$TARGET.reports"
+echo "$PREVIOUS" > "$TARGET"
+stage
+if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
+  echo "FAIL: a render failed because its report could not be queued: $out" >&2
+  exit 1
+fi
+grep -q 'could not be queued' <<< "$out" || { echo "FAIL: no warning about the queue: $out" >&2; exit 1; }
+chmod 700 "$TARGET.reports" && rm -rf "$TARGET.reports"
+echo "== guard.sh: --resend steps aside while another guard runs"
+mkdir -p "$TARGET.reports" && echo '{"id":"x","result":"promoted"}' > "$TARGET.reports/0000000001.json"
+sleep 300 &
+HOLDER=$!
+mkdir "$TARGET.lock" && echo "$HOLDER" > "$TARGET.lock/pid"
+: > "$REPORTS"
+GUARD_LOCK_WAIT=1 "$GUARD" --resend "$TARGET" 2>/dev/null || { echo "FAIL: --resend failed under another guard's lock" >&2; exit 1; }
+[[ ! -s "$REPORTS" ]] || { echo "FAIL: --resend sent under another guard's lock" >&2; exit 1; }
+kill "$HOLDER"; wait "$HOLDER" 2>/dev/null || true
+rm -rf "$TARGET.lock" "$TARGET.reports"
 unset AISA_RENDER_URI
 
 echo "ok: all guard tests passed"

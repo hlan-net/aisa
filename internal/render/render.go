@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
 )
 
@@ -22,8 +23,20 @@ const maxBody = 64 << 10
 // maxReason bounds the reason, which is logged.
 const maxReason = 1024
 
+// maxID bounds a report's id.
+const maxID = 256
+
+// The ids of the reports taken are kept this long, and at most this many, so that a retry of
+// a report aisa took but did not answer counts once.
+const (
+	dedupCapacity = 10_000
+	dedupTTL      = 24 * time.Hour
+)
+
 // Report is what a proxy sends after each render of the gateway's config.
 type Report struct {
+	// ID names the report, so that one sent again counts once; optional.
+	ID string `json:"id"`
 	// Timestamp is when the render ended, ISO 8601; now when missing.
 	Timestamp string `json:"ts"`
 	// Result is promoted, rejected or held.
@@ -39,13 +52,14 @@ type Report struct {
 // Handler receives the reports.
 type Handler struct {
 	metrics *metrics.Metrics
+	dedup   *ledger.Dedup
 	log     *slog.Logger
 	now     func() time.Time
 }
 
 // New returns a handler for POST /v1/render.
 func New(m *metrics.Metrics, log *slog.Logger) *Handler {
-	return &Handler{metrics: m, log: log, now: time.Now}
+	return &Handler{metrics: m, dedup: ledger.NewDedup(dedupCapacity, dedupTTL), log: log, now: time.Now}
 }
 
 // ServeHTTP answers POST /v1/render: 204 for a report it took, 400 for one it could not.
@@ -76,6 +90,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	// A report sent again, because its answer was lost, is taken and counted once.
+	if h.dedup.SeenOrAdd(rep.ID) {
+		h.log.Debug("render report sent again, counted once", "id", rep.ID)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	h.record(rep)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -92,6 +112,9 @@ func validate(rep Report) error {
 	}
 	if len(rep.Reason) > maxReason {
 		return fmt.Errorf("reason exceeds %d bytes", maxReason)
+	}
+	if len(rep.ID) > maxID {
+		return fmt.Errorf("id exceeds %d bytes", maxID)
 	}
 	return nil
 }

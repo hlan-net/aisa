@@ -55,8 +55,8 @@ expect() {
 # sent to <decide uri> and usage to the stub.
 render() {
     local dir=$1 decide=$2
-    mkdir -p "$dir"
-    chmod 777 "$dir" # consul-template runs as a user of its own in the container
+    mkdir -p "$dir" "$dir/apisix.yaml.reports"
+    chmod 777 "$dir" "$dir/apisix.yaml.reports" # consul-template runs as a user of its own in the container
     docker run --rm --network "$NETWORK" \
         -e CONSUL_HTTP_ADDR=consul:8500 -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN=dev-root \
         -e AISA_DECIDE_URI="$decide" -e AISA_USAGE_URI=http://stub-aisa:8080/v1/usage \
