@@ -455,6 +455,49 @@ ids=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print("\n".jo
 "$GUARD" --resend "$TARGET" || { echo "FAIL: --resend with nothing waiting failed" >&2; exit 1; }
 [[ "$(grep -c . "$REPORTS")" == 2 ]] || { echo "FAIL: --resend with nothing waiting sent something" >&2; exit 1; }
 rm -f "$TARGET.empty-since"
+echo "== guard.sh: a slow aisa gets 3 s of a render, and the rest of the queue waits for --resend"
+SPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 - "$SPORT" "$REPORTS" << 'EOF' &
+import sys, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+port, out = int(sys.argv[1]), sys.argv[2]
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        time.sleep(2)
+        with open(out, "ab") as f:
+            f.write(self.path.encode() + b" " + body + b"\n")
+        self.send_response(204)
+        self.end_headers()
+    def log_message(self, *args):
+        pass
+HTTPServer(("127.0.0.1", port), H).serve_forever()
+EOF
+SLOW=$!
+trap 'kill "$RECEIVER" "$SLOW" 2>/dev/null || true; rm -rf "$TMPDIR"' EXIT
+for _ in $(seq 1 20); do curl -s -o /dev/null -X POST "http://127.0.0.1:$SPORT/" && break; sleep 0.2; done
+export AISA_RENDER_URI="http://127.0.0.1:1/v1/render"
+rm -rf "$TARGET.reports"
+echo "$PREVIOUS" > "$TARGET"
+for i in 1 2 3; do stage; "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1; done
+[[ "$(ls "$TARGET.reports" | grep -c '\.json$')" == 3 ]] || { echo "FAIL: 3 reports should wait" >&2; exit 1; }
+export AISA_RENDER_URI="http://127.0.0.1:$SPORT/v1/render"
+: > "$REPORTS"
+stage
+started=$(date +%s)
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the render failed with a slow aisa" >&2; exit 1; }
+took=$(( $(date +%s) - started ))
+[[ "$took" -le 6 ]] || { echo "FAIL: a render waited ${took}s for a slow aisa, want 3 s or so" >&2; exit 1; }
+[[ "$(ls "$TARGET.reports" | grep -c '\.json$')" -ge 2 ]] || { echo "FAIL: a render sent more of the queue than its 3 s allow" >&2; exit 1; }
+"$GUARD" --resend "$TARGET" >/dev/null 2>&1 || { echo "FAIL: --resend failed with a slow aisa" >&2; exit 1; }
+[[ -z "$(ls "$TARGET.reports" | grep '\.json$')" ]] || { echo "FAIL: --resend did not drain the queue within its time" >&2; exit 1; }
+# A report whose answer came too late is sent again, and arrives twice: that is what the ids
+# are for, and aisa counts it once. Every report arrived at least once.
+unique=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print(len({json.loads(l)["id"] for l in sys.stdin}))')
+[[ "$unique" == 4 ]] || { echo "FAIL: $unique distinct reports arrived, want 4" >&2; exit 1; }
+kill $SLOW 2>/dev/null; wait $SLOW 2>/dev/null || true
+export AISA_RENDER_URI="http://127.0.0.1:$RPORT/v1/render"
+
 echo "== guard.sh: a queue that cannot be written does not fail the render"
 rm -rf "$TARGET.reports" && mkdir "$TARGET.reports" && chmod 500 "$TARGET.reports"
 echo "$PREVIOUS" > "$TARGET"

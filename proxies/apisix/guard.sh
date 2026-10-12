@@ -78,12 +78,19 @@ release() {
 # pod's loop sends the queue again. Each report carries an id, so a retry of one aisa took but
 # did not answer counts once.
 QUEUE_MAX=100
-# send_queue: delivers the queued reports in order and stops at the first aisa does not take,
-# so that they stay in order. Each try is bounded, since a render waits for it.
+# send_queue <seconds>: delivers the queued reports in order, within one deadline for the whole
+# queue, and stops at the first aisa does not take, so that they stay in order. A render gives
+# it 3 s, so it never holds a render up for long; a resend gives it most of the loop's 30 s.
 send_queue() {
     [ -n "$AISA_RENDER_URI" ] && [ -d "$TARGET.reports" ] || return 0
+    until_=$(( $(date +%s) + $1 ))
     for f in $(ls "$TARGET.reports" 2>/dev/null | grep '\.json$' | sort); do
-        if timeout 3 wget -q -O /dev/null -T 3 --header 'Content-Type: application/json' \
+        left=$(( until_ - $(date +%s) ))
+        if [ "$left" -le 0 ]; then
+            echo "guard: warning: $(ls "$TARGET.reports" | grep -c '\.json$') reports still wait for $AISA_RENDER_URI; the pod tries again" >&2
+            return 0
+        fi
+        if timeout "$left" wget -q -O /dev/null -T "$left" --header 'Content-Type: application/json' \
             --post-data "$(cat "$TARGET.reports/$f")" "$AISA_RENDER_URI" 2>/dev/null; then
             rm -f "$TARGET.reports/$f"
         else
@@ -100,7 +107,7 @@ if [ "$1" = "--resend" ]; then
     [ -n "$(ls "$TARGET.reports" 2>/dev/null | grep '\.json$')" ] || exit 0
     # Another guard is running: it sends the queue itself when it reports.
     take_lock || exit 0
-    send_queue
+    send_queue 25
     exit 0
 fi
 
@@ -168,8 +175,8 @@ backends() {
     grep -E '^[[:space:]]+- name: ' "$1" | sort -u | wc -l | tr -d ' '
 }
 
-# report <result> <reason> <file>: tells aisa what became of this render, with the backends and
-# models of <file>, when AISA_RENDER_URI is set. The report is queued and the queue sent, which
+# report <result> <reason> <backends> <models>: tells aisa what became of this render, with the
+# backends and models of the file in question, when AISA_RENDER_URI is set. The report is queued and the queue sent, which
 # waits for aisa 3 s at most. Reporting never fails the render: whatever goes wrong here is a
 # warning. The reason is a fixed phrase and route IDs, quoted for JSON anyway and cut to the
 # 1024 bytes aisa takes: a file with many rejected routes names the first ones.
@@ -187,7 +194,7 @@ report() {
     id="$name-$(head -c 6 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
     reason=$(printf '%.1000s' "$2" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
     if ! printf '{"id":"%s","ts":"%s","result":"%s","reason":"%s","backends":%s,"models":%s}\n' \
-        "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$reason" "$(backends "$3")" "$(model_routes "$3")" > "$queue/$name.tmp" 2>/dev/null ||
+        "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$reason" "$3" "$4" > "$queue/$name.tmp" 2>/dev/null ||
         ! mv -f "$queue/$name.tmp" "$queue/$name.json" 2>/dev/null; then
         echo "guard: warning: the render could not be queued for reporting: cannot write in '$queue'" >&2
         rm -f "$queue/$name.tmp"
@@ -198,12 +205,16 @@ report() {
     for old in $(ls "$queue" | grep '\.json$' | sort | head -n -"$QUEUE_MAX"); do
         rm -f "$queue/$old"
     done
-    send_queue
+    send_queue 3
+}
+# counts <file>: the backends and models of <file>, as two arguments for report.
+counts() {
+    echo "$(backends "$1") $(model_routes "$1")"
 }
 # reject <message>: the staged file is not promoted; the current one stays.
 reject() {
     echo "guard: error: $1" >&2
-    report rejected "$1" "$STAGED" || true
+    report rejected "$1" $(counts "$STAGED") || true
     exit 1
 }
 
@@ -246,7 +257,7 @@ IDS=$(route_ids "$STAGED")
 if [ ! -f "$TARGET" ]; then
     promote
     echo "guard: promoted '$ORIGINAL' -> '$TARGET' (first render, not checked against APISIX)"
-    report promoted "" "$TARGET" || true
+    report promoted "" $(counts "$TARGET") || true
     exit 0
 fi
 
@@ -275,7 +286,7 @@ if [ "$(model_routes "$STAGED")" -eq 0 ] && [ "$(model_routes "$TARGET")" -gt 0 
             # one report per render, not per 30 s.
             HOLD="the rendered file has no model route; the current file with $(model_routes "$TARGET") stays for another ${REMAINING}s (GUARD_EMPTY_GRACE=$GRACE)"
             echo "guard: warning: $HOLD" >&2
-            report held "$HOLD" "$STAGED" || true
+            report held "$HOLD" $(counts "$STAGED") || true
         fi
         exit 0
     fi
@@ -336,7 +347,7 @@ done
 if [ -z "$MISSING" ]; then
     rm -f "$LAST_GOOD"
     echo "guard: promoted '$TARGET'; APISIX loaded all $(echo "$IDS" | wc -w) routes"
-    report promoted "" "$TARGET" || true
+    report promoted "" $(counts "$TARGET") || true
     exit 0
 fi
 
@@ -345,18 +356,18 @@ if [ "$MISSING" = "unreachable" ]; then
     # which passed the checks above, so it stays.
     rm -f "$LAST_GOOD"
     echo "guard: warning: promoted '$TARGET', but APISIX's Control API at $CONTROL did not answer; the routes are not checked" >&2
-    report promoted "" "$TARGET" || true
+    report promoted "" $(counts "$TARGET") || true
     exit 0
 fi
 
 # APISIX left routes out: go back to the previous file. A copy gets a new modification time,
-# so APISIX loads it again.
-cp "$TARGET" "$TARGET.rejected"
+# so APISIX loads it again. The counts of the rejected file are taken first, so that nothing
+# is copied beyond the previous file: the volume is small.
+REJECTED_COUNTS=$(counts "$TARGET")
 cp "$LAST_GOOD" "$TARGET.restore"
 mv -f "$TARGET.restore" "$TARGET"
 rm -f "$LAST_GOOD"
 WHY="APISIX did not load these routes of the new file: $(echo "$MISSING" | tr '\n' ' '); the previous file is back in place (see APISIX's log for the schema error)"
 echo "guard: error: $WHY" >&2
-report rejected "$WHY" "$TARGET.rejected" || true
-rm -f "$TARGET.rejected"
+report rejected "$WHY" $REJECTED_COUNTS || true
 exit 1
