@@ -79,6 +79,48 @@ if "$GUARD" "$STAGED" "$TARGET" 2>/dev/null; then
   exit 1
 fi
 
+echo "== guard.sh: another guard holds the lock"
+echo "initial-good-config" > "$TARGET"
+cat << 'EOF' > "$STAGED"
+routes:
+  - id: client
+  - id: no-backend
+#END
+EOF
+sleep 300 &
+HOLDER=$!
+mkdir "$TARGET.lock" && echo "$HOLDER" > "$TARGET.lock/pid"
+touch -d '-10 minutes' "$TARGET.lock" # old, but its owner is alive: not taken over
+if out=$(GUARD_LOCK_WAIT=2 "$GUARD" "$STAGED" "$TARGET" 2>&1); then
+  echo "FAIL: the guard ran while another held the lock" >&2
+  exit 1
+fi
+grep -q "another guard ($HOLDER)" <<< "$out" || { echo "FAIL: no error naming the lock's owner: $out" >&2; exit 1; }
+[[ "$(cat "$TARGET")" == "initial-good-config" ]] || { echo "FAIL: the target changed under a lock" >&2; exit 1; }
+[[ "$(cat "$TARGET.lock/pid")" == "$HOLDER" ]] || { echo "FAIL: the lock of a live guard was touched" >&2; exit 1; }
+echo "== guard.sh: the lock of a guard that is gone is taken over"
+kill "$HOLDER"; wait "$HOLDER" 2>/dev/null || true
+out=$(GUARD_LOCK_WAIT=2 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: the lock of a dead guard stopped the guard: $out" >&2; exit 1; }
+grep -q "taking over the lock.*$HOLDER, which is gone" <<< "$out" || { echo "FAIL: no warning about the takeover: $out" >&2; exit 1; }
+grep -q 'id: client' "$TARGET" || { echo "FAIL: the file was not promoted after the takeover" >&2; exit 1; }
+[[ ! -d "$TARGET.lock" ]] || { echo "FAIL: the lock was not released" >&2; exit 1; }
+echo "== guard.sh: a lock without an owner is taken over after 120 s, not before"
+echo "initial-good-config" > "$TARGET"
+cat << 'EOF' > "$STAGED"
+routes:
+  - id: client
+  - id: no-backend
+#END
+EOF
+mkdir "$TARGET.lock"
+if GUARD_LOCK_WAIT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1; then
+  echo "FAIL: a fresh lock without an owner was taken over" >&2
+  exit 1
+fi
+touch -d '-10 minutes' "$TARGET.lock"
+GUARD_LOCK_WAIT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: an old lock without an owner was not taken over" >&2; exit 1; }
+[[ ! -d "$TARGET.lock" ]] || { echo "FAIL: the lock was not released" >&2; exit 1; }
+
 echo "== guard.sh: first render, before APISIX runs"
 rm -f "$TARGET"
 cat << 'EOF' > "$STAGED"
@@ -89,6 +131,113 @@ routes:
 EOF
 "$GUARD" "$STAGED" "$TARGET" >/dev/null
 grep -q 'id: client' "$TARGET" || { echo "FAIL: the first render was not promoted" >&2; exit 1; }
+
+# A file without model routes replaces one that has them only after GUARD_EMPTY_GRACE seconds.
+# In the pod a loop runs the guard again every 30 s during a hold, with GUARD_RECHECK set; here
+# the test does.
+with_models() {
+  cat << 'EOF' > "$1"
+routes:
+  - id: client
+  - id: "model-qwen3"
+  - id: no-backend
+#END
+EOF
+}
+without_models() {
+  cat << 'EOF' > "$1"
+routes:
+  - id: client
+  - id: no-backend
+#END
+EOF
+}
+
+echo "== guard.sh: a file without model routes waits for the grace period"
+export GUARD_EMPTY_GRACE=3
+with_models "$TARGET"
+without_models "$STAGED"
+out=$("$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a hold is not a failure: $out" >&2; exit 1; }
+grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the current file was replaced within the grace period" >&2; exit 1; }
+[[ -f "$STAGED" ]] || { echo "FAIL: the held file is gone" >&2; exit 1; }
+[[ -s "$TARGET.empty-since" ]] || { echo "FAIL: no mark of when the model routes went" >&2; exit 1; }
+grep -q 'stays for another' <<< "$out" || { echo "FAIL: no warning about the hold: $out" >&2; exit 1; }
+since=$(cat "$TARGET.empty-since")
+sleep 1
+echo "== guard.sh: a second render and a recheck during the hold are held too, on the same clock"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the second held render failed" >&2; exit 1; }
+grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the second render ended the hold early" >&2; exit 1; }
+[[ "$(cat "$TARGET.empty-since")" == "$since" ]] || { echo "FAIL: the second render reset the clock" >&2; exit 1; }
+out=$(GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a recheck during the hold failed: $out" >&2; exit 1; }
+grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: a recheck ended the hold early" >&2; exit 1; }
+[[ -z "$out" ]] || { echo "FAIL: a recheck that finds the hold still on is not quiet: $out" >&2; exit 1; }
+echo "== guard.sh: a recheck after the grace period promotes the file"
+sleep 2
+GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the recheck after the grace period failed" >&2; exit 1; }
+if grep -q 'model-qwen3' "$TARGET"; then
+  echo "FAIL: the file without model routes was not promoted when the grace period ended" >&2
+  exit 1
+fi
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the mark of the hold was left behind" >&2; exit 1; }
+echo "== guard.sh: a recheck leaves a newer render to consul-template's own command"
+export GUARD_EMPTY_GRACE=1
+with_models "$TARGET"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold did not start" >&2; exit 1; }
+grep -q "^[0-9]* [0-9a-f]\{64\}$" "$TARGET.empty-since" || { echo "FAIL: the mark of the hold does not name the held render: $(cat "$TARGET.empty-since")" >&2; exit 1; }
+sleep 2
+# consul-template renders a new file with model routes before the recheck runs: the recheck
+# is not the one to check it, and leaves everything as it is.
+with_models "$STAGED"
+echo "# newer" >> "$STAGED"
+out=$(GUARD_RECHECK=1 GUARD_VERIFY_TIMEOUT=1 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: the recheck failed: $out" >&2; exit 1; }
+[[ -z "$out" ]] || { echo "FAIL: a recheck that finds a newer render is not quiet: $out" >&2; exit 1; }
+grep -q '# newer' "$STAGED" || { echo "FAIL: the newer render was consumed by the recheck" >&2; exit 1; }
+[[ -f "$TARGET.empty-since" ]] || { echo "FAIL: the recheck ended the hold" >&2; exit 1; }
+[[ ! -e "$STAGED.recheck" ]] || { echo "FAIL: the snapshot was left behind" >&2; exit 1; }
+# consul-template's own command then checks the newer render, which ends the hold.
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the newer render failed" >&2; exit 1; }
+grep -q '# newer' "$TARGET" || { echo "FAIL: the newer render was not promoted" >&2; exit 1; }
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not end with the newer render" >&2; exit 1; }
+echo "== guard.sh: a second held render during a hold is the one a recheck checks"
+export GUARD_EMPTY_GRACE=1
+with_models "$TARGET"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold did not start" >&2; exit 1; }
+since=$(cut -d' ' -f1 "$TARGET.empty-since")
+without_models "$STAGED"
+echo "# still empty, rendered again" >> "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the second held render failed" >&2; exit 1; }
+[[ "$(cut -d' ' -f1 "$TARGET.empty-since")" == "$since" ]] || { echo "FAIL: the second held render reset the clock" >&2; exit 1; }
+sleep 2
+GUARD_RECHECK=1 GUARD_VERIFY_TIMEOUT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the recheck of the second held render failed" >&2; exit 1; }
+grep -q '# still empty, rendered again' "$TARGET" || { echo "FAIL: the recheck did not promote the second held render" >&2; exit 1; }
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not end" >&2; exit 1; }
+unset GUARD_EMPTY_GRACE
+
+echo "== guard.sh: a recheck with nothing staged is quiet"
+out=$(GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a recheck with nothing staged failed: $out" >&2; exit 1; }
+[[ -z "$out" ]] || { echo "FAIL: a recheck with nothing staged is not quiet: $out" >&2; exit 1; }
+
+echo "== guard.sh: model routes come back during a hold"
+export GUARD_EMPTY_GRACE=60
+with_models "$TARGET"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1
+[[ -f "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not start" >&2; exit 1; }
+with_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: a file with model routes was not promoted during a hold" >&2; exit 1; }
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold was not ended by the file with model routes" >&2; exit 1; }
+
+echo "== guard.sh: a file without model routes replaces one without them at once"
+without_models "$TARGET"
+echo "# changed" >> "$TARGET"
+without_models "$STAGED"
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: a render without model routes failed where there were none" >&2; exit 1; }
+grep -q '# changed' "$TARGET" && { echo "FAIL: a file without model routes was held where there were none to keep" >&2; exit 1; }
+[[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: a hold started where there were no model routes to keep" >&2; exit 1; }
+unset GUARD_EMPTY_GRACE
 
 # A fake Control API that serves one file per route, as APISIX's does: a route it loaded, with
 # the modification time of the file it came from as modifiedIndex.
@@ -164,8 +313,24 @@ cp -p "$STAGED" "$TARGET"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || true
 [[ "$(stat -c %Y "$TARGET")" -gt 1700000100 ]] || { echo "FAIL: the new file is not newer than the current one" >&2; exit 1; }
 
-echo "== guard.sh: the Control API does not answer"
+echo "== guard.sh: a Control API that hangs does not keep the guard past its deadline"
 kill $SERVER; wait $SERVER 2>/dev/null || true
+# A port that accepts connections and never answers.
+HPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 -c "import socket, time; s=socket.socket(); s.bind(('127.0.0.1', $HPORT)); s.listen(50); time.sleep(600)" &
+HANG=$!
+export GUARD_CONTROL_URL="http://127.0.0.1:$HPORT"
+echo "$PREVIOUS" > "$TARGET"
+touch -d @1700000000 "$TARGET"
+stage
+started=$(date +%s)
+"$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || true
+took=$(( $(date +%s) - started ))
+kill $HANG 2>/dev/null; wait $HANG 2>/dev/null || true
+[[ "$took" -le 8 ]] || { echo "FAIL: the guard took ${took}s with a hanging Control API, want a few seconds (GUARD_VERIFY_TIMEOUT=1)" >&2; exit 1; }
+export GUARD_CONTROL_URL="http://127.0.0.1:$PORT"
+
+echo "== guard.sh: the Control API does not answer"
 echo "$PREVIOUS" > "$TARGET"
 touch -d @1700000000 "$TARGET"
 stage

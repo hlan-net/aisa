@@ -12,12 +12,19 @@
 # The two kinds of model route have prefixes of their own, so no model name can make a route ID
 # of one kind equal to one of the other (a model "qwen3-fail-open" next to "qwen3", for example).
 
-{{- /* Log comments for skipped backends with invalid metadata (#18) */}}
+{{- /* The backends whose meta the template can render (#18): the others are left out, with a
+       comment that names them. "valid" maps the service ID of each usable backend to "1". */}}
+{{- scratch.Set "valid" (sprig_dict) }}
 {{- range service "aisa-backend" }}
+  {{- $timeout := index .ServiceMeta "timeout" }}
   {{- if not (index .ServiceMeta "models") }}
 # Skipped backend {{ .ID | toJSON }}: missing 'models' metadata
   {{- else if not (eq (index .ServiceMeta "provider") "openai-compatible") }}
 # Skipped backend {{ .ID | toJSON }}: unsupported provider {{ index .ServiceMeta "provider" | toJSON }}
+  {{- else if and $timeout (not (regexMatch "^[1-9][0-9]{0,17}$" $timeout)) }}
+# Skipped backend {{ .ID | toJSON }}: invalid 'timeout' metadata {{ $timeout | toJSON }} (want whole seconds)
+  {{- else }}
+    {{- scratch.MapSet "valid" .ID "1" }}
   {{- end }}
 {{- end }}
 
@@ -25,8 +32,7 @@
 {{- range service "aisa-backend" }}
   {{- $backend := . }}
   {{- $modelsMeta := index $backend.ServiceMeta "models" }}
-  {{- $providerMeta := index $backend.ServiceMeta "provider" }}
-  {{- if and $modelsMeta (eq $providerMeta "openai-compatible") }}
+  {{- if index (scratch.Get "valid") $backend.ID }}
     {{- range ($modelsMeta | split ",") }}
       {{- $m := . | trimSpace }}
       {{- if $m }}
@@ -229,12 +235,13 @@ routes:
   {{- range service "aisa-backend" }}
     {{- $serves := false }}
     {{- range (index .ServiceMeta "models" | split ",") }}{{ if eq (. | trimSpace) $model }}{{ $serves = true }}{{ end }}{{ end }}
-    {{- if and $serves (eq (index .ServiceMeta "provider") "openai-compatible") (or (not $failOpen) (eq (index .ServiceMeta "fail_policy") "open")) }}
+    {{- if and $serves (index (scratch.Get "valid") .ID) (or (not $failOpen) (eq (index .ServiceMeta "fail_policy") "open")) }}
       {{- scratch.Set "instances" (sprig_append (scratch.Get "instances") .) }}
     {{- end }}
   {{- end }}
 
-  {{- /* The timeout of the model (#14): the longest of its backends, default 300 s, at most 600 s */}}
+  {{- /* The timeout of the model (#14): the longest of its backends, default 300 s, at most 600 s.
+         A backend whose timeout is not whole seconds is not among the instances (above). */}}
   {{- $maxTimeoutSec := 300 }}
   {{- range scratch.Get "instances" }}
     {{- with index .ServiceMeta "timeout" }}

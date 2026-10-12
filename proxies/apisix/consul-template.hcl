@@ -21,6 +21,11 @@ template {
   command     = "/etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml"
   perms       = 0644
 
+  # consul-template exits when the command takes longer. guard.sh waits for its lock 20 s at
+  # most (GUARD_LOCK_WAIT), for APISIX 10 s (GUARD_VERIFY_TIMEOUT), and a few seconds more for
+  # the file and the Control API; the default of 30 s is too close to that.
+  command_timeout = "60s"
+
   # A missing meta key or secret field stops the render instead of writing an empty value.
   error_on_missing_key = true
 

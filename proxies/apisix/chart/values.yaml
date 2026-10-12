@@ -38,6 +38,9 @@ consulTemplate:
     repository: hashicorp/consul-template
     tag: 0.43.0
     pullPolicy: IfNotPresent
+  # Seconds a rendered config without model routes waits before it replaces one that has them:
+  # the catalog can come back empty although the backends are fine (guard.sh, GUARD_EMPTY_GRACE).
+  emptyCatalogGrace: 300
   resources:
     requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
     limits: {memory: 64Mi, ephemeral-storage: 64Mi}

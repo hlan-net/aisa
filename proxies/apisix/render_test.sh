@@ -23,13 +23,25 @@ LONG_MODEL="example-org/a-model-name-that-is-much-longer-than-a-route-id-may-be:
 # A dollar in a name: an APISIX variable to fault-injection, unless the model list escapes it.
 DOLLAR_MODEL='vendor/$model'
 cleanup() {
-    curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/render-test" || true
+    for id in render-test render-test-slow render-test-bad-timeout; do
+        curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/$id" || true
+    done
     rm -rf "$OUT"
 }
 trap cleanup EXIT
 curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
 {"ID": "render-test", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
  "Meta": {"provider": "openai-compatible", "models": "qwen3-fail-open,$LONG_MODEL,$DOLLAR_MODEL", "fail_policy": "open"}}
+EOF
+# A timeout above the cap of ai-proxy-multi, and one that is not a number: the first is capped,
+# the second leaves its backend out (#18).
+curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "render-test-slow", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
+ "Meta": {"provider": "openai-compatible", "models": "slow-test", "timeout": "900"}}
+EOF
+curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "render-test-bad-timeout", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
+ "Meta": {"provider": "openai-compatible", "models": "bad-timeout-test,qwen3", "timeout": "fast"}}
 EOF
 # consul-template runs as a user of its own in the container.
 chmod 777 "$OUT"
@@ -93,5 +105,24 @@ expect "a route for a model named like another model's fail-open route" '^  - id
 expect "a fail-open route for that model" '^  - id: "fail-open-qwen3-fail-open"$'
 expect "a route for the long model name, by its full name" "\"http_x_aisa_model\", \"==\", \"$LONG_MODEL\""
 expect "a fail-open route for the long model name" "\"http_x_aisa_requested_model\", \"==\", \"$LONG_MODEL\""
+
+# Timeouts (#14, #18): the default, the cap, and a backend left out for a value that is not seconds.
+route() { awk -v id="$1" '$0 == "  - id: " id { f = 1; next } /^  - id: / { f = 0 } f' "$RENDERED"; }
+expect_in_route() {
+    local what=$1 id=$2 pattern=$3
+    route "$id" | grep -q -- "$pattern" || fail "$what"
+    echo "ok: $what"
+}
+expect_in_route "the default timeout of 300 s" '"model-qwen3"' '^        timeout: 300000$'
+expect_in_route "a timeout above 600 s is capped" '"model-slow-test"' '^        timeout: 600000$'
+expect "a backend with an invalid timeout is named in a comment" "^# Skipped backend \"render-test-bad-timeout\": invalid 'timeout' metadata \"fast\""
+if grep -q '^  - id: "model-bad-timeout-test"$' "$RENDERED"; then
+    fail "a backend with an invalid timeout got a route"
+fi
+echo "ok: no route for the model of a backend with an invalid timeout"
+if route '"model-qwen3"' | grep -q 'render-test-bad-timeout'; then
+    fail "a backend with an invalid timeout is among the instances of a shared model"
+fi
+echo "ok: a backend with an invalid timeout serves no shared model either"
 
 echo "ok: all render tests passed"
