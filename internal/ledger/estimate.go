@@ -1,9 +1,9 @@
 package ledger
 
 import (
+	"container/list"
 	"math"
 	"sync"
-	"time"
 )
 
 // Sources of an estimate, for the debug log.
@@ -30,27 +30,32 @@ type Estimator struct {
 	mu           sync.Mutex
 	defaultValue int64
 	capacity     int
-	byPair       map[pair]*average
-	byModel      map[string]*average
-	now          func() time.Time
+	// byPair and order are an LRU of the (consumer, model) pairs: the front of order was
+	// observed last, and the back gives way when the table is full.
+	byPair  map[pair]*list.Element
+	order   *list.List
+	byModel map[string]*average
 }
 
 type pair struct{ consumer, model string }
+
+type pairEntry struct {
+	key pair
+	avg average
+}
 
 // average is a running mean of the first averageWindow samples and an exponential moving
 // average after them.
 type average struct {
 	mean float64
 	n    int
-	seen time.Time
 }
 
-func (a *average) add(tokens int64, at time.Time) {
+func (a *average) add(tokens int64) {
 	if a.n < averageWindow {
 		a.n++
 	}
 	a.mean += (float64(tokens) - a.mean) / float64(a.n)
-	a.seen = at
 }
 
 // NewEstimator returns an Estimator that answers defaultTokens when it has nothing to go by.
@@ -58,9 +63,9 @@ func NewEstimator(defaultTokens int64) *Estimator {
 	return &Estimator{
 		defaultValue: max(defaultTokens, 0),
 		capacity:     estimatorCapacity,
-		byPair:       map[pair]*average{},
+		byPair:       map[pair]*list.Element{},
+		order:        list.New(),
 		byModel:      map[string]*average{},
-		now:          time.Now,
 	}
 }
 
@@ -71,38 +76,27 @@ func (e *Estimator) Observe(consumer, model string, tokens int64) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	now := e.now()
 	k := pair{consumer, model}
-	a, ok := e.byPair[k]
-	if !ok {
-		if len(e.byPair) >= e.capacity {
-			e.evict()
+	el, ok := e.byPair[k]
+	if ok {
+		e.order.MoveToFront(el)
+	} else {
+		if e.order.Len() >= e.capacity {
+			// The pair observed longest ago gives way; its samples still count for the model.
+			back := e.order.Back()
+			delete(e.byPair, back.Value.(*pairEntry).key)
+			e.order.Remove(back)
 		}
-		a = &average{}
-		e.byPair[k] = a
+		el = e.order.PushFront(&pairEntry{key: k})
+		e.byPair[k] = el
 	}
-	a.add(tokens, now)
+	el.Value.(*pairEntry).avg.add(tokens)
 	m, ok := e.byModel[model]
 	if !ok {
 		m = &average{}
 		e.byModel[model] = m
 	}
-	m.add(tokens, now)
-}
-
-// evict forgets the pair that was seen longest ago. The table is full only with thousands of
-// consumer and model pairs, so the scan is rare.
-func (e *Estimator) evict() {
-	var oldest pair
-	var found bool
-	for k, a := range e.byPair {
-		if !found || a.seen.Before(e.byPair[oldest].seen) {
-			oldest, found = k, true
-		}
-	}
-	if found {
-		delete(e.byPair, oldest)
-	}
+	m.add(tokens)
 }
 
 // Estimate returns the tokens to charge for a request of consumer and model whose usage is
@@ -111,8 +105,8 @@ func (e *Estimator) evict() {
 func (e *Estimator) Estimate(consumer, model string) (int64, string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if a, ok := e.byPair[pair{consumer, model}]; ok {
-		return round(a.mean), estimateFromConsumer
+	if el, ok := e.byPair[pair{consumer, model}]; ok {
+		return round(el.Value.(*pairEntry).avg.mean), estimateFromConsumer
 	}
 	if a, ok := e.byModel[model]; ok {
 		return round(a.mean), estimateFromModel
@@ -124,7 +118,11 @@ func (e *Estimator) Estimate(consumer, model string) (int64, string) {
 }
 
 // round rounds a mean up: an estimate errs on the side of the quota, and a mean of exact
-// events above zero never becomes a charge of zero.
+// events above zero never becomes a charge of zero. A mean at the top of the range stays
+// there: float64(math.MaxInt64) is 2^63, which int64 cannot hold.
 func round(mean float64) int64 {
+	if mean >= math.MaxInt64 {
+		return math.MaxInt64
+	}
 	return int64(math.Ceil(mean))
 }

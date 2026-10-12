@@ -2,8 +2,8 @@ package ledger
 
 import (
 	"fmt"
+	"math"
 	"testing"
-	"time"
 )
 
 func TestEstimatorSources(t *testing.T) {
@@ -69,22 +69,37 @@ func TestEstimatorAverageRoundsUpAndForgets(t *testing.T) {
 func TestEstimatorCapacity(t *testing.T) {
 	e := NewEstimator(0)
 	e.capacity = 3
-	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
-	e.now = func() time.Time { return now }
 	for i := range 3 {
 		e.Observe(fmt.Sprintf("consumer-%d", i), "qwen3", int64(10*(i+1)))
-		now = now.Add(time.Minute)
 	}
-	// consumer-0 was seen longest ago; it gives way to a new pair. Its sample still counts for
-	// the model.
+	// consumer-0 is observed again, so consumer-1 is now the pair observed longest ago and
+	// gives way to a new one. Its sample still counts for the model.
+	e.Observe("consumer-0", "qwen3", 10)
 	e.Observe("consumer-3", "qwen3", 40)
-	if got, src := e.Estimate("consumer-0", "qwen3"); src != estimateFromModel || got != 25 {
-		t.Fatalf("the evicted pair: got %d from %q, want 25 from model", got, src)
+	if got, src := e.Estimate("consumer-1", "qwen3"); src != estimateFromModel || got != 22 {
+		t.Fatalf("the evicted pair: got %d from %q, want 22 from model", got, src)
 	}
-	if got, src := e.Estimate("consumer-1", "qwen3"); src != estimateFromConsumer || got != 20 {
-		t.Fatalf("a kept pair: got %d from %q, want 20 from consumer", got, src)
+	if got, src := e.Estimate("consumer-0", "qwen3"); src != estimateFromConsumer || got != 10 {
+		t.Fatalf("the pair observed again: got %d from %q, want 10 from consumer", got, src)
 	}
-	if len(e.byPair) != 3 {
-		t.Fatalf("pairs = %d, want 3", len(e.byPair))
+	if got, src := e.Estimate("consumer-2", "qwen3"); src != estimateFromConsumer || got != 30 {
+		t.Fatalf("a kept pair: got %d from %q, want 30 from consumer", got, src)
+	}
+	if len(e.byPair) != 3 || e.order.Len() != 3 {
+		t.Fatalf("pairs = %d, order = %d, want 3 and 3", len(e.byPair), e.order.Len())
+	}
+}
+
+func TestEstimatorAtTheTopOfTheRange(t *testing.T) {
+	// AddTokens saturates at MaxInt64, and float64 rounds that to 2^63: the estimate must
+	// stay in range rather than overflow to a negative charge.
+	e := NewEstimator(0)
+	e.Observe("chat-ui", "qwen3", math.MaxInt64)
+	if got, _ := e.Estimate("chat-ui", "qwen3"); got != math.MaxInt64 {
+		t.Fatalf("a mean at the top of the range: got %d, want MaxInt64", got)
+	}
+	e.Observe("chat-ui", "qwen3", math.MaxInt64)
+	if got, _ := e.Estimate("chat-ui", "qwen3"); got <= 0 {
+		t.Fatalf("after two samples at the top of the range: got %d, want a positive charge", got)
 	}
 }
