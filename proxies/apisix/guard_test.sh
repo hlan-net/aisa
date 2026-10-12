@@ -426,7 +426,7 @@ without_models "$STAGED"
 grep -q '"result":"held","reason":"the rendered file has no model route; .*","backends":0,"models":0}' "$REPORTS" || { echo "FAIL: the held render was not reported: $(cat "$REPORTS")" >&2; exit 1; }
 unset GUARD_EMPTY_GRACE
 
-echo "== guard.sh: a report that cannot be delivered does not fail the render"
+echo "== guard.sh: a report that cannot be delivered does not fail the render, and is kept"
 export AISA_RENDER_URI="http://127.0.0.1:1/v1/render"
 echo "$PREVIOUS" > "$TARGET"
 stage
@@ -435,6 +435,15 @@ if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
   exit 1
 fi
 grep -q 'was not reported' <<< "$out" || { echo "FAIL: no warning about the undelivered report: $out" >&2; exit 1; }
+[[ -s "$TARGET.report" ]] || { echo "FAIL: the undelivered report was not kept" >&2; exit 1; }
+echo "== guard.sh: --resend delivers the kept report once aisa answers"
+: > "$REPORTS"
+export AISA_RENDER_URI="http://127.0.0.1:$RPORT/v1/render"
+"$GUARD" --resend "$TARGET" || { echo "FAIL: --resend failed" >&2; exit 1; }
+grep -q '"result":"promoted"' "$REPORTS" || { echo "FAIL: the kept report was not delivered: $(cat "$REPORTS")" >&2; exit 1; }
+[[ ! -e "$TARGET.report" ]] || { echo "FAIL: the delivered report was not removed" >&2; exit 1; }
+"$GUARD" --resend "$TARGET" || { echo "FAIL: --resend with nothing kept failed" >&2; exit 1; }
+[[ "$(grep -c . "$REPORTS")" == 1 ]] || { echo "FAIL: --resend with nothing kept sent something" >&2; exit 1; }
 unset AISA_RENDER_URI
 
 echo "ok: all guard tests passed"

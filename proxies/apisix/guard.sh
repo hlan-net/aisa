@@ -19,10 +19,33 @@
 #   AISA_RENDER_URI       where each render is reported, aisa's         unset: no report
 #                         POST /v1/render (PROXY_CONTRACT.md, Reporting a render)
 #
+# guard.sh --resend <target-file> delivers the last report again, if aisa has not taken it yet
+# (the pod's loop calls it every 30 s; see report below).
+#
 # consul-template exits when this script fails, and Kubernetes restarts its container, which
 # renders again: that is the retry of a rejected file. A hold (below) is not a failure.
 
 set -e
+
+# send_report: delivers the last report, kept in <target>.report until aisa has taken it, so
+# that a render while aisa is down (the first one, as the pod and aisa start together) is
+# reported when the pod's loop tries again. The wait is bounded, since a render waits for it.
+send_report() {
+    [ -n "$AISA_RENDER_URI" ] && [ -f "$TARGET.report" ] || return 0
+    if timeout 3 wget -q -O /dev/null -T 3 --header 'Content-Type: application/json' \
+        --post-data "$(cat "$TARGET.report")" "$AISA_RENDER_URI" 2>/dev/null; then
+        rm -f "$TARGET.report"
+    else
+        echo "guard: warning: the render was not reported to $AISA_RENDER_URI; the pod tries again" >&2
+    fi
+}
+
+if [ "$1" = "--resend" ]; then
+    TARGET="$2"
+    [ -n "$TARGET" ] || { echo "guard: error: usage: guard.sh --resend <target-file>" >&2; exit 1; }
+    send_report
+    exit 0
+fi
 
 STAGED="$1"
 TARGET="$2"
@@ -130,16 +153,16 @@ backends() {
 }
 
 # report <result> <reason> <file>: tells aisa what became of this render, with the backends and
-# models of <file>, when AISA_RENDER_URI is set. Best effort: aisa may be down, and a render
-# waits for it 3 s at most. The reason is a fixed phrase and route IDs, quoted for JSON anyway
-# and cut to the 1024 bytes aisa takes: a file with many rejected routes names the first ones.
+# models of <file>, when AISA_RENDER_URI is set. A render waits for aisa 3 s at most; a report
+# aisa did not take is kept and sent again (send_report). The reason is a fixed phrase and
+# route IDs, quoted for JSON anyway and cut to the 1024 bytes aisa takes: a file with many
+# rejected routes names the first ones.
 report() {
     [ -n "$AISA_RENDER_URI" ] || return 0
     reason=$(printf '%.1000s' "$2" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
-    body=$(printf '{"ts":"%s","result":"%s","reason":"%s","backends":%s,"models":%s}' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$reason" "$(backends "$3")" "$(model_routes "$3")")
-    wget -q -O /dev/null -T 3 --header 'Content-Type: application/json' --post-data "$body" "$AISA_RENDER_URI" 2>/dev/null ||
-        echo "guard: warning: the render was not reported to $AISA_RENDER_URI" >&2
+    printf '{"ts":"%s","result":"%s","reason":"%s","backends":%s,"models":%s}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$reason" "$(backends "$3")" "$(model_routes "$3")" > "$TARGET.report"
+    send_report
 }
 # reject <message>: the staged file is not promoted; the current one stays.
 reject() {

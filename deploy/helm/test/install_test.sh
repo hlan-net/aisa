@@ -150,6 +150,18 @@ grep -q '^aisa_consumer_loads_total{result="ok"}' <<<"$metrics" ||
 ok "aisa loaded its consumers from Vault (Kubernetes auth as the role aisa)"
 profiles=$(awk '/^aisa_quota_profiles /{print $2}' <<<"$metrics")
 expect "aisa read its quota profiles from Consul (a token from Vault)" 1 "$profiles"
+# The proxy reports its renders to the URI the chart gives it (AISA_RENDER_URI). The first
+# render comes before aisa is up, so the proxy's loop sends the report again within 30 s.
+promoted=0
+for _ in $(seq 1 45); do
+    promoted=$(curl -fsS http://127.0.0.1:18090/metrics | awk '/^aisa_config_renders_total\{result="promoted"\}/{print $2}')
+    [[ "${promoted:-0}" != 0 ]] && break
+    sleep 2
+done
+[[ "${promoted:-0}" != 0 ]] || fail "the proxy reported a promoted render to aisa's /v1/render"
+ok "the proxy reported a promoted render to aisa's /v1/render ($promoted)"
+models=$(curl -fsS http://127.0.0.1:18090/metrics | awk '/^aisa_config_models /{print $2}')
+expect "aisa knows the models of the rendered config" 2 "$models"
 
 echo "== requests through the proxy"
 port_forward "$RELEASE-apisix" 19080 80

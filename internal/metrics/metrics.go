@@ -113,9 +113,9 @@ type Metrics struct {
 	// ConfigRenders counts the proxy's renders of the gateway config by result: promoted,
 	// rejected or held. ConfigRendered is when a render was last promoted, in seconds since
 	// the epoch, and ConfigBackends and ConfigModels are what that config holds. The three
-	// gauges have no labels and are absent until the first promoted render since aisa
-	// started: a restart forgets the config, and an absent gauge says so where a zero would
-	// claim the gateway runs an empty one.
+	// gauges have no labels and are absent until the first promoted report since aisa
+	// started (a rejected or held one leaves them absent): a restart forgets the config, and
+	// an absent gauge says so where a zero would claim the gateway runs an empty one.
 	ConfigRenders  *prometheus.CounterVec
 	ConfigRendered *prometheus.GaugeVec
 	ConfigBackends *prometheus.GaugeVec
@@ -234,15 +234,15 @@ func New(version string) *Metrics {
 		}, []string{"result"}),
 		ConfigRendered: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "aisa_config_rendered_timestamp_seconds",
-			Help: "When the proxy last promoted a rendered gateway config, in seconds since the epoch; absent until the first report since aisa started.",
+			Help: "When the proxy last promoted a rendered gateway config, in seconds since the epoch; absent until the first promoted report since aisa started.",
 		}, nil),
 		ConfigBackends: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "aisa_config_backends",
-			Help: "Backends in the gateway config the proxy last promoted; absent until the first report since aisa started.",
+			Help: "Backends in the gateway config the proxy last promoted; absent until the first promoted report since aisa started.",
 		}, nil),
 		ConfigModels: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "aisa_config_models",
-			Help: "Models with a route in the gateway config the proxy last promoted; absent until the first report since aisa started.",
+			Help: "Models with a route in the gateway config the proxy last promoted; absent until the first promoted report since aisa started.",
 		}, nil),
 	}
 
