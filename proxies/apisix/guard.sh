@@ -15,7 +15,7 @@
 #                         before it replaces one that has them
 #   GUARD_RECHECK         set when the pod runs this script again during a hold (see 6.)
 #   GUARD_LOCK_WAIT       seconds to wait for another guard to finish   20
-#                         (under consul-template's command_timeout of 30 s)
+#                         (consul-template.hcl sets command_timeout to 60 s for the whole guard)
 #
 # consul-template exits when this script fails, and Kubernetes restarts its container, which
 # renders again: that is the retry of a rejected file. A hold (below) is not a failure.
@@ -213,13 +213,18 @@ remaining() {
     [ "$r" -gt 0 ] && echo "$r" || echo 1
 }
 # missing: prints the routes of the new file that APISIX has not loaded, or "unreachable".
-# Each call is bounded by the time left.
+# Each call is bounded by the time left, and none is made once the deadline has passed: the
+# routes not asked about by then count as missing.
 missing() {
     if ! timeout "$(remaining)" wget -q -O /dev/null -T "$(remaining)" "$CONTROL/v1/routes" 2>/dev/null; then
         echo unreachable
         return
     fi
     for id in $IDS; do
+        if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+            echo "$id"
+            continue
+        fi
         loaded=$(timeout "$(remaining)" wget -q -O - -T "$(remaining)" "$CONTROL/v1/route/$id" 2>/dev/null | sed -n 's/.*"modifiedIndex":\([0-9]*\).*/\1/p')
         [ "$loaded" = "$VERSION" ] || echo "$id"
     done
