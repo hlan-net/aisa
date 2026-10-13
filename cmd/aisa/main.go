@@ -26,7 +26,7 @@
 //	CONSUL_CACERT               CA certificate of Consul, PEM                     system CAs
 //	CONSUL_HTTP_TOKEN           a fixed Consul ACL token, for development
 //	CONSUL_HTTP_TOKEN_FILE      file with the Consul ACL token, read for each request
-//	AISA_CONSUL_PREFIX          prefix of aisa's keys in Consul KV                aisa
+//	AISA_ADMIN_ENABLED          enable admin interface and web UI at /admin       true
 //	AISA_REDIS_ADDR             Redis host:port for the quota counters; turns token quotas on
 //	AISA_REDIS_USERNAME         Redis ACL user
 //	AISA_REDIS_PASSWORD         Redis password
@@ -49,6 +49,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/hlan-net/aisa/internal/admin"
 	"github.com/hlan-net/aisa/internal/config"
 	"github.com/hlan-net/aisa/internal/consul"
 	"github.com/hlan-net/aisa/internal/consumers"
@@ -146,12 +147,20 @@ func run(args []string) error {
 		log.Warn("token quotas are off: set AISA_REDIS_ADDR to turn them on")
 	}
 
+	var adminHandler http.Handler
+	if cfg.Admin.Enabled {
+		adminHandler = admin.New(cc, vc, m, log.With("component", "admin"),
+			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix},
+			checks...)
+	}
+
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide")),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
 			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens}),
-		render.New(m, log.With("component", "render")))
+		render.New(m, log.With("component", "render")),
+		adminHandler)
 	if err := srv.Run(ctx, cfg.Addr, cfg.MetricsAddr); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
@@ -195,12 +204,16 @@ func observeProfiles(m *metrics.Metrics, s quotas.LoadStats) {
 	m.QuotaProfilesInvalid.Set(float64(s.Invalid))
 }
 
-// routes registers the contract endpoints.
-func routes(srv *server.Server, decision, usage, renders http.Handler) {
+// routes registers the contract endpoints and optional admin interface.
+func routes(srv *server.Server, decision, usage, renders, adm http.Handler) {
 	srv.Handle("POST /v1/decide", decision)
 	srv.Handle("GET /v1/decide", decision)
 	srv.Handle("POST /v1/usage", usage)
 	srv.Handle("POST /v1/render", renders)
+	if adm != nil {
+		srv.Handle("/admin/", adm)
+		srv.Handle("GET /admin", adm)
+	}
 }
 
 // observeLoad puts the result of a load of the consumers into the metrics.

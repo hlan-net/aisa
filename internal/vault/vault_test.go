@@ -65,6 +65,10 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 		f.list(w, strings.TrimPrefix(path, "secret/metadata/"))
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "secret/data/"):
 		f.read(w, strings.TrimPrefix(path, "secret/data/"))
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "secret/data/"):
+		f.write(w, r, strings.TrimPrefix(path, "secret/data/"))
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "secret/metadata/"):
+		f.delete(w, strings.TrimPrefix(path, "secret/metadata/"))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -108,6 +112,26 @@ func (f *fakeVault) read(w http.ResponseWriter, path string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"data": data}})
 }
 
+func (f *fakeVault) write(w http.ResponseWriter, r *http.Request, path string) {
+	var in struct {
+		Data map[string]any `json:"data"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	f.secrets["secret/"+path] = in.Data
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"version": 1}})
+}
+
+func (f *fakeVault) delete(w http.ResponseWriter, path string) {
+	key := "secret/" + path
+	if _, ok := f.secrets[key]; !ok {
+		writeStatus(w, http.StatusNotFound, `{"errors":[]}`)
+		return
+	}
+	delete(f.secrets, key)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func writeStatus(w http.ResponseWriter, status int, body string) {
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(body))
@@ -138,6 +162,40 @@ func TestTokenAuthListAndRead(t *testing.T) {
 	}
 	if err := c.Probe(ctx); err != nil {
 		t.Errorf("Probe: %v", err)
+	}
+}
+
+func TestWriteAndDelete(t *testing.T) {
+	_, srv := newFakeVault(t)
+	c, err := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Write
+	err = c.Write(ctx, "secret", "aisa/consumers/new-app", map[string]any{"key_sha256": "hash123"})
+	if err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	data, err := c.Read(ctx, "secret", "aisa/consumers/new-app")
+	if err != nil || data["key_sha256"] != "hash123" {
+		t.Fatalf("Read after Write: data=%v, err=%v", data, err)
+	}
+
+	// Delete
+	err = c.Delete(ctx, "secret", "aisa/consumers/new-app")
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	if _, err := c.Read(ctx, "secret", "aisa/consumers/new-app"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Read after Delete: expected ErrNotFound, got %v", err)
+	}
+
+	// Delete non-existent returns nil
+	err = c.Delete(ctx, "secret", "aisa/consumers/non-existent")
+	if err != nil {
+		t.Fatalf("Delete non-existent failed: %v", err)
 	}
 }
 

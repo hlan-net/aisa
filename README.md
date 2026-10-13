@@ -57,6 +57,7 @@ Three contracts connect aisa to its proxy: a **decision API** (forward-auth patt
 | **Features** | |
 | [quotas-and-budgets.md](docs/features/quotas-and-budgets.md) | Token quotas and monthly budgets, both in tokens |
 | [usage-metrics.md](docs/features/usage-metrics.md) | Metrics, dashboard and alerts |
+| [admin-interface.md](docs/features/admin-interface.md) | Administration Web UI and REST management API |
 | **Process** | |
 | [SPIKES.md](docs/process/SPIKES.md) | Unknowns to verify before implementation |
 | [USER_STORIES.md](docs/process/USER_STORIES.md) | Who aisa is built for (US-1 to US-3), with acceptance criteria and gaps |
@@ -71,6 +72,7 @@ curl localhost:8080/healthz
 | Variable | Meaning | Default |
 |---|---|---|
 | `AISA_ADDR` | Address to listen on | `:8080` |
+| `AISA_ADMIN_ENABLED` | Enable administration Web UI and API at `/admin` | `true` |
 | `AISA_LOG_LEVEL` | `debug`, `info`, `warn` or `error`; logs are JSON lines on stdout | `info` |
 | `AISA_SHUTDOWN_TIMEOUT` | Time that requests in flight get to finish after SIGTERM | `10s` |
 
@@ -79,6 +81,8 @@ curl localhost:8080/healthz
 | `GET /healthz` | Answers while the process runs (liveness) |
 | `GET /readyz` | 200 when every dependency can be used, else 503 with the names of those that failed (readiness) |
 | `GET /metrics` | The `aisa_*` metrics of [PROXY_CONTRACT.md](docs/concepts/PROXY_CONTRACT.md#4-metrics-output-of-aisa), in the Prometheus format |
+| `GET /admin/` | Embedded administration Web dashboard |
+| `/admin/api/*` | Administration REST API for consumers, quotas, backends, and models |
 
 ## Development
 

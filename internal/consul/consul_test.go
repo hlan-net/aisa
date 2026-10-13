@@ -3,6 +3,7 @@ package consul
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -166,5 +167,114 @@ func TestNew(t *testing.T) {
 		if err == nil && c.addr != tc.want {
 			t.Errorf("New(%+v): addr = %q, want %q", tc.opts, c.addr, tc.want)
 		}
+	}
+}
+
+func TestPut(t *testing.T) {
+	var gotPath, gotBody, gotToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		gotToken = r.Header.Get("X-Consul-Token")
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("true"))
+	}))
+	defer srv.Close()
+
+	c, _ := New(Options{Addr: srv.URL, Token: "my-tok"})
+	err := c.Put(context.Background(), "aisa/consumers/app1", []byte(`{"quota_profile":"interactive"}`))
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if gotPath != "/v1/kv/aisa/consumers/app1" {
+		t.Errorf("path = %q, want /v1/kv/aisa/consumers/app1", gotPath)
+	}
+	if gotToken != "my-tok" {
+		t.Errorf("token = %q, want my-tok", gotToken)
+	}
+	if gotBody != `{"quota_profile":"interactive"}` {
+		t.Errorf("body = %q", gotBody)
+	}
+
+	// Error handling
+	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "server error", http.StatusInternalServerError)
+	}))
+	defer errSrv.Close()
+	cErr, _ := New(Options{Addr: errSrv.URL})
+	if err := cErr.Put(context.Background(), "key", []byte("val")); err == nil {
+		t.Error("expected error on 500, got nil")
+	}
+}
+
+func TestDelete(t *testing.T) {
+	var gotPath, gotQuery, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.EscapedPath()
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("true"))
+	}))
+	defer srv.Close()
+
+	c, _ := New(Options{Addr: srv.URL})
+	if err := c.Delete(context.Background(), "aisa/consumers/app1", false); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/v1/kv/aisa/consumers/app1" || gotQuery != "" {
+		t.Errorf("Delete: method %s, path %s, query %s", gotMethod, gotPath, gotQuery)
+	}
+
+	if err := c.Delete(context.Background(), "aisa/consumers/", true); err != nil {
+		t.Fatalf("Delete recurse failed: %v", err)
+	}
+	if gotQuery != "recurse=true" {
+		t.Errorf("Delete recurse query = %q, want recurse=true", gotQuery)
+	}
+}
+
+func TestHealthService(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`[
+			{
+				"Service": {
+					"ID": "backend-1",
+					"Service": "aisa-backend",
+					"Tags": ["mock"],
+					"Address": "127.0.0.1",
+					"Port": 8080,
+					"Meta": {"models": "qwen3", "provider": "openai-compatible"}
+				},
+				"Checks": [
+					{
+						"CheckID": "service:backend-1",
+						"Name": "backend-1 health",
+						"Status": "passing",
+						"Output": "HTTP 200"
+					}
+				]
+			}
+		]`))
+	}))
+	defer srv.Close()
+
+	c, _ := New(Options{Addr: srv.URL})
+	list, err := c.HealthService(context.Background(), "aisa-backend", true)
+	if err != nil {
+		t.Fatalf("HealthService failed: %v", err)
+	}
+	if gotPath != "/v1/health/service/aisa-backend" || gotQuery != "passing=true" {
+		t.Errorf("request: path %q, query %q", gotPath, gotQuery)
+	}
+	if len(list) != 1 || list[0].Service.ID != "backend-1" || list[0].Service.Meta["models"] != "qwen3" {
+		t.Errorf("unexpected list: %+v", list)
+	}
+	if len(list[0].Checks) != 1 || list[0].Checks[0].Status != "passing" {
+		t.Errorf("unexpected checks: %+v", list[0].Checks)
 	}
 }

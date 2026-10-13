@@ -6,6 +6,7 @@
 package consul
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -183,4 +184,124 @@ func escapePath(path string) string {
 		parts[i] = url.PathEscape(p)
 	}
 	return strings.Join(parts, "/")
+}
+
+// Put writes a key and its value in Consul KV.
+func (c *Client) Put(ctx context.Context, key string, value []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.addr+"/v1/kv/"+escapePath(key), bytes.NewReader(value))
+	if err != nil {
+		return fmt.Errorf("consul request %s: %w", key, err)
+	}
+	token, err := c.currentToken()
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("X-Consul-Token", token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("consul PUT kv/%s: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("consul PUT kv/%s: %w", key, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(data))})
+	}
+	return nil
+}
+
+// Delete removes a key or prefix from Consul KV.
+func (c *Client) Delete(ctx context.Context, key string, recurse bool) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	u := c.addr + "/v1/kv/" + escapePath(key)
+	if recurse {
+		u += "?recurse=true"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return fmt.Errorf("consul request %s: %w", key, err)
+	}
+	token, err := c.currentToken()
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("X-Consul-Token", token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("consul DELETE kv/%s: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("consul DELETE kv/%s: %w", key, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(data))})
+	}
+	return nil
+}
+
+// ServiceHealth is a service instance and its health checks from Consul's /v1/health/service API.
+type ServiceHealth struct {
+	Service ServiceInfo    `json:"Service"`
+	Checks  []ServiceCheck `json:"Checks"`
+}
+
+// ServiceInfo is the service registration in Consul.
+type ServiceInfo struct {
+	ID      string            `json:"ID"`
+	Service string            `json:"Service"`
+	Tags    []string          `json:"Tags"`
+	Address string            `json:"Address"`
+	Port    int               `json:"Port"`
+	Meta    map[string]string `json:"Meta"`
+}
+
+// ServiceCheck is a check of a service instance in Consul.
+type ServiceCheck struct {
+	CheckID string `json:"CheckID"`
+	Name    string `json:"Name"`
+	Status  string `json:"Status"`
+	Output  string `json:"Output"`
+}
+
+// HealthService returns service instances and their checks from /v1/health/service/<service>.
+func (c *Client) HealthService(ctx context.Context, service string, passingOnly bool) ([]ServiceHealth, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	u := c.addr + "/v1/health/service/" + url.PathEscape(service)
+	if passingOnly {
+		u += "?passing=true"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("consul request %s: %w", service, err)
+	}
+	token, err := c.currentToken()
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("X-Consul-Token", token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("consul GET health/service/%s: %w", service, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, fmt.Errorf("consul GET health/service/%s: %w", service, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("consul GET health/service/%s: %w", service, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(data[:min(len(data), 512)]))})
+	}
+	var out []ServiceHealth
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("consul GET health/service/%s: decode answer: %w", service, err)
+	}
+	return out, nil
 }

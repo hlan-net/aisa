@@ -32,6 +32,15 @@ type Config struct {
 	// configured too.
 	Consul Consul
 	Redis  Redis
+
+	Admin Admin
+}
+
+// Admin configures the admin interface and Web UI at /admin.
+type Admin struct {
+	// Enabled reports whether the admin interface is served at /admin (AISA_ADMIN_ENABLED).
+	// Default true.
+	Enabled bool
 }
 
 // Consul is where aisa reads its quota profiles from (docs/concepts/CONSUL.md). The variables
@@ -134,6 +143,7 @@ func Defaults() Config {
 			DedupTTL:      15 * time.Minute,
 		},
 		Consul: Consul{Prefix: "aisa"},
+		Admin:  Admin{Enabled: true},
 	}
 }
 
@@ -226,6 +236,14 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if cfg.Consumers.MaxStale < cfg.Consumers.Refresh {
 		return cfg, fmt.Errorf("AISA_CONSUMER_MAX_STALE (%s) must not be shorter than AISA_CONSUMER_REFRESH (%s)",
 			cfg.Consumers.MaxStale, cfg.Consumers.Refresh)
+	}
+
+	if v := getenv("AISA_ADMIN_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return cfg, fmt.Errorf("AISA_ADMIN_ENABLED: want a boolean, got %q: %w", v, err)
+		}
+		cfg.Admin.Enabled = b
 	}
 
 	if err := vaultFromEnv(getenv, &cfg.Vault); err != nil {

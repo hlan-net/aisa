@@ -188,6 +188,24 @@ func (c *Client) Read(ctx context.Context, mount, path string) (map[string]any, 
 	return nil, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
 }
 
+// Write writes the current version of a KV v2 secret's data: <mount>/data/<path>.
+func (c *Client) Write(ctx context.Context, mount, path string, data map[string]any) error {
+	payload, err := json.Marshal(map[string]any{"data": data})
+	if err != nil {
+		return fmt.Errorf("encode secret payload: %w", err)
+	}
+	return c.authed(ctx, http.MethodPost, mount+"/data/"+path, payload, nil)
+}
+
+// Delete permanently removes a KV v2 secret and its metadata: <mount>/metadata/<path>.
+func (c *Client) Delete(ctx context.Context, mount, path string) error {
+	err := c.authed(ctx, http.MethodDelete, mount+"/metadata/"+path, nil, nil)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
 // lookupSelf is allowed to every token by Vault's default policy.
 const lookupSelf = "auth/token/lookup-self"
 

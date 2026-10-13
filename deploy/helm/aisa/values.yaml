@@ -58,6 +58,10 @@ consul:
 quotas:
   enabled: true
 
+# Admin interface and embedded web UI (/admin). Off: /admin endpoints return 404.
+admin:
+  enabled: true
+
 # Redis holds the hot quota counters. They are short-lived (an hour of one-minute buckets), so
 # this Redis keeps nothing on disk.
 redis:
