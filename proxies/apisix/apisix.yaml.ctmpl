@@ -66,9 +66,11 @@ global_rules:
                 return
               end
               -- The response headers a client gets; ai-proxy-multi sets only Content-Type today,
-              -- and this holds whatever a later version adds.
+              -- and this holds whatever a later version adds. Retry-After says nothing about the
+              -- account and tells a client when to try again; APISIX 3.19 does not pass it on.
               local keep = {["content-type"] = true, ["content-length"] = true,
-                            ["transfer-encoding"] = true, ["cache-control"] = true, connection = true}
+                            ["transfer-encoding"] = true, ["cache-control"] = true, connection = true,
+                            ["retry-after"] = true}
               -- 0: all of them; by default only the first 100 are returned.
               for name in pairs(ngx.resp.get_headers(0)) do
                 if not keep[string.lower(name)] then
