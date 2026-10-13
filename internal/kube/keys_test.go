@@ -36,6 +36,21 @@ type memKV struct {
 
 func newMemKV() *memKV { return &memKV{data: map[string][]byte{}, versions: map[string]int{}} }
 
+// List lists the secrets under a path, deleted ones included, as Vault's metadata does.
+func (m *memKV) List(_ context.Context, mount, path string) ([]string, error) {
+	var names []string
+	for key := range m.data {
+		if name, ok := strings.CutPrefix(key, mount+"/"+path+"/"); ok {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, vault.ErrNotFound
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 func (m *memKV) ReadVersion(_ context.Context, mount, path string) (map[string]any, int, error) {
 	b, ok := m.data[mount+"/"+path]
 	if !ok || b == nil {
@@ -649,5 +664,31 @@ func TestAPassWithAFailedConsumerIsAnError(t *testing.T) {
 	kt.pass()
 	if kt.err == nil || !strings.Contains(kt.err.Error(), "team/app") || kt.secret("news", "b") == nil {
 		t.Errorf("err = %v, want the failed consumer named, and the others reconciled", kt.err)
+	}
+}
+
+func TestAConsumerRemovedAfterItsSecretLosesItsHashes(t *testing.T) {
+	// The Secret goes first, then the declaration: neither is left to name the consumer.
+	kt := newKeysTest(t, news())
+	kt.pass()
+	if err := kt.k8s.CoreV1().Secrets("news").Delete(context.Background(), "aisa", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	kt.decls.valid = map[string]consumers.Declaration{}
+	kt.pass()
+	if got := kt.kv.hashes(t, "batch-jobs"); len(got) != 0 || kt.err != nil {
+		t.Errorf("hashes = %v, err %v: want the issued key revoked from Vault's side", got, kt.err)
+	}
+	// One whose declaration cannot be read keeps its hashes.
+	kt.decls.valid = news()
+	kt.pass()
+	kt.decls.valid = map[string]consumers.Declaration{}
+	kt.decls.invalid = map[string]bool{"batch-jobs": true}
+	if err := kt.k8s.CoreV1().Secrets("news").Delete(context.Background(), "aisa", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	kt.pass()
+	if got := kt.kv.hashes(t, "batch-jobs"); len(got) == 0 {
+		t.Error("a consumer with a broken declaration lost its keys")
 	}
 }

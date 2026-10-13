@@ -34,6 +34,11 @@ type RunOptions struct {
 
 // Run takes part in the election of the replica that writes the objects, and makes the passes
 // while it is the one, until ctx is done. Only one replica writes: two would issue a key each.
+//
+// client-go starts the work of a leader in a goroutine of its own and does not wait for it when
+// it stops leading, so Run does not let it release the Lease: it waits for the passes to return,
+// and only then releases the Lease itself. Until then another replica cannot take the Lease
+// before it expires, and the passes, whose context is cancelled, end within moments.
 func Run(ctx context.Context, k8s kubernetes.Interface, log *slog.Logger, opts RunOptions, passes ...Pass) {
 	lock := &resourcelock.LeaseLock{
 		LeaseMeta:  metav1.ObjectMeta{Name: opts.Lease, Namespace: opts.Namespace},
@@ -46,15 +51,17 @@ func Run(ctx context.Context, k8s kubernetes.Interface, log *slog.Logger, opts R
 		}
 	}
 	for ctx.Err() == nil {
+		begun, done := make(chan struct{}), make(chan struct{})
 		elector, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
-			Lock:            lock,
-			ReleaseOnCancel: true,
-			LeaseDuration:   30 * time.Second,
-			RenewDeadline:   20 * time.Second,
-			RetryPeriod:     5 * time.Second,
-			Name:            opts.Lease,
+			Lock:          lock,
+			LeaseDuration: 30 * time.Second,
+			RenewDeadline: 20 * time.Second,
+			RetryPeriod:   5 * time.Second,
+			Name:          opts.Lease,
 			Callbacks: leaderelection.LeaderCallbacks{
 				OnStartedLeading: func(lctx context.Context) {
+					close(begun)
+					defer close(done)
 					log.Info("this replica writes the Kubernetes objects", "lease", opts.Lease)
 					leader(true)
 					Loop(lctx, log, opts.Resync, opts.Trigger, passes...)
@@ -71,6 +78,37 @@ func Run(ctx context.Context, k8s kubernetes.Interface, log *slog.Logger, opts R
 			return
 		}
 		elector.Run(ctx)
+		select {
+		case <-begun:
+			<-done
+			if ctx.Err() != nil {
+				release(lock, opts.Identity, log)
+			}
+		default:
+			// Not elected; or elected and stopped before the work began, which then returns at
+			// once, its context being cancelled.
+		}
+	}
+}
+
+// release gives up the Lease at shutdown, once this replica's passes have returned, so that
+// another replica takes over without waiting for it to expire. It does what client-go's
+// ReleaseOnCancel does, at the time that is safe.
+func release(lock resourcelock.Interface, identity string, log *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rec, _, err := lock.Get(ctx)
+	if err != nil || rec.HolderIdentity != identity {
+		return
+	}
+	now := metav1.NewTime(time.Now())
+	if err := lock.Update(ctx, resourcelock.LeaderElectionRecord{
+		LeaderTransitions:    rec.LeaderTransitions,
+		LeaseDurationSeconds: 1,
+		RenewTime:            now,
+		AcquireTime:          now,
+	}); err != nil {
+		log.Warn("releasing the Lease failed; another replica takes over when it expires", "error", err)
 	}
 }
 
@@ -80,6 +118,10 @@ func Loop(ctx context.Context, log *slog.Logger, resync time.Duration, trigger <
 	defer ticker.Stop()
 	for {
 		for _, p := range passes {
+			// Checked before each pass: a pass never starts once this replica stops leading.
+			if ctx.Err() != nil {
+				return
+			}
 			err := p.Run(ctx)
 			if ctx.Err() != nil {
 				return

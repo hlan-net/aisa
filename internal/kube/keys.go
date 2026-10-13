@@ -63,6 +63,7 @@ const (
 
 // KV is the part of the Vault client the keys need.
 type KV interface {
+	List(ctx context.Context, mount, path string) ([]string, error)
 	ReadVersion(ctx context.Context, mount, path string) (map[string]any, int, error)
 	Write(ctx context.Context, mount, path string, data map[string]any, cas int) error
 }
@@ -183,7 +184,7 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 		k.log.Error("removing the Secrets of removed consumers failed", "error", err)
 		errs = append(errs, err)
 	}
-	if err := k.revokeDropped(ctx, valid); err != nil {
+	if err := k.revokeDropped(ctx, valid, invalid); err != nil {
 		errs = append(errs, err)
 	}
 	if k.opts.OnPass != nil {
@@ -192,14 +193,20 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// revokeDropped removes the hashes of the keys aisa issued to consumers that are declared and no
-// longer name a Secret, from Vault's side: it holds even when their Secret is already gone, or
-// a revocation failed after it was deleted. A key aisa issued has issued_at; the hashes of a
-// consumer that never had a Secret are left as the holder wrote them.
-func (k *Keys) revokeDropped(ctx context.Context, valid map[string]consumers.Declaration) error {
+// revokeDropped removes the hashes of the keys aisa issued to consumers that no longer name a
+// Secret, declared or not, from Vault's side: it holds even when their Secret is already gone,
+// or a revocation failed after it was deleted. A key aisa issued has issued_at; the hashes of a
+// consumer that never had a Secret are left as the holder wrote them, and a consumer whose
+// declaration cannot be read is left as it is.
+func (k *Keys) revokeDropped(ctx context.Context, valid map[string]consumers.Declaration, invalid map[string]bool) error {
+	names, err := k.kv.List(ctx, k.opts.Mount, k.opts.Prefix+"/consumers")
+	if err != nil && !errors.Is(err, vault.ErrNotFound) {
+		return fmt.Errorf("list the consumers in Vault: %w", err)
+	}
 	var errs []error
-	for _, name := range slices.Sorted(maps.Keys(valid)) {
-		if valid[name].Namespace != "" || strings.Contains(name, "/") {
+	for _, name := range names {
+		decl, declared := valid[name]
+		if strings.HasSuffix(name, "/") || invalid[name] || (declared && decl.Namespace != "") {
 			continue
 		}
 		rec, err := k.read(ctx, name)
