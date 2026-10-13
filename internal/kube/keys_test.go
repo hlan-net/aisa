@@ -540,7 +540,7 @@ func TestAMovedConsumerKeepsItsOldSecretUntilTheNewOneIsThere(t *testing.T) {
 	if kt.secret("news", "aisa") != nil || kt.key("reports", "llm") == "" {
 		t.Error("want the new Secret written and then the old one deleted")
 	}
-	if got := kt.kv.get(t, "batch-jobs")[fieldSuperseded]; got == nil {
+	if kt.kv.get(t, "batch-jobs")[fieldSuperseded] == nil {
 		t.Error("the old key's grace period did not begin once the new Secret was written")
 	}
 }
