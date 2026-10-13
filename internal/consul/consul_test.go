@@ -168,3 +168,48 @@ func TestNew(t *testing.T) {
 		}
 	}
 }
+
+func TestHealth(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		w.Header().Set("X-Consul-Index", "9")
+		_, _ = w.Write([]byte(`[
+			{"Service": {"ID": "ollama-1", "Meta": {"models": "qwen3"}}, "Checks": [{"Status": "passing"}, {"Status": "passing"}]},
+			{"Service": {"ID": "ollama-2", "Meta": {"models": "qwen3"}}, "Checks": [{"Status": "passing"}, {"Status": "critical"}]}
+		]`))
+	}))
+	defer srv.Close()
+	c, _ := New(Options{Addr: srv.URL})
+
+	got, err := c.Health(context.Background(), "aisa-backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/health/service/aisa-backend" {
+		t.Errorf("path %q", gotPath)
+	}
+	if len(got) != 2 || got[0].ID != "ollama-1" || !got[0].Passing || got[1].Passing || got[0].Meta["models"] != "qwen3" {
+		t.Errorf("instances = %+v", got)
+	}
+}
+
+func TestHealthErrors(t *testing.T) {
+	for name, h := range map[string]http.HandlerFunc{
+		"status":     func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) },
+		"not consul": func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`[]`)) },
+		"not json": func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-Consul-Index", "1")
+			_, _ = w.Write([]byte(`<html>`))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(h)
+			defer srv.Close()
+			c, _ := New(Options{Addr: srv.URL})
+			if _, err := c.Health(context.Background(), "aisa-backend"); err == nil {
+				t.Error("want an error")
+			}
+		})
+	}
+}

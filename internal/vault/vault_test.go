@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,7 +21,10 @@ type fakeVault struct {
 	logins  int
 	valid   map[string]bool
 	secrets map[string]map[string]any // "mount/path" → data
-	lastJWT string
+	// versions are the current version numbers of the secrets written; 1 for one put in secrets
+	// directly.
+	versions map[string]int
+	lastJWT  string
 	// denied are paths that the policy of every token forbids.
 	denied map[string]bool
 	// notFound, when set, is the body of a 404 that answers every request for data.
@@ -32,7 +36,7 @@ type fakeVault struct {
 
 func newFakeVault(t *testing.T) (*fakeVault, *httptest.Server) {
 	t.Helper()
-	f := &fakeVault{valid: map[string]bool{"root": true}, secrets: map[string]map[string]any{}}
+	f := &fakeVault{valid: map[string]bool{"root": true}, secrets: map[string]map[string]any{}, versions: map[string]int{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -65,6 +69,8 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 		f.list(w, strings.TrimPrefix(path, "secret/metadata/"))
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "secret/data/"):
 		f.read(w, strings.TrimPrefix(path, "secret/data/"))
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "secret/data/"):
+		f.write(w, r, "secret/"+strings.TrimPrefix(path, "secret/data/"))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -105,7 +111,34 @@ func (f *fakeVault) read(w http.ResponseWriter, path string) {
 		writeStatus(w, http.StatusNotFound, `{"errors":[]}`)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"data": data}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+		"data": data, "metadata": map[string]any{"version": f.version("secret/" + path)}}})
+}
+
+func (f *fakeVault) version(key string) int {
+	if _, ok := f.secrets[key]; !ok {
+		return 0
+	}
+	return max(f.versions[key], 1)
+}
+
+// write answers as Vault does to a KV v2 write with check-and-set.
+func (f *fakeVault) write(w http.ResponseWriter, r *http.Request, key string) {
+	var in struct {
+		Options struct{ CAS *int } `json:"options"`
+		Data    map[string]any     `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Data == nil {
+		writeStatus(w, http.StatusBadRequest, `{"errors":["no data provided"]}`)
+		return
+	}
+	if in.Options.CAS != nil && *in.Options.CAS != f.version(key) {
+		writeStatus(w, http.StatusBadRequest, `{"errors":["check-and-set parameter did not match the current version"]}`)
+		return
+	}
+	f.versions[key] = f.version(key) + 1
+	f.secrets[key] = in.Data
+	_, _ = w.Write([]byte(`{"data":{"version":1}}`))
 }
 
 func writeStatus(w http.ResponseWriter, status int, body string) {
@@ -407,5 +440,87 @@ func TestOnlyOneLoginWhenSeveralRequestsFindTheTokenRevoked(t *testing.T) {
 	wg.Wait()
 	if f.logins != 2 {
 		t.Errorf("logins = %d, want 2: the first one and one after the revocation", f.logins)
+	}
+}
+
+func TestWriteWithCheckAndSet(t *testing.T) {
+	_, srv := newFakeVault(t)
+	c, err := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const path = "aisa/consumers/batch-jobs"
+
+	if _, v, err := c.ReadVersion(ctx, "secret", path); !errors.Is(err, ErrNotFound) || v != 0 {
+		t.Fatalf("ReadVersion of a missing secret = %d, %v; want 0, ErrNotFound", v, err)
+	}
+	if err := c.Write(ctx, "secret", path, map[string]any{"key_sha256": "a"}, 0); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	// A second writer that also read "no secret" loses.
+	if err := c.Write(ctx, "secret", path, map[string]any{"key_sha256": "b"}, 0); !errors.Is(err, ErrConflict) {
+		t.Fatalf("write on a stale version: err = %v, want ErrConflict", err)
+	}
+	data, v, err := c.ReadVersion(ctx, "secret", path)
+	if err != nil || v != 1 || data["key_sha256"] != "a" {
+		t.Fatalf("ReadVersion = %v, %d, %v; want a at version 1", data, v, err)
+	}
+	if err := c.Write(ctx, "secret", path, map[string]any{"key_sha256": "a,b"}, v); err != nil {
+		t.Fatalf("write on the version read: %v", err)
+	}
+	if data, v, _ := c.ReadVersion(ctx, "secret", path); v != 2 || data["key_sha256"] != "a,b" {
+		t.Fatalf("after the second write: %v at %d", data, v)
+	}
+}
+
+func TestNumbersInASecretAreWrittenBackAsTheyWere(t *testing.T) {
+	var written string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			b, _ := io.ReadAll(r.Body)
+			written = string(b)
+			_, _ = w.Write([]byte(`{"data":{"version":2}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"data":{"key_sha256":"a","holder_id":9007199254740993},"metadata":{"version":1}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, v, err := c.ReadVersion(context.Background(), "secret", "aisa/consumers/batch-jobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Write(context.Background(), "secret", "aisa/consumers/batch-jobs", data, v); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(written, `"holder_id":9007199254740993`) {
+		t.Errorf("written %s: an integer above 2^53 was changed", written)
+	}
+}
+
+func TestADeletedVersionKeepsItsNumberForCheckAndSet(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		// Vault's KV v2 answers a read of a deleted current version with 404 and its metadata.
+		"404 with metadata": {http.StatusNotFound, `{"data":{"data":null,"metadata":{"deletion_time":"2026-01-01T00:00:00Z","version":4}}}`},
+		"200 with metadata": {http.StatusOK, `{"data":{"data":null,"metadata":{"destroyed":true,"version":4}}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeStatus(w, tc.status, tc.body)
+			}))
+			defer srv.Close()
+			c, _ := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+			_, v, err := c.ReadVersion(context.Background(), "secret", "aisa/consumers/batch-jobs")
+			if !errors.Is(err, ErrNotFound) || v != 4 {
+				t.Errorf("ReadVersion = %d, %v; want 4, ErrNotFound", v, err)
+			}
+		})
 	}
 }

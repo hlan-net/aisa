@@ -1,4 +1,15 @@
 {{- $consulToken := .Values.consul.token.fromVault }}
+{{- if .Values.kubernetes.enabled }}
+{{- /* The namespace is the install's identity in the objects aisa writes (label
+       aisa.hlan.net/install), so a second aisa in it would take the first one's objects for its
+       own. Checked against the cluster; helm template and a client dry run see no cluster. */}}
+{{- range (lookup "apps/v1" "Deployment" .Release.Namespace "").items }}
+{{- $l := .metadata.labels | default dict }}
+{{- if and (eq (get $l "app.kubernetes.io/name") (include "aisa.name" $)) (eq (get $l "app.kubernetes.io/component") "control") (ne (get $l "app.kubernetes.io/instance") $.Release.Name) }}
+{{- fail (printf "the release %s already runs aisa in the namespace %s: one aisa per namespace, which is its identity in the objects it writes" (get $l "app.kubernetes.io/instance") $.Release.Namespace) }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,8 +35,12 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "aisa.serviceAccountName" . }}
-      # aisa does not talk to the Kubernetes API yet. Its service account token is projected
-      # below, for Vault's Kubernetes auth only.
+      # No token in every container: the one for the Kubernetes API, when aisa writes the
+      # consumers' Secrets and the Models, is projected into aisa's container only, where
+      # client-go looks for it, and the one for Vault's Kubernetes auth is projected with Vault's
+      # audience, which the Kubernetes API does not accept. The Vault Agent next to aisa gets
+      # only the latter, never the API token: the service account may read Secrets in every
+      # namespace.
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -106,6 +121,27 @@ spec:
             - name: AISA_REDIS_ADDR
               value: {{ include "aisa.redisAddr" . | quote }}
             {{- end }}
+            {{- if .Values.kubernetes.enabled }}
+            - name: AISA_KUBERNETES
+              value: "true"
+            - name: AISA_PROXY_URL
+              value: {{ include "aisa.proxyURL" . | quote }}
+            - name: AISA_LEADER_LEASE
+              value: {{ printf "%s-leader" (include "aisa.fullname" .) | quote }}
+            - name: AISA_KUBE_RESYNC
+              value: {{ .Values.kubernetes.resync | quote }}
+            - name: AISA_KEY_ROTATION_INTERVAL
+              value: {{ .Values.kubernetes.keys.rotationInterval | quote }}
+            - name: AISA_KEY_ROTATION_GRACE
+              value: {{ .Values.kubernetes.keys.rotationGrace | quote }}
+            # The Models wait out an empty catalog as long as the proxy keeps its model routes.
+            - name: AISA_MODELS_EMPTY_GRACE
+              value: {{ include "aisa.emptyCatalogGrace" . | quote }}
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -124,6 +160,9 @@ spec:
             capabilities: {drop: [ALL]}
           volumeMounts:
             - {name: serviceaccount, mountPath: /var/run/secrets/aisa/serviceaccount, readOnly: true}
+            {{- if .Values.kubernetes.enabled }}
+            - {name: kube-api, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
+            {{- end }}
             {{- if $consulToken }}
             - {name: tokens, mountPath: /vault, readOnly: true}
             {{- end }}
@@ -139,9 +178,23 @@ spec:
               - serviceAccountToken:
                   path: token
                   expirationSeconds: 3600
-                  {{- with .Values.vault.auth.audience }}
-                  audience: {{ . | quote }}
+                  {{- if .Values.vault.auth.audience }}
+                  audience: {{ .Values.vault.auth.audience | quote }}
+                  {{- else if .Values.kubernetes.enabled }}
+                  {{- fail "vault.auth.audience is required with kubernetes.enabled: a token of the API server's audience in the Vault Agent could read Secrets in every namespace" }}
                   {{- end }}
+        {{- if .Values.kubernetes.enabled }}
+        # What automountServiceAccountToken would mount, for aisa's container alone.
+        - name: kube-api
+          projected:
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+              - downwardAPI:
+                  items: [{path: namespace, fieldRef: {fieldPath: metadata.namespace}}]
+        {{- end }}
         {{- if $consulToken }}
         - name: vault-agent
           configMap: {name: {{ include "aisa.fullname" . }}-vault-agent}

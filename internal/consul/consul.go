@@ -164,6 +164,70 @@ func (c *Client) List(ctx context.Context, prefix string, index uint64, wait tim
 	return pairs, newIndex, nil
 }
 
+// Instance is one registration of a service in the catalog, with the state of its checks.
+type Instance struct {
+	ID   string
+	Meta map[string]string
+	// Passing is true when every check of the instance and of its node passes.
+	Passing bool
+}
+
+// Health returns the instances of a service, healthy or not, from /v1/health/service. The ACL
+// token needs read on the service and on the nodes; Consul leaves out the instances on nodes
+// it may not read.
+func (c *Client) Health(ctx context.Context, service string) ([]Instance, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.addr+"/v1/health/service/"+url.PathEscape(service), nil)
+	if err != nil {
+		return nil, fmt.Errorf("consul request health/service/%s: %w", service, err)
+	}
+	token, err := c.currentToken()
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("X-Consul-Token", token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("consul GET health/service/%s: %w", service, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, fmt.Errorf("consul GET health/service/%s: read answer: %w", service, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("consul GET health/service/%s: %w", service,
+			&StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(data[:min(len(data), 512)]))})
+	}
+	if resp.Header.Get("X-Consul-Index") == "" {
+		return nil, fmt.Errorf("consul GET health/service/%s: %w", service, errNotConsul)
+	}
+	var entries []struct {
+		Service struct {
+			ID   string
+			Meta map[string]string
+		}
+		Checks []struct{ Status string }
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("consul GET health/service/%s: decode answer: %w", service, err)
+	}
+	out := make([]Instance, 0, len(entries))
+	for _, e := range entries {
+		passing := true
+		for _, ch := range e.Checks {
+			if ch.Status != "passing" {
+				passing = false
+			}
+		}
+		out = append(out, Instance{ID: e.Service.ID, Meta: e.Service.Meta, Passing: passing})
+	}
+	return out, nil
+}
+
 func (c *Client) currentToken() (string, error) {
 	if c.tokenFile == "" {
 		return c.token, nil

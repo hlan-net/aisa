@@ -179,3 +179,23 @@ func TestDeclarationsRun(t *testing.T) {
 		t.Fatal("Run did not stop")
 	}
 }
+
+func TestDeclarationsSnapshot(t *testing.T) {
+	d := NewDeclarations(nil, quiet(), DeclarationOptions{})
+	if _, _, loaded := d.Snapshot(); loaded {
+		t.Fatal("a snapshot before the first read says loaded")
+	}
+	d.apply([]consul.Pair{
+		{Key: "batch-jobs", Value: []byte(`{"namespace": "news", "secret": "aisa"}`)},
+		{Key: "broken", Value: []byte(`null`)},
+	})
+	valid, invalid, loaded := d.Snapshot()
+	if !loaded || len(valid) != 1 || valid["batch-jobs"].Namespace != "news" || !invalid["broken"] || len(invalid) != 1 {
+		t.Fatalf("snapshot = %v, %v, %v", valid, invalid, loaded)
+	}
+	// A copy: changing it does not change the declarations.
+	delete(valid, "batch-jobs")
+	if again, _, _ := d.Snapshot(); len(again) != 1 {
+		t.Fatal("the snapshot shares its map with the declarations")
+	}
+}

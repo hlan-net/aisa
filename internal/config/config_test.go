@@ -118,6 +118,12 @@ func TestFromEnvRejects(t *testing.T) {
 		"prefix of slashes only":  {"AISA_VAULT_PREFIX": "/"},
 		"mount of slashes only":   {"AISA_VAULT_KV_MOUNT": "//"},
 		"max stale below refresh": {"AISA_CONSUMER_REFRESH": "10m", "AISA_CONSUMER_MAX_STALE": "5m"},
+		"kubernetes not a bool":   {"AISA_KUBERNETES": "yes"},
+		"kubernetes, no proxy":    {"AISA_KUBERNETES": "true", "POD_NAMESPACE": "aisa", "POD_NAME": "aisa-0"},
+		"kubernetes, bad proxy":   {"AISA_KUBERNETES": "true", "AISA_PROXY_URL": "aisa-apisix/v1", "POD_NAMESPACE": "aisa", "POD_NAME": "aisa-0"},
+		"kubernetes, no pod":      {"AISA_KUBERNETES": "true", "AISA_PROXY_URL": "http://aisa-apisix/v1"},
+		"negative rotation":       {"AISA_KEY_ROTATION_INTERVAL": "-1h"},
+		"grace of zero":           {"AISA_KEY_ROTATION_GRACE": "0s"},
 		"dedup capacity not int":  {"AISA_LEDGER_DEDUP_CAPACITY": "invalid"},
 		"dedup capacity zero":     {"AISA_LEDGER_DEDUP_CAPACITY": "0"},
 		"dedup capacity negative": {"AISA_LEDGER_DEDUP_CAPACITY": "-1"},
@@ -201,5 +207,36 @@ func TestFromEnvQuotas(t *testing.T) {
 	}
 	if want := (Redis{Addr: "redis:6379", Username: "aisa", Password: "secret"}); cfg.Redis != want {
 		t.Errorf("Redis = %+v, want %+v", cfg.Redis, want)
+	}
+}
+
+func TestFromEnvKubernetes(t *testing.T) {
+	cfg, err := FromEnv(env(map[string]string{
+		"AISA_KUBERNETES":            "true",
+		"AISA_PROXY_URL":             "http://aisa-apisix.aisa.svc.cluster.local/v1",
+		"POD_NAMESPACE":              "aisa",
+		"POD_NAME":                   "aisa-7d9f-x2",
+		"AISA_LEADER_LEASE":          "aisa-leader",
+		"AISA_KUBE_RESYNC":           "10s",
+		"AISA_KEY_ROTATION_INTERVAL": "0",
+		"AISA_KEY_ROTATION_GRACE":    "24h",
+		"AISA_MODELS_EMPTY_GRACE":    "1m",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Kubernetes{
+		Enabled: true, ProxyURL: "http://aisa-apisix.aisa.svc.cluster.local/v1",
+		Namespace: "aisa", PodName: "aisa-7d9f-x2", Lease: "aisa-leader",
+		Resync: 10 * time.Second, Rotation: 0, Grace: 24 * time.Hour, EmptyGrace: time.Minute,
+	}
+	if cfg.Kubernetes != want {
+		t.Errorf("Kubernetes = %+v, want %+v", cfg.Kubernetes, want)
+	}
+	// Off by default, with a month's rotation and a week's grace when turned on.
+	cfg, err = FromEnv(env(nil))
+	if err != nil || cfg.Kubernetes.Enabled || cfg.Kubernetes.Rotation != 720*time.Hour || cfg.Kubernetes.Grace != 168*time.Hour ||
+		cfg.Kubernetes.EmptyGrace != 5*time.Minute {
+		t.Errorf("defaults = %+v, %v", cfg.Kubernetes, err)
 	}
 }

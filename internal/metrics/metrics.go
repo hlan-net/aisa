@@ -126,7 +126,34 @@ type Metrics struct {
 	ConfigRendered *prometheus.GaugeVec
 	ConfigBackends *prometheus.GaugeVec
 	ConfigModels   *prometheus.GaugeVec
+
+	// The objects aisa writes to the Kubernetes API (KUBERNETES_OBJECTS.md), kept by the
+	// replica that holds the leader's Lease. KubeLeader is 1 on that replica.
+	KubeLeader prometheus.Gauge
+	// KubePasses counts the passes over the objects by kind (secrets or models) and result,
+	// LoadOK or LoadError.
+	KubePasses *prometheus.CounterVec
+	// ConsumerSecrets counts the consumers that name a Secret by the state of the last pass:
+	// ok, not_owned (a Secret of that name is not the consumer's), duplicate_target (another
+	// consumer names it too) or error.
+	ConsumerSecrets *prometheus.GaugeVec
+	// ConsumerKeysIssued counts the keys issued, by reason: new, missing, unknown_key or
+	// rotation.
+	ConsumerKeysIssued *prometheus.CounterVec
+	// Models and ModelsAvailable count the Model objects and those with a healthy backend;
+	// ModelConflicts the models without an object because of a name; ModelDescriptionsInvalid
+	// the descriptions in Consul that could not be read.
+	Models                   prometheus.Gauge
+	ModelsAvailable          prometheus.Gauge
+	ModelConflicts           prometheus.Gauge
+	ModelDescriptionsInvalid prometheus.Gauge
 }
+
+// Values of the kind label of aisa_kube_passes_total.
+const (
+	KubeSecrets = "secrets"
+	KubeModels  = "models"
+)
 
 // Values of the result label of aisa_consumer_loads_total.
 const (
@@ -262,6 +289,38 @@ func New(version string) *Metrics {
 			Name: "aisa_config_models",
 			Help: "Models with a route in the gateway config the proxy last promoted; absent until the first promoted report since aisa started.",
 		}, nil),
+		KubeLeader: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_kube_leader",
+			Help: "1 on the replica that holds the leader's Lease and writes the Kubernetes objects, else 0.",
+		}),
+		KubePasses: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_kube_passes_total",
+			Help: "Passes over the Kubernetes objects aisa writes, by kind (secrets, models) and result.",
+		}, []string{"kind", "result"}),
+		ConsumerSecrets: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "aisa_consumer_secrets",
+			Help: "Consumers that name a Secret, by the state of the last pass: ok, not_owned, duplicate_target or error.",
+		}, []string{"state"}),
+		ConsumerKeysIssued: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_consumer_keys_issued_total",
+			Help: "Keys issued to consumers, by reason: new, missing, unknown_key or rotation.",
+		}, []string{"reason"}),
+		Models: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_models",
+			Help: "Model objects this install keeps.",
+		}),
+		ModelsAvailable: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_models_available",
+			Help: "Model objects with at least one healthy backend.",
+		}),
+		ModelConflicts: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_model_conflicts",
+			Help: "Models on offer without a Model object: their names derive to one object name, or an object of that name is not this install's.",
+		}),
+		ModelDescriptionsInvalid: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_model_descriptions_invalid",
+			Help: "Model descriptions in Consul KV that cannot be read; their models get the default description.",
+		}),
 	}
 
 	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -280,6 +339,8 @@ func New(version string) *Metrics {
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 		m.ConsumerDeclarations, m.ConsumerDeclarationsInvalid, m.ConsumerDeclarationLoads,
 		m.QuotaProfiles, m.QuotaProfilesInvalid, m.QuotaProfileLoads, m.QuotaErrors,
+		m.KubeLeader, m.KubePasses, m.ConsumerSecrets, m.ConsumerKeysIssued,
+		m.Models, m.ModelsAvailable, m.ModelConflicts, m.ModelDescriptionsInvalid,
 	)
 	// The reasons are fixed: start each at 0, so the first rejection is an increase that an
 	// alert on increase() or rate() can see.

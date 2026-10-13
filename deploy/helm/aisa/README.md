@@ -20,6 +20,10 @@ Applications call the proxy's Service, `aisa-apisix` for a release named `aisa`,
 | Deployment, Service `<release>-redis` | Redis for the quota counters, nothing on disk (`redis.enabled`) |
 | NetworkPolicies | Only the proxy reaches aisa's API; the peers in `networkPolicy.extraFrom` (none by default) reach its metrics port only; only aisa reaches Redis |
 | ServiceMonitor | Optional (`serviceMonitor.enabled`) |
+| CRD `models.aisa.hlan.net` | The `Model` objects (`crds.install`): installed and upgraded with the chart, kept when it is uninstalled. One install in a cluster owns it; set `crds.install=false` in any other |
+| ClusterRole and binding `<namespace>-<release>` | aisa writes each consumer's Secret and the `Model` objects (`kubernetes.enabled`): Secrets in every namespace, changing only those with its own labels, and the Models |
+| Role and binding `<release>-leader` | The Lease that elects the replica that writes the objects |
+| ClusterRole `<namespace>-<release>-model-reader` | Reading the Models; bound to every service account unless `kubernetes.models.readableByAllServiceAccounts` is off |
 | The proxy | Everything of the proxy's chart, `<release>-apisix` (`apisix.enabled`; its values under `apisix:`) |
 
 A release name that does not contain `aisa` gets `-aisa` appended to aisa's objects (`prod-aisa`), unless `global.aisa.fullnameOverride` names them; the proxy derives aisa's address the same way.
@@ -28,7 +32,7 @@ A release name that does not contain `aisa` gets `-aisa` appended to aisa's obje
 
 The chart creates no Vault or Consul configuration; the Terraform module (ROADMAP v0.2.0 PR 6) is to. Until then, [`../test/install_test.sh`](../test/install_test.sh) shows every step for a test cluster.
 
-- **Vault**, Kubernetes auth: the role `aisa` bound to the service account `<release>` in the release's namespace, reading `secret/aisa/consumers/*` (the consumers' key hashes) and `consul/creds/aisa`; the role `aisa-render` bound to `<release>-apisix`, reading `secret/aisa/providers/*` and `consul/creds/aisa-render` ([`VAULT.md`](../../../docs/concepts/VAULT.md)).
+- **Vault**, Kubernetes auth: the role `aisa` bound to the service account `<release>` in the release's namespace, reading, creating and updating `secret/aisa/consumers/*` (the consumers' key hashes; aisa writes those of the keys it issues) and reading `consul/creds/aisa`; the role `aisa-render` bound to `<release>-apisix`, reading `secret/aisa/providers/*` and `consul/creds/aisa-render` ([`VAULT.md`](../../../docs/concepts/VAULT.md)).
 - **Consul**, with ACLs: the policies `aisa` and `aisa-render` ([`CONSUL.md`](../../../docs/concepts/CONSUL.md#acls)), as roles of Vault's Consul secrets engine. Without ACLs, set `consul.token.fromVault: false` and `apisix.vaultAgent.consulToken.enabled: false`.
 - **Kubernetes** 1.29 or newer: the Vault Agents run as sidecar init containers.
 
@@ -39,10 +43,13 @@ The full list with comments is in [`values.yaml`](./values.yaml). The ones an in
 | Value | Default | |
 |---|---|---|
 | `global.vault.addr`, `global.consul.addr` | (required) | Shared with the proxy |
-| `vault.auth.role`, `vault.auth.mount`, `vault.auth.audience` | `aisa`, `kubernetes`, none | aisa's login |
+| `vault.auth.role`, `vault.auth.mount`, `vault.auth.audience` | `aisa`, `kubernetes`, `vault` | aisa's login; the Vault role binds the audience (`audience=vault`), which is required with `kubernetes.enabled`, so that the token in the Vault Agent is not valid against the Kubernetes API |
 | `consul.token.fromVault`, `consul.token.path` | `true`, `consul/creds/aisa` | aisa's Consul token |
 | `quotas.enabled` | `true` | Off: no Redis for aisa, and no quota is enforced; Consul is always read, the consumers are declared there |
 | `redis.enabled`, `redis.addr` | `true`, none | Off: an external Redis at `redis.addr` |
+| `kubernetes.enabled` | `true` | aisa issues the keys of the consumers whose declaration names a namespace and a Secret, writes them into those Secrets, and writes a `Model` per model ([`KUBERNETES_OBJECTS.md`](../../../docs/concepts/KUBERNETES_OBJECTS.md)) |
+| `kubernetes.proxyURL` | the proxy's Service | The base URL in the Secrets and the Models |
+| `kubernetes.keys.rotationInterval`, `kubernetes.keys.rotationGrace` | `720h`, `168h` | When a key is replaced, and how long the old one stays valid; restart the pods that read it into their environment within the grace |
 | `networkPolicy.extraFrom` | none | Who may reach aisa's metrics port 9090, e.g. Prometheus. Not the API: a peer here cannot send usage events or ask for decisions (#46) |
 | `global.aisa.fullnameOverride` | none | The name of aisa's objects; global, so the proxy finds aisa's Service by it |
 | `extraEnv`, `extraVolumes`, `extraVolumeMounts` | none | e.g. `VAULT_CACERT` with a CA from a ConfigMap |

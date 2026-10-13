@@ -30,6 +30,14 @@
 //	AISA_REDIS_ADDR             Redis host:port for the quota counters; turns token quotas on
 //	AISA_REDIS_USERNAME         Redis ACL user
 //	AISA_REDIS_PASSWORD         Redis password
+//	AISA_KUBERNETES             true: write the consumers' Secrets and the Model objects
+//	                            (docs/concepts/KUBERNETES_OBJECTS.md)                false
+//	AISA_PROXY_URL              the proxy's URL that applications call (required with it)
+//	POD_NAMESPACE, POD_NAME     aisa's namespace and pod, from the downward API (required with it)
+//	AISA_LEADER_LEASE           Lease that elects the replica that writes          aisa-leader
+//	AISA_KUBE_RESYNC            interval of the passes over the objects            30s
+//	AISA_KEY_ROTATION_INTERVAL  age at which a consumer's key is replaced (0: never) 720h
+//	AISA_KEY_ROTATION_GRACE     how long a replaced key stays valid                168h
 //
 // With -healthcheck it asks the aisa that runs on AISA_ADDR for /healthz and exits, for the
 // health check of a container.
@@ -48,11 +56,16 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 
 	"github.com/hlan-net/aisa/internal/config"
 	"github.com/hlan-net/aisa/internal/consul"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/decide"
+	"github.com/hlan-net/aisa/internal/kube"
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/quotas"
@@ -109,11 +122,19 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("consul: %w", err)
 	}
-	// The consumers: declared in Consul KV, with the hashes of their keys in Vault.
+	// The consumers: declared in Consul KV, with the hashes of their keys in Vault. A change of
+	// the declarations starts a pass over their Secrets.
+	declared := make(chan struct{}, 1)
 	declarations := consumers.NewDeclarations(
 		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/consumers/", What: "consumer declarations"},
 		log.With("component", "consumers"),
-		consumers.DeclarationOptions{OnLoad: func(s consumers.DeclarationStats) { observeDeclarations(m, s) }})
+		consumers.DeclarationOptions{OnLoad: func(s consumers.DeclarationStats) {
+			observeDeclarations(m, s)
+			select {
+			case declared <- struct{}{}:
+			default:
+			}
+		}})
 	go declarations.Run(ctx)
 	store := consumers.New(
 		consumers.Vault{Client: vc, Mount: cfg.Vault.KVMount, Prefix: cfg.Vault.Prefix},
@@ -146,6 +167,15 @@ func run(args []string) error {
 		log.Warn("token quotas are off: set AISA_REDIS_ADDR to turn them on")
 	}
 
+	if cfg.Kubernetes.Enabled {
+		src := kubeSources{vault: vc, consul: cc, declarations: declarations, declared: declared}
+		if err := runKubernetes(ctx, cfg, src, m, log.With("component", "kubernetes")); err != nil {
+			return err
+		}
+	} else {
+		log.Info("aisa writes no Kubernetes objects: set AISA_KUBERNETES=true to issue the consumers' Secrets and the Model objects")
+	}
+
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide")),
@@ -171,6 +201,113 @@ func newQuotas(cfg config.Config, cc *consul.Client, m *metrics.Metrics, log *sl
 	})
 	q := quotas.New(profiles, quotas.NewWindow(rdb, "aisa:"), m, log, quotas.Options{})
 	return q, profiles, func() { _ = rdb.Close() }
+}
+
+// kubeSources are what the Kubernetes objects are made from: the consumers' declarations, a
+// signal of their changes, the hashes in Vault and the catalog in Consul.
+type kubeSources struct {
+	vault        *vault.Client
+	consul       *consul.Client
+	declarations *consumers.Declarations
+	declared     <-chan struct{}
+}
+
+// runKubernetes starts the passes over the consumers' Secrets and the Model objects, on the
+// replica that the leader's Lease elects.
+func runKubernetes(ctx context.Context, cfg config.Config, src kubeSources, m *metrics.Metrics, log *slog.Logger) error {
+	// client-go logs through klog, its leader election included: into aisa's log, as JSON.
+	klog.SetSlogLogger(log)
+	rc, err := rest.InClusterConfig()
+	if err != nil {
+		return fmt.Errorf("kubernetes: %w", err)
+	}
+	k8s, err := kubernetes.NewForConfig(rc)
+	if err != nil {
+		return fmt.Errorf("kubernetes: %w", err)
+	}
+	dyn, err := dynamic.NewForConfig(rc)
+	if err != nil {
+		return fmt.Errorf("kubernetes: %w", err)
+	}
+	k := cfg.Kubernetes
+	obs := newKubeObserver(m)
+	keys := kube.NewKeys(src.vault, k8s, src.declarations, log, kube.KeysOptions{
+		Mount: cfg.Vault.KVMount, Prefix: cfg.Vault.Prefix, BaseURL: k.ProxyURL, Install: k.Namespace,
+		Rotation: k.Rotation, Grace: k.Grace, OnIssue: obs.issued, OnPass: obs.secrets,
+	})
+	models := kube.NewModels(src.consul, dyn, log, kube.ModelsOptions{
+		Service:      "aisa-backend",
+		Descriptions: consul.KVPrefix{Client: src.consul, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
+		Endpoint:     k.ProxyURL,
+		Install:      k.Namespace,
+		EmptyGrace:   k.EmptyGrace,
+		OnPass:       obs.models,
+	})
+	go kube.Run(ctx, k8s, log, kube.RunOptions{
+		Namespace: k.Namespace, Identity: k.PodName, Lease: k.Lease, Resync: k.Resync, Trigger: src.declared,
+		OnLeader: obs.leader,
+	},
+		kube.Pass{Name: metrics.KubeSecrets, Run: keys.Reconcile, Done: obs.passed(metrics.KubeSecrets)},
+		kube.Pass{Name: metrics.KubeModels, Run: models.Reconcile, Done: obs.passed(metrics.KubeModels)},
+	)
+	return nil
+}
+
+// kubeObserver puts what the passes over the Kubernetes objects report into the metrics.
+type kubeObserver struct{ m *metrics.Metrics }
+
+// newKubeObserver starts the series of fixed labels at 0, so that the first increase shows.
+func newKubeObserver(m *metrics.Metrics) kubeObserver {
+	for _, reason := range []string{kube.IssueNew, kube.IssueMissing, kube.IssueUnknownKey, kube.IssueRotation} {
+		m.ConsumerKeysIssued.WithLabelValues(reason)
+	}
+	for _, kind := range []string{metrics.KubeSecrets, metrics.KubeModels} {
+		m.KubePasses.WithLabelValues(kind, metrics.LoadOK)
+		m.KubePasses.WithLabelValues(kind, metrics.LoadError)
+	}
+	return kubeObserver{m: m}
+}
+
+func (o kubeObserver) issued(reason string) { o.m.ConsumerKeysIssued.WithLabelValues(reason).Inc() }
+
+func (o kubeObserver) secrets(states map[string]int) {
+	for state, n := range states {
+		o.m.ConsumerSecrets.WithLabelValues(state).Set(float64(n))
+	}
+}
+
+func (o kubeObserver) models(s kube.ModelStats) {
+	o.m.Models.Set(float64(s.Models))
+	o.m.ModelsAvailable.Set(float64(s.Available))
+	o.m.ModelConflicts.Set(float64(s.Conflicts))
+	o.m.ModelDescriptionsInvalid.Set(float64(s.InvalidDescriptions))
+}
+
+// leader marks this replica as the one that writes, or not. A replica that stops clears what its
+// passes reported, so that only the leader's state is exported, and a fixed problem does not
+// stay in an old leader's gauges.
+func (o kubeObserver) leader(on bool) {
+	if on {
+		o.m.KubeLeader.Set(1)
+		return
+	}
+	o.m.KubeLeader.Set(0)
+	o.m.ConsumerSecrets.Reset()
+	o.m.Models.Set(0)
+	o.m.ModelsAvailable.Set(0)
+	o.m.ModelConflicts.Set(0)
+	o.m.ModelDescriptionsInvalid.Set(0)
+}
+
+// passed returns the Done of a kind of pass.
+func (o kubeObserver) passed(kind string) func(error) {
+	return func(err error) {
+		result := metrics.LoadOK
+		if err != nil {
+			result = metrics.LoadError
+		}
+		o.m.KubePasses.WithLabelValues(kind, result).Inc()
+	}
 }
 
 // observeDeclarations puts the result of a load of the consumer declarations into the metrics.

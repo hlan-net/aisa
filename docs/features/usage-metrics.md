@@ -35,6 +35,12 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_quota_profiles`, `aisa_quota_profiles_invalid` | Quota profiles read from Consul, and those that could not be parsed |
 | `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
 | `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
+| `aisa_kube_leader` | 1 on the replica that holds the leader's Lease and writes the Kubernetes objects ([`KUBERNETES_OBJECTS.md`](../concepts/KUBERNETES_OBJECTS.md)) |
+| `aisa_kube_passes_total{kind,result}` | Passes over the consumers' Secrets (`secrets`) and the `Model` objects (`models`), `ok` or `error` |
+| `aisa_consumer_secrets{state}` | Consumers that name a Secret, by the state of the last pass: `ok`, `not_owned` (a Secret of that name is not the consumer's), `duplicate_target` (another consumer names it too) or `error` |
+| `aisa_consumer_keys_issued_total{reason}` | Keys aisa issued: `new`, `missing` (the Secret was gone), `unknown_key` (the Secret's key was not one aisa issued) or `rotation` |
+| `aisa_models`, `aisa_models_available` | `Model` objects this install keeps, and those with a healthy backend |
+| `aisa_model_conflicts`, `aisa_model_descriptions_invalid` | Models on offer without an object because of their name, and model descriptions in Consul that could not be read |
 
 Keep label cardinality in mind: `consumer` × `model` × `backend`. For large deployments, consumers can be aggregated into groups.
 
@@ -74,6 +80,8 @@ To be shipped as a `PrometheusRule` with the dashboard (`ROADMAP.md`, v0.2.0 PR 
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |
 | `AisaQuotaProfileInvalid` | `aisa_quota_profiles_invalid > 0`: the consumers of a broken profile get 503 |
 | `AisaConsumerDeclarationInvalid` | `aisa_consumer_declarations_invalid > 0`: a consumer with a broken declaration in Consul gets 503 |
+| `AisaConsumerSecretFailing` | `aisa_consumer_secrets{state!="ok"} > 0` for 10 min: a consumer's Secret is not written, because of its name, another consumer, or an error |
+| `AisaKubeWritesFailing` | `aisa_kube_passes_total{result="error"}` increases for 10 min, or `sum(aisa_kube_leader) == 0` for 5 min: the Kubernetes objects are not kept up to date |
 | `AisaQuotaCountersFailing` | `aisa_quota_errors_total` increases for 5 min: Redis is unreachable and token quotas are not enforced |
 | `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h |
 | `AisaUsageMissing` | `aisa_usage_missing_total` increases for 15 min on a backend: its requests are charged by estimate, not counted. The gateway's own token metrics miss the same usage, so `AisaUsageEventsLost` cannot see it |
