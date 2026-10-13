@@ -22,6 +22,8 @@ func TestParseDeclaration(t *testing.T) {
 		"unknown fields":  {`{"quota_profile": "batch", "owner": "team-news"}`, Declaration{QuotaProfile: "batch"}, false},
 		"not JSON":        {`batch`, Declaration{}, true},
 		"an array":        {`["batch"]`, Declaration{}, true},
+		"null":            {` null `, Declaration{}, true},
+		"empty":           {``, Declaration{}, true},
 		"a number":        {`{"quota_profile": 5}`, Declaration{}, true},
 		"namespace alone": {`{"namespace": "news"}`, Declaration{}, true},
 		"secret alone":    {`{"secret": "aisa"}`, Declaration{}, true},

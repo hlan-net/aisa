@@ -1,6 +1,7 @@
 package consumers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -163,6 +164,10 @@ func parseDeclaration(value []byte) (Declaration, error) {
 		QuotaProfile *string `json:"quota_profile"`
 		Namespace    *string `json:"namespace"`
 		Secret       *string `json:"secret"`
+	}
+	// json.Unmarshal takes null as well, and leaves raw empty: a declaration without a quota.
+	if trimmed := bytes.TrimSpace(value); len(trimmed) == 0 || trimmed[0] != '{' {
+		return Declaration{}, errors.New("want a JSON object")
 	}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return Declaration{}, fmt.Errorf("want a JSON object: %w", err)

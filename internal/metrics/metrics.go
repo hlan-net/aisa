@@ -200,11 +200,11 @@ func New(version string) *Metrics {
 		}, []string{"consumer", "model", "backend"}),
 		Consumers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers",
-			Help: "Consumers in memory that can authenticate.",
+			Help: "Consumers with key hashes from Vault in memory, declared in Consul or not; only declared ones authenticate (aisa_consumer_declarations).",
 		}),
 		ConsumerKeys: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumer_keys",
-			Help: "Key hashes of the consumers in memory.",
+			Help: "Key hashes from Vault in memory, of the consumers in aisa_consumers.",
 		}),
 		ConsumersUnreadable: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers_unreadable",

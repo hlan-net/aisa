@@ -52,10 +52,9 @@ consul:
     fromVault: true
     path: consul/creds/aisa
 
-# Token quotas need Consul and Redis. Off: aisa authenticates and keeps the books, but no
-# consumer is limited.
-# Token quotas need Redis for their counters; off, aisa still reads its consumers and their
-# quota profiles from Consul but enforces no quota.
+# Token quotas need Redis for their counters. Off: no Redis, and aisa reads no quota profiles and
+# limits no consumer; it still reads the consumers' declarations from Consul, authenticates and
+# keeps the books.
 quotas:
   enabled: true
 

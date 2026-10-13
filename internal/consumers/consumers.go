@@ -60,9 +60,10 @@ var ErrGone = errors.New("consumer no longer exists")
 type Stats struct {
 	// Err is nil when the load replaced the loaded consumers.
 	Err error
-	// Consumers is how many consumers can authenticate, Keys how many key hashes they have
-	// together, Unreadable how many consumers Vault listed and aisa could not read. When Err is
-	// set they are those of the last load that succeeded.
+	// Consumers is how many consumers have key hashes in Vault, Keys how many hashes they have
+	// together, Unreadable how many consumers Vault listed and aisa could not read. Whether
+	// Consul declares them is not counted here: a key authenticates only when it also is
+	// (Declarations). When Err is set they are those of the last load that succeeded.
 	Consumers, Keys, Unreadable int
 }
 
@@ -361,8 +362,8 @@ func (s *Store) finish(call *loadCall, err error) {
 	}
 }
 
-// countConsumers counts the consumers that can authenticate: those with at least one hash in
-// the index. A consumer whose only hash is shared with another is not among them.
+// countConsumers counts the consumers with at least one hash in the index, declared in Consul or
+// not. A consumer whose only hash is shared with another is not among them.
 func countConsumers(byHash map[string]entry) int {
 	names := make(map[string]struct{}, len(byHash))
 	for _, e := range byHash {

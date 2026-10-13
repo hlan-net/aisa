@@ -26,7 +26,7 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | Metric | Meaning |
 |---|---|
 | `aisa_build_info{version}` | The running build |
-| `aisa_consumers`, `aisa_consumer_keys` | Consumers in memory that can authenticate, and their key hashes |
+| `aisa_consumers`, `aisa_consumer_keys` | Consumers with key hashes from Vault in memory, and those hashes; a consumer among them authenticates only when Consul declares it (`aisa_consumer_declarations`) |
 | `aisa_consumers_unreadable` | Consumers that Vault listed and aisa could not read at the last load |
 | `aisa_consumer_loads_total{result}` | Loads of the consumers' key hashes from Vault, `ok` or `error` |
 | `aisa_consumer_declarations`, `aisa_consumer_declarations_invalid` | Consumers declared in Consul KV, and those whose declarations could not be parsed (their keys are answered 503) |
