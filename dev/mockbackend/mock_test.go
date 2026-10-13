@@ -340,4 +340,20 @@ func TestAProviderErrorAndAccountHeaders(t *testing.T) {
 	if last.Headers.Get("Openai-Organization") != "org-client" {
 		t.Errorf("last request headers = %v", last.Headers)
 	}
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/debug/last-request", nil)
+	d, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Body.Close()
+	r2, err := srv.Client().Get(srv.URL + "/debug/last-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r2.Body.Close() }()
+	last.Headers = nil
+	if err := json.NewDecoder(r2.Body).Decode(&last); err != nil || d.StatusCode != http.StatusNoContent || last.Headers != nil {
+		t.Errorf("after DELETE: status %d, headers %v, err %v", d.StatusCode, last.Headers, err)
+	}
 }

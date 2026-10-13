@@ -19,6 +19,9 @@ APISIX_IMAGE="${APISIX_IMAGE:-apache/apisix:3.19.0-debian}"
 STUB="${STUB:-http://127.0.0.1:8081}"
 # The mock backend that serves qwen3: what it received is how a provider sees the gateway.
 MOCK_LOCAL="${MOCK_LOCAL:-http://127.0.0.1:8082}"
+JSON='Content-Type: application/json'
+CHAT_UI='Authorization: Bearer dev-key-chat-ui'
+STATUS='%{http_code}'
 PORT="${PROXY_PORT:-19080}"
 PROXY="http://127.0.0.1:$PORT"
 CONTAINER=aisa-proxy-runtime-test
@@ -84,7 +87,7 @@ proxy() {
         -v "$dir":/rendered:ro \
         "$APISIX_IMAGE" sh -c 'ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start' >/dev/null
     for _ in $(seq 1 30); do
-        code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROXY/v1/chat/completions" || true)
+        code=$(curl -s -o /dev/null -w "$STATUS" -X POST "$PROXY/v1/chat/completions" || true)
         if [[ "$code" != "000" && "$code" != "404" ]]; then
             sleep 2 # the usage event of this probe arrives before the checks clear the stub
             return 0
@@ -97,7 +100,7 @@ proxy() {
 # chat <key> <model>: sends one request and prints its status.
 chat() {
     local key=$1 model=$2
-    curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+    curl -sS -o /dev/null -w "$STATUS" -H "Authorization: Bearer $key" -H "$JSON" \
         -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hello there\"}]}" \
         "$PROXY/v1/chat/completions"
 }
@@ -146,8 +149,8 @@ isolated() {
     local what=$1 message=$2 status=$3 type=$4
     curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
     local got
-    got=$(curl -sS -D "$OUT/headers" -o "$OUT/body" -w '%{http_code}' \
-        -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' \
+    got=$(curl -sS -D "$OUT/headers" -o "$OUT/body" -w "$STATUS" \
+        -H "$CHAT_UI" -H "$JSON" \
         -H 'OpenAI-Organization: org-client' -H 'OpenAI-Project: proj-client' \
         -H 'X-Custom: from-the-client' -H 'Cookie: session=client' -H 'User-Agent: client-sdk/1.0' \
         -d "{\"model\":\"qwen3\",\"messages\":[{\"role\":\"user\",\"content\":\"$message\"}]}" \
@@ -195,21 +198,21 @@ isolated "the provider fails" "mock:error:500" 500 provider_error
 # on top of them, which take it past 100, do not hide one of the client's from the model route.
 many=()
 for i in $(seq 1 110); do many+=(-H "X-Filler-$i: $i"); done
-expect "more than 100 request headers: refused" "431" "$(curl -sS -o /dev/null -w '%{http_code}' \
-    -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' "${many[@]}" \
+expect "more than 100 request headers: refused" "431" "$(curl -sS -o /dev/null -w "$STATUS" \
+    -H "$CHAT_UI" -H "$JSON" "${many[@]}" \
     -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
 many=()
 for i in $(seq 1 85); do many+=(-H "X-Filler-$i: $i"); done
 curl -fsS -o /dev/null -X DELETE "$MOCK_LOCAL/debug/last-request"
-expect "nearly 100 request headers: status" "200" "$(curl -sS -o /dev/null -w '%{http_code}' \
-    -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' "${many[@]}" \
+expect "nearly 100 request headers: status" "200" "$(curl -sS -o /dev/null -w "$STATUS" \
+    -H "$CHAT_UI" -H "$JSON" "${many[@]}" \
     -H 'OpenAI-Organization: org-client' -H 'X-Aisa-Consumer: smuggled' \
     -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
 expect "nearly 100 request headers: none of them reaches the provider" "" \
     "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase | select(test("^(openai-|x-filler-|x-aisa-)"))')"
 
 # A stream passes the response filters whole: every model route's response goes through them.
-curl -sS -D "$OUT/headers" -o "$OUT/body" -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' \
+curl -sS -D "$OUT/headers" -o "$OUT/body" -H "$CHAT_UI" -H "$JSON" \
     -d '{"model":"qwen3","stream":true,"messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions"
 expect "a stream: event stream" "text/event-stream" "$(grep -i '^content-type:' "$OUT/headers" | tr -d '\r' | awk '{print $2}' | cut -d';' -f1)"
 expect "a stream: ends with [DONE]" "data: [DONE]" "$(grep -v '^$' "$OUT/body" | tail -n1)"
