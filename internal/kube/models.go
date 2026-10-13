@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,7 +62,13 @@ type ModelsOptions struct {
 	Endpoint string
 	// Install names this aisa install on the objects it writes.
 	Install string
-	// OnPass is called after every pass that read Consul.
+	// EmptyGrace is how long the catalog may offer no model before the objects are deleted:
+	// it can come back empty although the backends are fine, and the proxy keeps its model
+	// routes for as long (PROXY_CONTRACT.md, contract 3).
+	EmptyGrace time.Duration
+	// Now is the clock; time.Now by default.
+	Now func() time.Time
+	// OnPass is called after every pass that read Consul and changed the objects to match.
 	OnPass func(ModelStats)
 }
 
@@ -84,10 +91,15 @@ type Models struct {
 	dyn     dynamic.Interface
 	opts    ModelsOptions
 	log     *slog.Logger
+	// emptySince is when the catalog began to offer no model; zero while it offers one.
+	emptySince time.Time
 }
 
 // NewModels returns Models; call Reconcile for each pass.
 func NewModels(catalog HealthReader, dyn dynamic.Interface, log *slog.Logger, opts ModelsOptions) *Models {
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
 	return &Models{catalog: catalog, dyn: dyn, opts: opts, log: log}
 }
 
@@ -106,7 +118,8 @@ type offered struct {
 }
 
 // Reconcile makes one pass: it reads the catalog and the descriptions, then creates, updates and
-// deletes this install's Model objects to match. When Consul cannot be read nothing changes.
+// deletes this install's Model objects to match. When Consul cannot be read nothing changes, and
+// a catalog that offers no model changes nothing until it has done so for EmptyGrace.
 func (m *Models) Reconcile(ctx context.Context) error {
 	instances, err := m.catalog.Health(ctx, m.opts.Service)
 	if err != nil {
@@ -119,6 +132,9 @@ func (m *Models) Reconcile(ctx context.Context) error {
 	stats := ModelStats{}
 	descs := m.descriptions(pairs, &stats)
 	models := offeredModels(instances, descs)
+	if m.holdEmpty(len(models)) {
+		return nil
+	}
 	keep, errs := m.applyAll(ctx, models, &stats)
 
 	if err := m.removeStale(ctx, keep); err != nil {
@@ -128,6 +144,25 @@ func (m *Models) Reconcile(ctx context.Context) error {
 		m.opts.OnPass(stats)
 	}
 	return errors.Join(errs...)
+}
+
+// holdEmpty reports whether a catalog of no models is to be waited out: the first time, and
+// until EmptyGrace has passed since.
+func (m *Models) holdEmpty(offered int) bool {
+	if offered > 0 {
+		m.emptySince = time.Time{}
+		return false
+	}
+	now := m.opts.Now()
+	if m.emptySince.IsZero() {
+		m.emptySince = now
+	}
+	if wait := m.emptySince.Add(m.opts.EmptyGrace).Sub(now); wait > 0 {
+		m.log.Warn("the catalog offers no model; the Model objects stay until the grace period ends",
+			"remaining", wait.Round(time.Second).String())
+		return true
+	}
+	return false
 }
 
 // descriptions reads the models' descriptions; one that cannot be read is logged and counted,

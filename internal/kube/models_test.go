@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -266,6 +267,45 @@ func TestModelsKeepTheirObjectsWhenConsulCannotBeRead(t *testing.T) {
 	}
 	if got := mt.names(); !slices.Equal(got, []string{"qwen3"}) {
 		t.Errorf("objects for %v after Consul failed", got)
+	}
+}
+
+func TestAnEmptyCatalogIsWaitedOut(t *testing.T) {
+	mt := newModelsTest(t, backend("ollama-1", "qwen3", true))
+	now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	mt.models.opts.EmptyGrace = 5 * time.Minute
+	mt.models.opts.Now = func() time.Time { return now }
+	if err := mt.pass(); err != nil {
+		t.Fatal(err)
+	}
+	// The catalog comes back empty, as when the token may no longer read the service.
+	mt.catalog.instances = nil
+	for _, after := range []time.Duration{0, 4 * time.Minute} {
+		now = now.Add(after)
+		if err := mt.pass(); err != nil {
+			t.Fatal(err)
+		}
+		if got := mt.names(); !slices.Equal(got, []string{"qwen3"}) {
+			t.Fatalf("objects for %v within the grace period", got)
+		}
+	}
+	// It comes back: the clock starts again the next time.
+	mt.catalog.instances = []consul.Instance{backend("ollama-1", "qwen3", true)}
+	now = now.Add(2 * time.Minute)
+	if err := mt.pass(); err != nil {
+		t.Fatal(err)
+	}
+	mt.catalog.instances = nil
+	now = now.Add(time.Minute)
+	if err := mt.pass(); err != nil || len(mt.names()) != 1 {
+		t.Fatalf("objects for %v, err %v: the grace period did not start again", mt.names(), err)
+	}
+	now = now.Add(5 * time.Minute)
+	if err := mt.pass(); err != nil {
+		t.Fatal(err)
+	}
+	if got := mt.names(); len(got) != 0 || mt.stats.Models != 0 {
+		t.Errorf("objects for %v, stats %+v after the grace period", got, mt.stats)
 	}
 }
 

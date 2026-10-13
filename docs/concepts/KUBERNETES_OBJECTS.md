@@ -72,6 +72,7 @@ status:
 - **Nothing about the provider.** No backend address, provider, account or key is in the object (US-2). Whether a model is local or paid is open question 3.
 - **Description in Consul.** `features`, `contextLength` and `capabilities` are not in the catalog today. They go in Consul KV, `aisa/models/<model>`, written by the holder, such as `{"features": ["TextGeneration"], "contextLength": 32768, "capabilities": ["tools"]}`; every field is optional. A model without a description gets `features: [TextGeneration]` and no other fields, and so does one whose description cannot be read (not a JSON object, or a value outside the vocabularies above), which is logged and counted in `aisa_model_descriptions_invalid`.
 - **A model without healthy backends** keeps its object with `available: false`, so an application can tell "not on offer" from "down".
+- **An empty catalog is waited out.** The catalog can come back empty although the backends are fine, for example when the token may no longer read the service. aisa then changes no object until it has offered no model for `AISA_MODELS_EMPTY_GRACE` (5 minutes, as the proxy's guard keeps its model routes, [`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md)), and deletes them after that.
 - **Every consumer sees every model.** Which models a consumer may use is not decided per consumer today; when it is, the object stays the same and the decision API denies.
 
 ## The consumer's Secret

@@ -240,6 +240,7 @@ func runKubernetes(ctx context.Context, cfg config.Config, src kubeSources, m *m
 		Descriptions: consul.KVPrefix{Client: src.consul, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
 		Endpoint:     k.ProxyURL,
 		Install:      k.Namespace,
+		EmptyGrace:   k.EmptyGrace,
 		OnPass:       obs.models,
 	})
 	go kube.Run(ctx, k8s, log, kube.RunOptions{

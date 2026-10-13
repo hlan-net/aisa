@@ -220,6 +220,7 @@ func TestFromEnvKubernetes(t *testing.T) {
 		"AISA_KUBE_RESYNC":           "10s",
 		"AISA_KEY_ROTATION_INTERVAL": "0",
 		"AISA_KEY_ROTATION_GRACE":    "24h",
+		"AISA_MODELS_EMPTY_GRACE":    "1m",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -227,14 +228,15 @@ func TestFromEnvKubernetes(t *testing.T) {
 	want := Kubernetes{
 		Enabled: true, ProxyURL: "http://aisa-apisix.aisa.svc.cluster.local/v1",
 		Namespace: "aisa", PodName: "aisa-7d9f-x2", Lease: "aisa-leader",
-		Resync: 10 * time.Second, Rotation: 0, Grace: 24 * time.Hour,
+		Resync: 10 * time.Second, Rotation: 0, Grace: 24 * time.Hour, EmptyGrace: time.Minute,
 	}
 	if cfg.Kubernetes != want {
 		t.Errorf("Kubernetes = %+v, want %+v", cfg.Kubernetes, want)
 	}
 	// Off by default, with a month's rotation and a week's grace when turned on.
 	cfg, err = FromEnv(env(nil))
-	if err != nil || cfg.Kubernetes.Enabled || cfg.Kubernetes.Rotation != 720*time.Hour || cfg.Kubernetes.Grace != 168*time.Hour {
+	if err != nil || cfg.Kubernetes.Enabled || cfg.Kubernetes.Rotation != 720*time.Hour || cfg.Kubernetes.Grace != 168*time.Hour ||
+		cfg.Kubernetes.EmptyGrace != 5*time.Minute {
 		t.Errorf("defaults = %+v, %v", cfg.Kubernetes, err)
 	}
 }

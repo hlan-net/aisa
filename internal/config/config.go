@@ -61,6 +61,9 @@ type Kubernetes struct {
 	Rotation time.Duration
 	// Grace is how long a replaced key stays valid (AISA_KEY_ROTATION_GRACE).
 	Grace time.Duration
+	// EmptyGrace is how long the catalog may offer no model before the Model objects are
+	// deleted (AISA_MODELS_EMPTY_GRACE): the proxy keeps its model routes as long.
+	EmptyGrace time.Duration
 }
 
 // Consul is where aisa reads its quota profiles from (docs/concepts/CONSUL.md). The variables
@@ -167,6 +170,8 @@ func Defaults() Config {
 			Resync:   30 * time.Second,
 			Rotation: 30 * 24 * time.Hour,
 			Grace:    7 * 24 * time.Hour,
+			// As the proxy's guard (GUARD_EMPTY_GRACE).
+			EmptyGrace: 5 * time.Minute,
 		},
 		Consul: Consul{Prefix: "aisa"},
 	}
@@ -290,6 +295,7 @@ func kubernetesFromEnv(getenv func(string) string, k *Kubernetes) error {
 	}{
 		{"AISA_KUBE_RESYNC", &k.Resync},
 		{"AISA_KEY_ROTATION_GRACE", &k.Grace},
+		{"AISA_MODELS_EMPTY_GRACE", &k.EmptyGrace},
 	} {
 		if err := duration(getenv, d.name, d.dst); err != nil {
 			return err
