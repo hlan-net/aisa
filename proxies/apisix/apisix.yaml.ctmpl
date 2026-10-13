@@ -51,10 +51,12 @@ global_rules:
   - id: metrics
     plugins:
       prometheus: {}
-  # Account isolation (PROXY_CONTRACT.md): nothing of a provider's answer reaches a client but
-  # the body of a successful one and its Content-Type. It acts only on a model route, which
-  # marks its request (ctx.aisa_model_route); aisa's own answers and the gateway's are left
-  # alone. Two phases, so two plugins: the headers and the status, then the body.
+  # Account isolation (PROXY_CONTRACT.md): of a provider's answer a client gets the body of a
+  # successful one and the headers Content-Type, Cache-Control, Retry-After and the framing; a
+  # provider's error, and the gateway's own 5xx on a model route, which can name a backend, are
+  # replaced by the gateway's. It acts only on a model route, which marks its request
+  # (ctx.aisa_model_route); aisa's answers and the gateway's other routes are left alone. Two
+  # phases, so two plugins: the headers and the status, then the body.
   - id: account-isolation
     plugins:
       serverless-pre-function:

@@ -59,7 +59,7 @@ This was implicit in the design from the start (provider keys in Vault, rendered
 
 | Criterion | State | Where |
 |---|---|---|
-| 1, 2 | Met in the APISIX proxy: a client gets only the `Content-Type`, `Cache-Control` and framing of a provider's answer, and a provider's error body is replaced by the gateway's ([`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md#account-isolation)). The gateway's log gets the provider's status, `error.type` and `error.code`, never its text. | [#35](https://github.com/hlan-net/aisa/issues/35) |
+| 1, 2 | Met in the APISIX proxy: a client gets only the `Content-Type`, `Cache-Control`, `Retry-After` and framing of a provider's answer, and a provider's error body is replaced by the gateway's ([`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md#account-isolation)). The gateway's log gets the provider's status, `error.type` and `error.code`, never its text. | [#35](https://github.com/hlan-net/aisa/issues/35) |
 | 3 | Met in the APISIX proxy: a provider gets only the `Content-Type` and `Accept` of a client's request, nothing that selects an organisation or a project, and no `X-Aisa-*`. | [#35](https://github.com/hlan-net/aisa/issues/35) |
 | 4 | Met by design ([`CONSUL.md`](../concepts/CONSUL.md#backends-consul-catalog)); the routes are in progress. | `ROADMAP.md` v0.2.0 PR 5 ([#4](https://github.com/hlan-net/aisa/issues/4)) |
 | 5 | Met for credentials ([#5](https://github.com/hlan-net/aisa/issues/5)): usage events carry explicit fields only and aisa never logs a raw event. | — |
