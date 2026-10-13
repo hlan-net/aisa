@@ -201,7 +201,9 @@ grep -q '# newer' "$STAGED" || { echo "FAIL: the newer render was consumed by th
 grep -q '# newer' "$TARGET" || { echo "FAIL: the newer render was not promoted" >&2; exit 1; }
 [[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not end with the newer render" >&2; exit 1; }
 echo "== guard.sh: a second held render during a hold is the one a recheck checks"
-export GUARD_EMPTY_GRACE=1
+# 3 s, not 1: guard.sh counts whole seconds, so with 1 s a second boundary between the two
+# renders below would end the hold before the second one.
+export GUARD_EMPTY_GRACE=3
 with_models "$TARGET"
 without_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the hold did not start" >&2; exit 1; }
@@ -210,7 +212,7 @@ without_models "$STAGED"
 echo "# still empty, rendered again" >> "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the second held render failed" >&2; exit 1; }
 [[ "$(cut -d' ' -f1 "$TARGET.empty-since")" == "$since" ]] || { echo "FAIL: the second held render reset the clock" >&2; exit 1; }
-sleep 2
+sleep 3
 GUARD_RECHECK=1 GUARD_VERIFY_TIMEOUT=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the recheck of the second held render failed" >&2; exit 1; }
 grep -q '# still empty, rendered again' "$TARGET" || { echo "FAIL: the recheck did not promote the second held render" >&2; exit 1; }
 [[ ! -e "$TARGET.empty-since" ]] || { echo "FAIL: the hold did not end" >&2; exit 1; }
