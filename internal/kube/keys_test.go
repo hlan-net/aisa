@@ -525,10 +525,43 @@ func TestAFailedWriteIsFinishedByTheNextPass(t *testing.T) {
 			if got := kt.kv.hashes(t, "batch-jobs"); !slices.Equal(got, []string{hashKey(key)}) {
 				t.Errorf("hashes = %v, want only the key in the Secret", got)
 			}
-			if _, ok := kt.kv.get(t, "batch-jobs")[fieldUnwritten]; ok {
+			data := kt.kv.get(t, "batch-jobs")
+			if _, ok := data[fieldUnwritten]; ok {
 				t.Error("a mark was left")
 			}
+			if data[fieldIssuedAt] == nil {
+				t.Error("no issued_at")
+			}
+			// Counted once, also when the key reached the Secret and only its mark was left.
+			if !slices.Equal(kt.issued, []string{IssueNew}) {
+				t.Errorf("issued %v", kt.issued)
+			}
 		})
+	}
+}
+
+func TestARotationWhoseSecretWriteFailedIsRetried(t *testing.T) {
+	kt := newKeysTest(t, news())
+	kt.pass()
+	old := kt.key("news", "aisa")
+	failing := true
+	kt.k8s.PrependReactor("update", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if failing {
+			return true, nil, errors.New("the API server is down")
+		}
+		return false, nil, nil
+	})
+	kt.now = kt.now.Add(30 * 24 * time.Hour)
+	kt.pass()
+	if kt.states[StateError] != 1 || kt.key("news", "aisa") != old {
+		t.Fatalf("states = %v", kt.states)
+	}
+	// The Secret still holds the old key: it stays due, and is replaced after the backoff.
+	failing = false
+	kt.now = kt.now.Add(2 * time.Minute)
+	kt.pass()
+	if kt.key("news", "aisa") == old || !slices.Equal(kt.issued, []string{IssueNew, IssueRotation}) {
+		t.Errorf("not rotated after the failed write: issued %v", kt.issued)
 	}
 }
 

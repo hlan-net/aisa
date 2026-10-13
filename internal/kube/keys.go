@@ -195,9 +195,9 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 
 // revokeDropped removes the hashes of the keys aisa issued to consumers that no longer name a
 // Secret, declared or not, from Vault's side: it holds even when their Secret is already gone,
-// or a revocation failed after it was deleted. A key aisa issued has issued_at; the hashes of a
-// consumer that never had a Secret are left as the holder wrote them, and a consumer whose
-// declaration cannot be read is left as it is.
+// or a revocation failed after it was deleted. A consumer aisa issued a key to has issued_at, or
+// a mark of a key it began to issue; the hashes of a consumer that never had a Secret are left
+// as the holder wrote them, and a consumer whose declaration cannot be read is left as it is.
 func (k *Keys) revokeDropped(ctx context.Context, valid map[string]consumers.Declaration, invalid map[string]bool) error {
 	names, err := k.kv.List(ctx, k.opts.Mount, k.opts.Prefix+"/consumers")
 	if err != nil && !errors.Is(err, vault.ErrNotFound) {
@@ -214,7 +214,7 @@ func (k *Keys) revokeDropped(ctx context.Context, valid map[string]consumers.Dec
 			errs = append(errs, fmt.Errorf("consumer %q: %w", name, err))
 			continue
 		}
-		if rec.issuedAt.IsZero() {
+		if rec.issuedAt.IsZero() && len(rec.unwritten) == 0 && len(rec.superseded) == 0 {
 			continue
 		}
 		if err := k.revoke(ctx, name, rec); err != nil {
@@ -286,8 +286,11 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (st
 // else was changed, and replaces the key when it is due.
 func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, current string, changed bool) (string, error) {
 	now := k.opts.Now()
-	if _, ok := rec.unwritten[current]; ok {
+	if at, ok := rec.unwritten[current]; ok {
+		// The key reached the Secret, and the pass that wrote it did not clear its mark: it
+		// was issued then.
 		delete(rec.unwritten, current)
+		rec.issuedAt = at
 		changed = true
 	}
 	if _, ok := rec.superseded[current]; ok {
@@ -319,6 +322,8 @@ func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, sec
 // issue gives the consumer a new key in three steps, each of which a later pass can finish:
 // the hash becomes valid in Vault with a mark, the key is written to the Secret, the mark is
 // cleared. The hashes the consumer had are superseded and stay valid for the grace period.
+// issued_at changes with the last step only: until the key reaches the Secret, the key that the
+// Secret holds stays due, and a rotation whose Secret write failed is tried again.
 func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, reason string) error {
 	if r, ok := k.backoff[name]; ok && k.opts.Now().Before(r.at) {
 		return fmt.Errorf("the last attempt to write the Secret failed; the next one is at %s", r.at.UTC().Format(time.RFC3339))
@@ -336,7 +341,6 @@ func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, se
 	}
 	rec.hashes = append(rec.hashes, hash)
 	rec.unwritten[hash] = now
-	rec.issuedAt = now
 	if err := k.write(ctx, name, rec); err != nil {
 		return fmt.Errorf("make the new key valid: %w", err)
 	}
@@ -346,15 +350,17 @@ func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, se
 		return fmt.Errorf("write the new key to the Secret (next attempt in %s): %w", wait, err)
 	}
 	delete(k.backoff, name)
-	delete(rec.unwritten, hash)
-	if err := k.write(ctx, name, rec); err != nil {
-		// The next pass clears the mark: the Secret holds the key.
-		return fmt.Errorf("clear the new key's mark: %w", err)
-	}
+	// Issued: the Secret holds the key, and Vault accepts it.
 	k.log.Info("issued a key for the consumer", "consumer", name, "reason", reason,
 		"namespace", t.namespace, "secret", t.name)
 	if k.opts.OnIssue != nil {
 		k.opts.OnIssue(reason)
+	}
+	delete(rec.unwritten, hash)
+	rec.issuedAt = now
+	if err := k.write(ctx, name, rec); err != nil {
+		// The next pass clears the mark and sets issued_at: the Secret holds the key.
+		return fmt.Errorf("clear the new key's mark: %w", err)
 	}
 	return nil
 }

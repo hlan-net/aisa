@@ -43,12 +43,13 @@ validate() {
     echo "ok: $name"
 }
 
-validate "defaults" "$AISA" --include-crds
+validate "defaults" "$AISA"
 validate "no-kubernetes" "$AISA" --set kubernetes.enabled=false
 validate "monitoring" "$AISA" --set serviceMonitor.enabled=true --set apisix.serviceMonitor.enabled=true
 validate "consul-without-acls" "$AISA" --set consul.token.fromVault=false --set apisix.vaultAgent.consulToken.enabled=false
 validate "external-redis" "$AISA" --set redis.enabled=false --set redis.addr=redis.example.svc:6379
-validate "no-quotas-no-proxy" "$AISA" --set quotas.enabled=false --set apisix.enabled=false
+validate "no-quotas-no-proxy" "$AISA" --set quotas.enabled=false --set apisix.enabled=false \
+    --set kubernetes.proxyURL=https://llm.example.internal/v1
 validate "proxy-alone" "$PROXY" --set aisa.url=https://aisa.aisa.svc:8080
 
 # The values that must be given are asked for.
@@ -56,6 +57,14 @@ if helm template aisa "$AISA" >/dev/null 2>&1; then
     fail "the chart renders without global.vault.addr"
 fi
 echo "ok: global.vault.addr is required"
+
+# Without the proxy's chart there is no Service to derive the proxy's URL from.
+if helm template aisa "$AISA" "${REQUIRED[@]}" --set apisix.enabled=false >/dev/null 2>&1; then
+    fail "the chart renders without the proxy's chart and kubernetes.proxyURL"
+fi
+helm template aisa "$AISA" "${REQUIRED[@]}" --set apisix.enabled=false --set kubernetes.enabled=false >/dev/null ||
+    fail "the chart needs kubernetes.proxyURL with kubernetes.enabled=false"
+echo "ok: kubernetes.proxyURL is required without the proxy's chart"
 
 # The proxy finds aisa's Service under the name aisa's chart gives it: by the release name, or
 # by global.aisa.fullnameOverride.
@@ -144,7 +153,11 @@ for f in no-kubernetes defaults; do
     esac
     echo "ok: $f: $roles RBAC objects, the API token in: ${mounts:-no container}"
 done
-grep -q '^kind: CustomResourceDefinition$' "$OUT/defaults.yaml" || fail "the Model CRD is not in the chart"
-echo "ok: the Model CRD is in the chart"
+# The CRD is a template, so that an upgrade applies it, and kept when the chart is uninstalled.
+awk '/^kind:/{c = ($2 == "CustomResourceDefinition")} c && /helm.sh\/resource-policy: keep/{f = 1} END {exit !f}' "$OUT/defaults.yaml" ||
+    fail "the Model CRD is not in the chart's templates, or not kept"
+helm template aisa "$AISA" "${REQUIRED[@]}" --set crds.install=false >"$OUT/no-crds.yaml" 2>/dev/null
+! grep -q '^kind: CustomResourceDefinition$' "$OUT/no-crds.yaml" || fail "crds.install=false still renders the CRD"
+echo "ok: the Model CRD is in the chart's templates and kept; crds.install=false leaves it out"
 
 echo "ok: all chart tests passed"

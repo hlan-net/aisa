@@ -44,7 +44,7 @@ What aisa saw: `kubectl -n aisa port-forward svc/aisa-metrics 9090:9090`, then `
 
 ## Cleaning up
 
-`down.sh` removes the consumer from Consul while aisa still runs, so aisa deletes its Secret and the key's hashes, then uninstalls the release, deletes this install's `Model` objects, the fixtures and their ClusterRoleBinding, and the namespaces `up.sh` created, each only if it is this setup's. The `Model` CRD stays: Helm never removes a CRD, and other installs may use it. The next `up.sh` issues a new key.
+`down.sh` removes the consumer from Consul while aisa still runs, so aisa deletes its Secret and the key's hashes, then uninstalls the release, deletes this install's `Model` objects, the fixtures and their ClusterRoleBinding, and the namespaces `up.sh` created, each only if it is this setup's. The `Model` CRD stays: the chart keeps it when it is uninstalled, and other installs may use it. The next `up.sh` issues a new key.
 
 ## Variables
 

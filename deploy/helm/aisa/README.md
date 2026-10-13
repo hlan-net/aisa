@@ -20,7 +20,7 @@ Applications call the proxy's Service, `aisa-apisix` for a release named `aisa`,
 | Deployment, Service `<release>-redis` | Redis for the quota counters, nothing on disk (`redis.enabled`) |
 | NetworkPolicies | Only the proxy reaches aisa's API; the peers in `networkPolicy.extraFrom` (none by default) reach its metrics port only; only aisa reaches Redis |
 | ServiceMonitor | Optional (`serviceMonitor.enabled`) |
-| CRD `models.aisa.hlan.net` | The `Model` objects, in `crds/`: installed with the chart, never upgraded or deleted by Helm |
+| CRD `models.aisa.hlan.net` | The `Model` objects (`crds.install`): installed and upgraded with the chart, kept when it is uninstalled. One install in a cluster owns it; set `crds.install=false` in any other |
 | ClusterRole and binding `<namespace>-<release>` | aisa writes each consumer's Secret and the `Model` objects (`kubernetes.enabled`): Secrets in every namespace, changing only those with its own labels, and the Models |
 | Role and binding `<release>-leader` | The Lease that elects the replica that writes the objects |
 | ClusterRole `<namespace>-<release>-model-reader` | Reading the Models; bound to every service account unless `kubernetes.models.readableByAllServiceAccounts` is off |

@@ -65,10 +65,12 @@ app.kubernetes.io/component: counters
 
 {{- /* The proxy's URL that applications call, for their Secrets and the Model objects: the
        proxy chart's client Service in this release's namespace (proxies/apisix/chart,
-       "proxy.fullname"), or kubernetes.proxyURL. */}}
+       "proxy.fullname"), or kubernetes.proxyURL, which is required without that chart. */}}
 {{- define "aisa.proxyURL" -}}
 {{- if .Values.kubernetes.proxyURL }}
 {{- .Values.kubernetes.proxyURL }}
+{{- else if not .Values.apisix.enabled }}
+{{- fail "kubernetes.proxyURL is required with apisix.enabled=false: the URL of the proxy that applications call" }}
 {{- else }}
 {{- /* The parent sees only the values given here, not the proxy chart's defaults. */}}
 {{- $proxy := .Values.apisix | default dict }}
