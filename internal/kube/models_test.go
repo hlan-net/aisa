@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -306,6 +307,15 @@ func TestAnEmptyCatalogIsWaitedOut(t *testing.T) {
 	}
 	if got := mt.names(); len(got) != 0 || mt.stats.Models != 0 {
 		t.Errorf("objects for %v, stats %+v after the grace period", got, mt.stats)
+	}
+}
+
+func TestNormalizeKeepsIntegersExact(t *testing.T) {
+	if !reflect.DeepEqual(normalize(map[string]any{"contextLength": int64(32768)}), normalize(map[string]any{"contextLength": float64(32768)})) {
+		t.Error("the same number from the API server and from here compares as different")
+	}
+	if reflect.DeepEqual(normalize(map[string]any{"contextLength": int64(9007199254740992)}), normalize(map[string]any{"contextLength": int64(9007199254740993)})) {
+		t.Error("two integers above 2^53 compare as equal")
 	}
 }
 

@@ -428,14 +428,17 @@ func toAnyMap(m map[string]string) map[string]any {
 }
 
 // normalize makes a spec comparable whether it came from the API server (numbers as int64 or
-// float64) or was built here.
+// float64) or was built here. Numbers stay exact (json.Number): two integers above 2^53 that
+// differ compare as different.
 func normalize(v map[string]any) map[string]any {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return v
 	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
 	var out map[string]any
-	if json.Unmarshal(b, &out) != nil {
+	if dec.Decode(&out) != nil {
 		return v
 	}
 	return out

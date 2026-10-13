@@ -133,6 +133,9 @@ spec:
               value: {{ .Values.kubernetes.keys.rotationInterval | quote }}
             - name: AISA_KEY_ROTATION_GRACE
               value: {{ .Values.kubernetes.keys.rotationGrace | quote }}
+            # The Models wait out an empty catalog as long as the proxy keeps its model routes.
+            - name: AISA_MODELS_EMPTY_GRACE
+              value: {{ include "aisa.emptyCatalogGrace" . | quote }}
             - name: POD_NAMESPACE
               valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
             - name: POD_NAME

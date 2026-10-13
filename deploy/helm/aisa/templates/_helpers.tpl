@@ -63,6 +63,13 @@ app.kubernetes.io/component: counters
 {{- required "global.vault.addr is required: the address of Vault" .Values.global.vault.addr }}
 {{- end }}
 
+{{- /* How long an empty catalog is waited out: the proxy chart's
+       consulTemplate.emptyCatalogGrace, in seconds (300 there by default), so that the Model
+       objects and the proxy's model routes go together. */}}
+{{- define "aisa.emptyCatalogGrace" -}}
+{{- printf "%ds" (dig "consulTemplate" "emptyCatalogGrace" 300 (.Values.apisix | default dict) | int) }}
+{{- end }}
+
 {{- /* The proxy's URL that applications call, for their Secrets and the Model objects: the
        proxy chart's client Service in this release's namespace (proxies/apisix/chart,
        "proxy.fullname"), or kubernetes.proxyURL, which is required without that chart. */}}
