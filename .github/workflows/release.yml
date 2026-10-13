@@ -18,7 +18,7 @@ permissions:
 jobs:
   create-release:
     name: Create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       release-tag: ${{ steps.version.outputs.version }}
     steps:
@@ -92,7 +92,7 @@ jobs:
   image:
     name: Build and push multi-arch image
     needs: create-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -131,7 +131,7 @@ jobs:
   charts:
     name: Package and push the Helm charts
     needs: [create-release, image]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
