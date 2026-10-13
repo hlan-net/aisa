@@ -107,7 +107,7 @@ global_rules:
                 return
               end
               ctx.aisa_provider_error = {
-                from = from, status = ngx.status, seen = "",
+                from = from, status = ngx.status, kind = kind,
                 body = core.json.encode({error = {message = message, type = kind}}),
               }
               ngx.status = status
@@ -123,25 +123,14 @@ global_rules:
               if not e then
                 return
               end
-              local chunk, eof = ngx.arg[1], ngx.arg[2]
-              if chunk and #e.seen < 4096 then
-                e.seen = e.seen .. chunk:sub(1, 4096 - #e.seen)
-              end
-              if not eof then
+              if not ngx.arg[2] then
                 ngx.arg[1] = nil
                 return
               end
-              -- The gateway's log, for the holder, gets what the error was, never its text: a
-              -- provider's message can carry a key or the account (US-2, criterion 5). Only the
-              -- OpenAI-style error.type and error.code, when they are short identifiers.
-              local core = require("apisix.core")
-              local function ident(v)
-                return type(v) == "string" and #v <= 64 and v:match("^[%w_.%-]+$") and v or "-"
-              end
-              local t = core.json.decode(e.seen)
-              local err = type(t) == "table" and type(t.error) == "table" and t.error or {}
-              core.log.warn(e.from, " error ", e.status, ", answered as ", ngx.status,
-                            ": type=", ident(err.type), " code=", ident(err.code))
+              -- The gateway's log, for the holder, gets the statuses and the gateway's own
+              -- classification, nothing of the provider's: its message, and even its error code,
+              -- can carry a key or the account (US-2, criterion 5).
+              require("apisix.core").log.warn(e.from, " error ", e.status, ", answered as ", ngx.status, " ", e.kind)
               ngx.arg[1] = e.body
             end
 
