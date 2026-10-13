@@ -198,9 +198,13 @@ isolated "the provider fails" "mock:error:500" 500 provider_error
 # on top of them, which take it past 100, do not hide one of the client's from the model route.
 many=()
 for i in $(seq 1 110); do many+=(-H "X-Filler-$i: $i"); done
+curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
 expect "more than 100 request headers: refused" "431" "$(curl -sS -o /dev/null -w "$STATUS" \
-    -H "$CHAT_UI" -H "$JSON" "${many[@]}" \
+    -H "$CHAT_UI" -H "$JSON" -H 'X-Aisa-Consumer: smuggled' "${many[@]}" \
     -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
+sleep 2
+expect "more than 100 request headers: reported, with no consumer of the client's" "431 " \
+    "$(events | jq -r '"\(.status) \(.consumer // "")"')"
 many=()
 for i in $(seq 1 85); do many+=(-H "X-Filler-$i: $i"); done
 curl -fsS -o /dev/null -X DELETE "$MOCK_LOCAL/debug/last-request"
@@ -210,6 +214,9 @@ expect "nearly 100 request headers: status" "200" "$(curl -sS -o /dev/null -w "$
     -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
 expect "nearly 100 request headers: none of them reaches the provider" "" \
     "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase | select(test("^(openai-|x-filler-|x-aisa-)"))')"
+sleep 2
+expect "nearly 100 request headers: reported under the consumer aisa named" "200 chat-ui" \
+    "$(events | jq -r '"\(.status) \(.consumer // "")"' | tail -n1)"
 
 # A stream passes the response filters whole: every model route's response goes through them.
 curl -sS -D "$OUT/headers" -o "$OUT/body" -H "$CHAT_UI" -H "$JSON" \

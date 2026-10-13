@@ -138,14 +138,15 @@ routes:
               -- removals below among them, APISIX's own included: a header behind the first 100
               -- would pass unseen. Such a request is refused.
               local _, err = ngx.req.get_headers()
-              if err == "truncated" then
-                return 431, {error = {message = "too many request headers", type = "invalid_request_error"}}
-              end
-              -- Proxy rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream.
-              for name in pairs(core.request.headers(ctx)) do
+              -- Proxy rule 1: no client-supplied X-Aisa-* header survives to the decision or upstream,
+              -- nor to the usage event of a refused request. 0: all of them.
+              for name in pairs(ngx.req.get_headers(0)) do
                 if string.lower(name):find("^x%-aisa%-") then
                   core.request.set_header(ctx, name, nil)
                 end
+              end
+              if err == "truncated" then
+                return 431, {error = {message = "too many request headers", type = "invalid_request_error"}}
               end
               local model
               local body = core.request.get_body()
@@ -345,19 +346,23 @@ routes:
           - |
             return function(conf, ctx)
               local core = require("apisix.core")
+              -- 0: all of them, not the first 100: the client route lets through 100 of the
+              -- client's, and the hop adds aisa's, which may come after them.
+              local headers = ngx.req.get_headers(0)
+              local function one(v)
+                return type(v) == "table" and v[1] or v
+              end
               -- The usage event below reports these; they are kept before the headers go.
-              ctx.var.aisa_request_id = core.request.header(ctx, "X-Aisa-Request-Id")
-              ctx.var.aisa_consumer = core.request.header(ctx, "X-Aisa-Consumer")
-              ctx.var.aisa_requested_model = core.request.header(ctx, "X-Aisa-Requested-Model")
+              ctx.var.aisa_request_id = one(headers["x-aisa-request-id"])
+              ctx.var.aisa_consumer = one(headers["x-aisa-consumer"])
+              ctx.var.aisa_requested_model = one(headers["x-aisa-requested-model"])
               -- Account isolation (PROXY_CONTRACT.md): ai-proxy-multi forwards every request
               -- header, so only these are left; the client's Authorization, OpenAI-Organization
               -- and the like, and aisa's own X-Aisa-*, never reach a provider. Host and the
               -- framing are needed to read the body, and ai-proxy-multi sets its own.
               local keep = {["content-type"] = true, accept = true, host = true,
                             ["content-length"] = true, ["transfer-encoding"] = true}
-              -- 0: all of them, not the first 100: the client route lets through 100 of the
-              -- client's, and the hop adds aisa's.
-              for name in pairs(ngx.req.get_headers(0)) do
+              for name in pairs(headers) do
                 if not keep[string.lower(name)] then
                   core.request.set_header(ctx, name, nil)
                 end
