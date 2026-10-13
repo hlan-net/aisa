@@ -161,7 +161,7 @@ grep -q '^aisa_consumer_loads_total{result="ok"}' <<<"$metrics" ||
     fail "aisa loaded its consumers' keys from Vault (Kubernetes auth as the role aisa)"
 ok "aisa loaded its consumers' keys from Vault (Kubernetes auth as the role aisa)"
 declarations=$(awk '/^aisa_consumer_declarations /{print $2}' <<<"$metrics")
-expect "aisa read its consumer declarations from Consul (a token from Vault)" 1 "$declarations"
+expect "aisa read its consumer declarations from Consul (a token from Vault): chat-ui and batch-jobs" 2 "$declarations"
 profiles=$(awk '/^aisa_quota_profiles /{print $2}' <<<"$metrics")
 expect "aisa read its quota profiles from Consul (a token from Vault)" 1 "$profiles"
 # The proxy reports its renders to the URI the chart gives it (AISA_RENDER_URI). The first
