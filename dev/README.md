@@ -75,9 +75,11 @@ The stub does not read Vault or Consul; its decisions come from environment vari
 `GET /v1/models` and `POST /v1/chat/completions`, streaming or not, plus a minimal part of Ollama's native API (`GET /api/version`, non-streaming `POST /api/chat` with `prompt_eval_count` and `eval_count`) so scripts written for a real Ollama run against it. Token counts are deterministic:
 
 - `prompt_tokens` = the number of whitespace-separated words in all message contents (text parts only)
-- `completion_tokens` = `MOCK_DEFAULT_COMPLETION_TOKENS` (default 16), lowered by `max_completion_tokens` or `max_tokens` (then `finish_reason` is `length`), or set exactly with the `X-Mock-Completion-Tokens` request header
+- `completion_tokens` = `MOCK_DEFAULT_COMPLETION_TOKENS` (default 16), lowered by `max_completion_tokens` or `max_tokens` (then `finish_reason` is `length`), or set exactly with the `X-Mock-Completion-Tokens` request header. The header reaches the mock through the dev stack's baseline route, not through a proxy rendered from the template, which forwards no client header but `Content-Type` and `Accept` ([account isolation](../docs/concepts/PROXY_CONTRACT.md#account-isolation))
 
 Streams send one chunk per token. A final usage chunk is sent according to `MOCK_STREAM_USAGE`: `auto` (only with `stream_options.include_usage`, like OpenAI), `always` or `never`. `MOCK_TTFT` and `MOCK_TOKEN_DELAY` add latency (Go durations such as `50ms`). The backend's name is returned in the `X-Mock-Backend` header and in `system_fingerprint`, because gateways may drop upstream response headers.
+
+Like a provider, the mock names its account: every chat response carries `Openai-Organization`, `Openai-Processing-Ms`, `X-Ratelimit-Remaining-Requests` and `X-Request-Id`, and a message whose whole content is `mock:error:<status>` (400 to 599) gets that status with an error body that names a key and the account. `GET /debug/last-request` shows the headers of the last chat request. `runtime_test.sh` uses them to check that neither reaches a client, and that no header of the client's reaches the mock.
 
 ## Notes
 

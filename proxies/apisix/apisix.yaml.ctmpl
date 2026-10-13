@@ -51,6 +51,73 @@ global_rules:
   - id: metrics
     plugins:
       prometheus: {}
+  # Account isolation (PROXY_CONTRACT.md): nothing of a provider's answer reaches a client but
+  # the body of a successful one and its Content-Type. It acts only on a model route, which
+  # marks its request (ctx.aisa_model_route); aisa's own answers and the gateway's are left
+  # alone. Two phases, so two plugins: the headers and the status, then the body.
+  - id: account-isolation
+    plugins:
+      serverless-pre-function:
+        phase: header_filter
+        functions:
+          - |
+            return function(conf, ctx)
+              if not ctx.aisa_model_route then
+                return
+              end
+              -- The response headers a client gets; ai-proxy-multi sets only Content-Type today,
+              -- and this holds whatever a later version adds.
+              local keep = {["content-type"] = true, ["content-length"] = true,
+                            ["transfer-encoding"] = true, ["cache-control"] = true, connection = true}
+              for name in pairs(ngx.resp.get_headers()) do
+                if not keep[string.lower(name)] then
+                  ngx.header[name] = nil
+                end
+              end
+              local status = ngx.status
+              if status < 400 then
+                return
+              end
+              -- A provider's error: its status is mapped, and its body replaced below, so no
+              -- text of the provider's, which can name the account or the key, reaches a client.
+              local kind, message = "provider_error", "the provider could not answer this request"
+              if status == 401 or status == 403 then
+                status, message = 502, "the provider refused the gateway's credentials"
+              elseif status == 429 then
+                kind, message = "provider_rate_limited", "the provider is limiting the gateway's requests; try again later"
+              elseif status < 500 then
+                kind, message = "invalid_request_error", "the provider rejected the request"
+              end
+              ctx.aisa_provider_error = {
+                status = ngx.status, seen = "",
+                body = require("apisix.core").json.encode({error = {message = message, type = kind}}),
+              }
+              ngx.status = status
+              ngx.header["Content-Type"] = "application/json"
+              ngx.header["Content-Length"] = nil
+            end
+      serverless-post-function:
+        phase: body_filter
+        functions:
+          - |
+            return function(conf, ctx)
+              local e = ctx.aisa_provider_error
+              if not e then
+                return
+              end
+              local chunk, eof = ngx.arg[1], ngx.arg[2]
+              if chunk and #e.seen < 1024 then
+                e.seen = e.seen .. chunk:sub(1, 1024 - #e.seen)
+              end
+              if not eof then
+                ngx.arg[1] = nil
+                return
+              end
+              -- The original goes to the gateway's log, for the holder.
+              require("apisix.core").log.warn("provider error ", e.status, ", answered as ", ngx.status, ": ",
+                                              (e.seen:gsub("%s+$", "")))
+              ngx.arg[1] = e.body
+            end
 
 routes:
   - id: client
@@ -267,8 +334,24 @@ routes:
         functions:
           - |
             return function(conf, ctx)
-              -- Strip client credential so no backend receives it.
-              require("apisix.core").request.set_header(ctx, "Authorization", nil)
+              local core = require("apisix.core")
+              -- The usage event below reports these; they are kept before the headers go.
+              ctx.var.aisa_request_id = core.request.header(ctx, "X-Aisa-Request-Id")
+              ctx.var.aisa_consumer = core.request.header(ctx, "X-Aisa-Consumer")
+              ctx.var.aisa_requested_model = core.request.header(ctx, "X-Aisa-Requested-Model")
+              -- Account isolation (PROXY_CONTRACT.md): ai-proxy-multi forwards every request
+              -- header, so only these are left; the client's Authorization, OpenAI-Organization
+              -- and the like, and aisa's own X-Aisa-*, never reach a provider. Host and the
+              -- framing are needed to read the body, and ai-proxy-multi sets its own.
+              local keep = {["content-type"] = true, accept = true, host = true,
+                            ["content-length"] = true, ["transfer-encoding"] = true}
+              for name in pairs(core.request.headers(ctx)) do
+                if not keep[string.lower(name)] then
+                  core.request.set_header(ctx, name, nil)
+                end
+              end
+              -- The response: see the global rule account-isolation.
+              ctx.aisa_model_route = true
             end
       ai-proxy-multi:
         timeout: {{ sprig_mul $maxTimeoutSec 1000 }}
@@ -297,13 +380,14 @@ routes:
         batch_max_size: 1
         inactive_timeout: 1
         # Explicit format only (#5): Contract 2 usage event schema. On a fail-open route the
-        # consumer is empty, and aisa accounts the usage under unknown.
+        # consumer is empty, and aisa accounts the usage under unknown. The X-Aisa-* values are
+        # the ones kept before the request headers were removed (serverless-pre-function).
         log_format:
           ts: $time_iso8601
-          request_id: $http_x_aisa_request_id
-          consumer: $http_x_aisa_consumer
+          request_id: $aisa_request_id
+          consumer: $aisa_consumer
           model: $llm_model
-          requested_model: $http_x_aisa_requested_model
+          requested_model: $aisa_requested_model
           backend: $balancer_ip
           prompt_tokens: $llm_prompt_tokens
           completion_tokens: $llm_completion_tokens

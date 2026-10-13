@@ -17,6 +17,8 @@ NETWORK="${NETWORK:-aisa-dev_default}"
 CT_IMAGE="${CONSUL_TEMPLATE_IMAGE:-hashicorp/consul-template:0.43.0}"
 APISIX_IMAGE="${APISIX_IMAGE:-apache/apisix:3.19.0-debian}"
 STUB="${STUB:-http://127.0.0.1:8081}"
+# The mock backend that serves qwen3: what it received is how a provider sees the gateway.
+MOCK_LOCAL="${MOCK_LOCAL:-http://127.0.0.1:8082}"
 PORT="${PROXY_PORT:-19080}"
 PROXY="http://127.0.0.1:$PORT"
 CONTAINER=aisa-proxy-runtime-test
@@ -135,6 +137,37 @@ one() {
     fi
 }
 
+# isolated <description> <message> <status> <type>: sends a request that carries what a client
+# could use to reach into the provider's account, with <message> as its content, and checks
+# that the client gets <status> and an error of <type> (none: a completion), no account header
+# and no text of the provider's, and that the provider got none of the client's headers
+# (PROXY_CONTRACT.md, Account isolation).
+isolated() {
+    local what=$1 message=$2 status=$3 type=$4
+    curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
+    local got
+    got=$(curl -sS -D "$OUT/headers" -o "$OUT/body" -w '%{http_code}' \
+        -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' \
+        -H 'OpenAI-Organization: org-client' -H 'OpenAI-Project: proj-client' \
+        -H 'X-Custom: from-the-client' -H 'Cookie: session=client' -H 'User-Agent: client-sdk/1.0' \
+        -d "{\"model\":\"qwen3\",\"messages\":[{\"role\":\"user\",\"content\":\"$message\"}]}" \
+        "$PROXY/v1/chat/completions")
+    expect "$what: status" "$status" "$got"
+    expect "$what: error type" "$type" "$(jq -r '.error.type // "none"' "$OUT/body")"
+    expect "$what: no account header to the client" "" \
+        "$(grep -i -E '^(openai-|x-ratelimit-|x-request-id|x-mock-)' "$OUT/headers" | tr -d '\r' || true)"
+    expect "$what: no text of the provider's to the client" "0" "$(grep -c -E 'sk-mock|org-mock' "$OUT/body" || true)"
+    local sent
+    sent=$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase')
+    expect "$what: none of the client's headers to the provider" "" \
+        "$(grep -E '^(openai-|x-custom$|cookie$|authorization$|x-aisa-)' <<<"$sent" | grep -v '^x-aisa-no-key$' || true)"
+    expect "$what: not the client's User-Agent" "0" \
+        "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers["User-Agent"][0] // ""' | grep -c client-sdk || true)"
+    sleep 2
+    expect "$what: one usage event, with the client's status and consumer" "$status chat-ui" \
+        "$(events | jq -r '"\(.status) \(.consumer // "")"' | tr '\n' ' ' | sed 's/ $//')"
+}
+
 curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
 {"ID": "runtime-test", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
  "Meta": {"provider": "openai-compatible", "models": "$DOLLAR_MODEL", "fail_policy": "open"}}
@@ -150,6 +183,22 @@ one "allowed" dev-key-chat-ui qwen3 200 chat-ui
 one "denied by a quota" dev-key-blocked qwen3 429 ""
 one "unknown key" wrong-key qwen3 401 ""
 models "the model list, a dollar in a name included" "cloud-large llama3.2 qwen3 $DOLLAR_MODEL"
+
+echo "== account isolation"
+isolated "a completion" "hello there" 200 none
+isolated "the provider refuses the key" "mock:error:401" 502 provider_error
+isolated "the provider limits the account" "mock:error:429" 429 provider_rate_limited
+isolated "the provider rejects the request" "mock:error:400" 400 invalid_request_error
+isolated "the provider fails" "mock:error:500" 500 provider_error
+# A stream passes the response filters whole: every model route's response goes through them.
+curl -sS -D "$OUT/headers" -o "$OUT/body" -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' \
+    -d '{"model":"qwen3","stream":true,"messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions"
+expect "a stream: event stream" "text/event-stream" "$(grep -i '^content-type:' "$OUT/headers" | tr -d '\r' | awk '{print $2}' | cut -d';' -f1)"
+expect "a stream: ends with [DONE]" "data: [DONE]" "$(grep -v '^$' "$OUT/body" | tail -n1)"
+logs=$(docker logs "$CONTAINER" 2>&1)
+grep -q 'provider error 401, answered as 502: .*sk-mock' <<<"$logs" ||
+    fail "the provider's original error is not in the gateway's log"
+ok "account isolation: the provider's original error is in the gateway's log, for the holder"
 
 echo "== a model loses its last backend"
 curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test"

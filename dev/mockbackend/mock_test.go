@@ -313,3 +313,31 @@ func TestOllamaChat(t *testing.T) {
 		t.Errorf("streaming (the Ollama default): status = %d, want 400", resp2.StatusCode)
 	}
 }
+
+func TestAProviderErrorAndAccountHeaders(t *testing.T) {
+	srv := newTestServer(t, Config{})
+	resp := post(t, srv, `{"model":"qwen3","messages":[{"role":"user","content":"mock:error:401"}]}`,
+		map[string]string{"OpenAI-Organization": "org-client"})
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "sk-mock-") || resp.Header.Get("Openai-Organization") != "org-mock" {
+		t.Errorf("body %s, headers %v: want the key and the account named", body, resp.Header)
+	}
+
+	r, err := srv.Client().Get(srv.URL + "/debug/last-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Body.Close() }()
+	var last struct {
+		Headers http.Header `json:"headers"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&last); err != nil {
+		t.Fatal(err)
+	}
+	if last.Headers.Get("Openai-Organization") != "org-client" {
+		t.Errorf("last request headers = %v", last.Headers)
+	}
+}
