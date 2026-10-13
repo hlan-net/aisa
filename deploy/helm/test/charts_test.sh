@@ -150,7 +150,7 @@ grep -A1 'name: AISA_PROXY_URL' "$OUT/url.yaml" | grep -q '"https://llm.example.
 echo "ok: kubernetes.proxyURL replaces the proxy's Service"
 
 # The Models wait out an empty catalog as long as the proxy's guard keeps its model routes.
-grace() { awk '/name: AISA_MODELS_EMPTY_GRACE/{getline; print $2; exit}' "$1" | tr -d '"'; }
+grace() { local file=$1; awk '/name: AISA_MODELS_EMPTY_GRACE/{getline; print $2; exit}' "$file" | tr -d '"'; }
 [[ "$(grace "$OUT/defaults.yaml")" == 300s ]] || fail "AISA_MODELS_EMPTY_GRACE by default: $(grace "$OUT/defaults.yaml")"
 helm template aisa "$AISA" "${REQUIRED[@]}" --set apisix.consulTemplate.emptyCatalogGrace=60 >"$OUT/grace.yaml" 2>/dev/null
 [[ "$(grace "$OUT/grace.yaml")" == 60s ]] || fail "AISA_MODELS_EMPTY_GRACE does not follow the proxy's grace: $(grace "$OUT/grace.yaml")"
