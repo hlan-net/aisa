@@ -43,7 +43,7 @@ The full list with comments is in [`values.yaml`](./values.yaml). The ones an in
 | Value | Default | |
 |---|---|---|
 | `global.vault.addr`, `global.consul.addr` | (required) | Shared with the proxy |
-| `vault.auth.role`, `vault.auth.mount`, `vault.auth.audience` | `aisa`, `kubernetes`, none | aisa's login |
+| `vault.auth.role`, `vault.auth.mount`, `vault.auth.audience` | `aisa`, `kubernetes`, `vault` | aisa's login; the Vault role binds the audience (`audience=vault`), which is required with `kubernetes.enabled`, so that the token in the Vault Agent is not valid against the Kubernetes API |
 | `consul.token.fromVault`, `consul.token.path` | `true`, `consul/creds/aisa` | aisa's Consul token |
 | `quotas.enabled` | `true` | Off: no Redis for aisa, and no quota is enforced; Consul is always read, the consumers are declared there |
 | `redis.enabled`, `redis.addr` | `true`, none | Off: an external Redis at `redis.addr` |

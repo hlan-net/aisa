@@ -34,9 +34,11 @@ vault:
   auth:
     mount: kubernetes
     role: aisa
-    # The audience of the projected service account token; empty: the API server's default.
-    # Set it when the Vault role has bound audiences.
-    audience: ""
+    # The audience of the projected service account token that aisa and its Vault Agent log in
+    # with; the Vault role binds it (audience=vault). Required with kubernetes.enabled: a token of
+    # the API server's default audience would let the Vault Agent use the service account's
+    # rights in the Kubernetes API, which include reading Secrets in every namespace.
+    audience: vault
   # Where aisa's secrets are: consumers under <kvMount>/<prefix>/consumers.
   kvMount: secret
   prefix: aisa

@@ -66,6 +66,18 @@ helm template aisa "$AISA" "${REQUIRED[@]}" --set apisix.enabled=false --set kub
     fail "the chart needs kubernetes.proxyURL with kubernetes.enabled=false"
 echo "ok: kubernetes.proxyURL is required without the proxy's chart"
 
+# The token that aisa and its Vault Agent log in to Vault with has Vault's audience, so that the
+# Kubernetes API does not accept it from the Vault Agent: the service account may read Secrets.
+awk '/^kind:/{d = ($2 == "Deployment"); a = 0} d && /^  name: aisa$/{a = 1}
+     a && /- name: serviceaccount$/{v = 1} v && /audience: "vault"/{f = 1; exit} END {exit !f}' "$OUT/defaults.yaml" ||
+    fail "the Vault token is not projected with the audience vault by default"
+if helm template aisa "$AISA" "${REQUIRED[@]}" --set vault.auth.audience= >/dev/null 2>&1; then
+    fail "the chart renders a Vault token of the API server's audience with kubernetes.enabled"
+fi
+helm template aisa "$AISA" "${REQUIRED[@]}" --set vault.auth.audience= --set kubernetes.enabled=false >/dev/null ||
+    fail "the chart needs vault.auth.audience with kubernetes.enabled=false"
+echo "ok: the Vault token has Vault's audience, required with kubernetes.enabled"
+
 # The proxy finds aisa's Service under the name aisa's chart gives it: by the release name, or
 # by global.aisa.fullnameOverride.
 for case in "aisa" "prod" "aisa --set global.aisa.fullnameOverride=inference"; do
