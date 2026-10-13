@@ -61,6 +61,26 @@ quotas:
 # Admin interface and embedded web UI (/admin). Off: /admin endpoints return 404.
 admin:
   enabled: true
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+      # For authentication in front of the admin UI (e.g. Traefik middleware or oauth2-proxy):
+      # traefik.ingress.kubernetes.io/router.middlewares: default-oauth2-proxy@kubernetescrd
+    hosts:
+      - host: aisa-admin.local
+        paths:
+          - path: /admin
+            pathType: Prefix
+    tls: []
+    #  - secretName: aisa-admin-tls
+    #    hosts:
+    #      - aisa-admin.local
+    # Ingress controller / auth proxy peers allowed to reach port 8080 when networkPolicy is on:
+    extraFrom: []
+    #   - namespaceSelector:
+    #       matchLabels:
+    #         kubernetes.io/metadata.name: kube-system
 
 # Redis holds the hot quota counters. They are short-lived (an hour of one-minute buckets), so
 # this Redis keeps nothing on disk.

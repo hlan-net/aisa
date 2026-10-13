@@ -46,6 +46,7 @@ validate "monitoring" "$AISA" --set serviceMonitor.enabled=true --set apisix.ser
 validate "consul-without-acls" "$AISA" --set consul.token.fromVault=false --set apisix.vaultAgent.consulToken.enabled=false
 validate "external-redis" "$AISA" --set redis.enabled=false --set redis.addr=redis.example.svc:6379
 validate "no-quotas-no-proxy" "$AISA" --set quotas.enabled=false --set apisix.enabled=false
+validate "admin-ingress" "$AISA" --set admin.ingress.enabled=true
 validate "proxy-alone" "$PROXY" --set aisa.url=https://aisa.aisa.svc:8080
 
 # The values that must be given are asked for.

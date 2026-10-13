@@ -119,6 +119,35 @@ Returns system status, readiness probe states, and entity counts.
 
 ---
 
+## Ingress & Authentication in Kubernetes
+
+aisa's Helm chart (`deploy/helm/aisa`) provides an optional Ingress resource (`admin.ingress.enabled`) for exposing the Admin UI.
+
+To keep aisa lean and avoid managing session tokens or user passwords in application code, standard ingress authentication proxies (such as `oauth2-proxy`, Traefik `ForwardAuth` middleware, Pomerium, or Cloudflare Access) can be placed in front of the Admin Ingress, authenticating users against HashiCorp Vault (acting as an OIDC Provider) or an enterprise IdP:
+
+```yaml
+admin:
+  enabled: true
+  ingress:
+    enabled: true
+    className: traefik
+    annotations:
+      # Traefik middleware / oauth2-proxy forward-auth
+      traefik.ingress.kubernetes.io/router.middlewares: default-oauth2-proxy@kubernetescrd
+    hosts:
+      - host: aisa-admin.example.com
+        paths:
+          - path: /admin
+            pathType: Prefix
+    extraFrom:
+      # Allow ingress controller traffic through NetworkPolicy to port 8080
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+```
+
+---
+
 ## Security Considerations
 
 - **Vault and Consul ACLs**: aisa interacts with Consul and Vault using its configured service tokens. In production Kubernetes clusters, aisa authenticates via Kubernetes ServiceAccount auth to Vault and obtains Consul ACL tokens via Vault Agent.
