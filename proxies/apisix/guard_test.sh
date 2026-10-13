@@ -282,7 +282,9 @@ echo "$PREVIOUS" > "$TARGET"
 touch -d @1700000000 "$TARGET"
 stage
 loaded 1700000100 client model-qwen3 no-backend
-"$GUARD" "$STAGED" "$TARGET" >/dev/null
+# The guard's deadline is in whole seconds, so GUARD_VERIFY_TIMEOUT=1 can leave it milliseconds
+# to ask about every route. The guard returns as soon as all are loaded: a longer one costs nothing.
+GUARD_VERIFY_TIMEOUT=5 "$GUARD" "$STAGED" "$TARGET" >/dev/null
 grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: a file APISIX loaded was not kept" >&2; exit 1; }
 [[ ! -e "$TARGET.last-good" ]] || { echo "FAIL: the copy of the previous file was left behind" >&2; exit 1; }
 
