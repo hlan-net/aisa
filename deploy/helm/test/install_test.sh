@@ -121,7 +121,9 @@ sha256() {
     local text=$1
     printf %s "$text" | sha256sum | cut -d' ' -f1
 }
-vault kv put secret/aisa/consumers/chat-ui key_sha256="$(sha256 test-key-chat-ui)" quota_profile=interactive >/dev/null
+# The consumer: declared in Consul, its key's hash in Vault.
+consul kv put aisa/consumers/chat-ui '{"quota_profile": "interactive"}' >/dev/null
+vault kv put secret/aisa/consumers/chat-ui key_sha256="$(sha256 test-key-chat-ui)" >/dev/null
 vault kv put secret/aisa/providers/cloud api_key=test-provider-key >/dev/null
 vault secrets enable consul >/dev/null
 vault write consul/config/access address=consul:8500 token=test-root >/dev/null
@@ -146,8 +148,10 @@ readyz=$(curl -fsS http://127.0.0.1:18090/readyz)
 echo "     readyz: $readyz"
 metrics=$(curl -fsS http://127.0.0.1:18090/metrics)
 grep -q '^aisa_consumer_loads_total{result="ok"}' <<<"$metrics" ||
-    fail "aisa loaded its consumers from Vault (Kubernetes auth as the role aisa)"
-ok "aisa loaded its consumers from Vault (Kubernetes auth as the role aisa)"
+    fail "aisa loaded its consumers' keys from Vault (Kubernetes auth as the role aisa)"
+ok "aisa loaded its consumers' keys from Vault (Kubernetes auth as the role aisa)"
+declarations=$(awk '/^aisa_consumer_declarations /{print $2}' <<<"$metrics")
+expect "aisa read its consumer declarations from Consul (a token from Vault)" 1 "$declarations"
 profiles=$(awk '/^aisa_quota_profiles /{print $2}' <<<"$metrics")
 expect "aisa read its quota profiles from Consul (a token from Vault)" 1 "$profiles"
 # The proxy reports its renders to the URI the chart gives it (AISA_RENDER_URI). The first

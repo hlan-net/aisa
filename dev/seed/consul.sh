@@ -1,11 +1,15 @@
 #!/bin/sh
-# Seeds dev-mode Consul with the example prices, budgets, quota profiles and backend
+# Seeds dev-mode Consul with the example consumers, prices, budgets, quota profiles and backend
 # registrations from docs/concepts/CONSUL.md.
 set -eu
 
 export CONSUL_HTTP_ADDR="${CONSUL_HTTP_ADDR:-http://consul:8500}"
 
 until consul members >/dev/null 2>&1; do sleep 1; done
+
+# The consumers: their key hashes are in Vault (seed/vault.sh).
+consul kv put aisa/consumers/chat-ui    '{"quota_profile": "interactive"}'
+consul kv put aisa/consumers/batch-jobs '{"quota_profile": "batch"}'
 
 consul kv put aisa/pricing/qwen3       '{"input_per_1k": 0.0, "output_per_1k": 0.0, "currency": "EUR"}'
 consul kv put aisa/pricing/llama3.2    '{"input_per_1k": 0.0, "output_per_1k": 0.0, "currency": "EUR"}'

@@ -15,6 +15,9 @@ func env(m map[string]string) func(string) string {
 		if k == "VAULT_ADDR" {
 			return "http://vault:8200"
 		}
+		if k == "CONSUL_HTTP_ADDR" {
+			return "consul:8500"
+		}
 		return ""
 	}
 }
@@ -26,6 +29,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	want := Defaults()
 	want.Vault.Addr = "http://vault:8200"
+	want.Consul.Addr = "consul:8500"
 	if cfg != want {
 		t.Errorf("cfg = %+v, want the defaults %+v", cfg, want)
 	}
@@ -75,6 +79,7 @@ func TestFromEnv(t *testing.T) {
 	want.Addr, want.LogLevel, want.ShutdownTimeout = "127.0.0.1:9000", slog.LevelDebug, 30*time.Second
 	want.MetricsAddr = ":9090"
 	want.Vault.Addr = "http://vault:8200"
+	want.Consul.Addr = "consul:8500"
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
 	}
@@ -108,6 +113,7 @@ func TestFromEnvRejects(t *testing.T) {
 		"timeout of zero":         {"AISA_SHUTDOWN_TIMEOUT": "0s"},
 		"negative timeout":        {"AISA_SHUTDOWN_TIMEOUT": "-5s"},
 		"no Vault address":        {"VAULT_ADDR": ""},
+		"no Consul address":       {"CONSUL_HTTP_ADDR": ""},
 		"refresh not a duration":  {"AISA_CONSUMER_REFRESH": "often"},
 		"prefix of slashes only":  {"AISA_VAULT_PREFIX": "/"},
 		"mount of slashes only":   {"AISA_VAULT_KV_MOUNT": "//"},
@@ -119,8 +125,7 @@ func TestFromEnvRejects(t *testing.T) {
 		"dedup ttl zero":          {"AISA_LEDGER_DEDUP_TTL": "0s"},
 		"estimate not int":        {"AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS": "some"},
 		"estimate negative":       {"AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS": "-1"},
-		"consul without redis":    {"CONSUL_HTTP_ADDR": "consul:8500"},
-		"redis without consul":    {"AISA_REDIS_ADDR": "redis:6379"},
+		"redis without consul":    {"CONSUL_HTTP_ADDR": "", "AISA_REDIS_ADDR": "redis:6379"},
 		"redis without a port":    {"CONSUL_HTTP_ADDR": "consul:8500", "AISA_REDIS_ADDR": "redis"},
 		"consul token twice": {"CONSUL_HTTP_ADDR": "consul:8500", "AISA_REDIS_ADDR": "redis:6379",
 			"CONSUL_HTTP_TOKEN": "a", "CONSUL_HTTP_TOKEN_FILE": "/b"},
@@ -166,7 +171,10 @@ func TestFromEnvQuotas(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.QuotasEnabled() {
-		t.Error("quotas on without Consul and Redis")
+		t.Error("quotas on without Redis")
+	}
+	if cfg.Consul.Addr != "consul:8500" {
+		t.Errorf("Consul.Addr = %q, want consul:8500: Consul is read with or without quotas", cfg.Consul.Addr)
 	}
 
 	cfg, err = FromEnv(env(map[string]string{

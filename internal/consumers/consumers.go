@@ -18,12 +18,16 @@ import (
 	"github.com/hlan-net/aisa/internal/vault"
 )
 
-// Consumer is an application or person with a key.
+// Consumer is an application or person with a key: declared in Consul KV (its Declaration),
+// with the hashes of its keys in Vault.
 type Consumer struct {
-	// Name is the consumer's name, the last element of its Vault path.
+	// Name is the consumer's name: its key in Consul and the last element of its Vault path.
 	Name string
 	// QuotaProfile names the consumer's quota profile in Consul, empty when none is set.
 	QuotaProfile string
+	// Namespace and Secret say where the consumer's application runs and the Secret aisa is to
+	// write its key into; empty when the declaration names none.
+	Namespace, Secret string
 }
 
 // Result of a lookup.
@@ -36,6 +40,9 @@ const (
 	Unknown
 	// Unavailable: the consumers could not be loaded recently enough to decide.
 	Unavailable
+	// undeclared: the key belongs to a consumer in Vault that Consul does not declare. Answered
+	// as Unknown, without a reload: the key is not new, the declaration is missing.
+	undeclared
 )
 
 // Source reads consumers, from Vault outside tests.
@@ -53,9 +60,10 @@ var ErrGone = errors.New("consumer no longer exists")
 type Stats struct {
 	// Err is nil when the load replaced the loaded consumers.
 	Err error
-	// Consumers is how many consumers can authenticate, Keys how many key hashes they have
-	// together, Unreadable how many consumers Vault listed and aisa could not read. When Err is
-	// set they are those of the last load that succeeded.
+	// Consumers is how many consumers have key hashes in Vault, Keys how many hashes they have
+	// together, Unreadable how many consumers Vault listed and aisa could not read. Whether
+	// Consul declares them is not counted here: a key authenticates only when it also is
+	// (Declarations). When Err is set they are those of the last load that succeeded.
 	Consumers, Keys, Unreadable int
 }
 
@@ -78,6 +86,10 @@ type Options struct {
 	MaxStale time.Duration
 	// OnLoad is called after every load, when set.
 	OnLoad func(Stats)
+	// Declared answers which consumers are declared in Consul, and their declarations. A
+	// consumer that Vault has keys for and Consul does not declare cannot authenticate. Nil,
+	// in tests only, declares every consumer without a quota.
+	Declared Declared
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
 }
@@ -108,6 +120,10 @@ type Store struct {
 	loadedAt    time.Time        // last successful load
 	lastAttempt time.Time        // begin or end of the last load, successful or not
 	inflight    *loadCall        // nil when no load is in progress
+	// noted is when a note about a consumer was last logged, by key, so that the request path
+	// does not repeat it; see noteOnce.
+	noteMu sync.Mutex
+	noted  map[string]time.Time
 }
 
 // New returns an empty store. Call Load or Run to fill it.
@@ -121,7 +137,7 @@ func New(src Source, log *slog.Logger, opts Options) *Store {
 	if opts.MissTimeout <= 0 {
 		opts.MissTimeout = 2 * time.Second
 	}
-	return &Store{src: src, opts: opts, log: log}
+	return &Store{src: src, opts: opts, log: log, noted: map[string]time.Time{}}
 }
 
 // Lookup finds the consumer of a plaintext key. An unknown key triggers a reload, at most once
@@ -131,13 +147,20 @@ func (s *Store) Lookup(ctx context.Context, key string) (Consumer, Result) {
 	hash := hex.EncodeToString(sum[:])
 
 	c, res := s.find(hash)
+	if res == undeclared {
+		return Consumer{}, Unknown
+	}
 	if res != Unknown {
 		return c, res
 	}
 	if !s.reloadFor(ctx) {
 		return Consumer{}, Unknown
 	}
-	return s.find(hash)
+	c, res = s.find(hash)
+	if res == undeclared {
+		return Consumer{}, Unknown
+	}
+	return c, res
 }
 
 // reloadFor joins the load in progress or, when none began or ended within MissRefresh, starts
@@ -180,9 +203,51 @@ func (s *Store) find(hash string) (Consumer, Result) {
 	// A consumer that could not be read in the last load has its keys from an earlier one, and
 	// only until they are MaxStale old, also between loads.
 	if e, ok := s.byHash[hash]; ok && s.opts.Now().Sub(e.readAt) <= s.opts.MaxStale {
-		return e.consumer, Found
+		return s.declared(e.consumer)
 	}
 	return Consumer{}, Unknown
+}
+
+// declared completes a consumer whose key matched with its declaration in Consul. Without one
+// the key does not authenticate; without the declarations, or with one that cannot be read,
+// aisa cannot decide and fails closed.
+func (s *Store) declared(c Consumer) (Consumer, Result) {
+	if s.opts.Declared == nil {
+		return c, Found
+	}
+	decl, err := s.opts.Declared.Get(c.Name)
+	switch {
+	case err == nil:
+		c.QuotaProfile, c.Namespace, c.Secret = decl.QuotaProfile, decl.Namespace, decl.Secret
+		return c, Found
+	case errors.Is(err, ErrDeclarationsNotLoaded):
+		return Consumer{}, Unavailable
+	case errors.Is(err, ErrUndeclared):
+		s.noteOnce("undeclared:"+c.Name, time.Minute, func() {
+			s.log.Warn("consumer has keys in Vault but no declaration in Consul; its keys do not authenticate",
+				"consumer", c.Name)
+		})
+		return Consumer{}, undeclared
+	default:
+		s.noteOnce("invalid:"+c.Name, time.Minute, func() {
+			s.log.Error("consumer's declaration in Consul cannot be read; its keys are answered 503",
+				"consumer", c.Name, "error", err)
+		})
+		return Consumer{}, Unavailable
+	}
+}
+
+// noteOnce runs log at most once per key in every period: find runs for every request, and a
+// load every minute.
+func (s *Store) noteOnce(key string, period time.Duration, log func()) {
+	s.noteMu.Lock()
+	defer s.noteMu.Unlock()
+	now := s.opts.Now()
+	if at, ok := s.noted[key]; ok && now.Sub(at) < period {
+		return
+	}
+	s.noted[key] = now
+	log()
 }
 
 // Ready returns nil when lookups can be answered, for aisa's readiness.
@@ -297,8 +362,8 @@ func (s *Store) finish(call *loadCall, err error) {
 	}
 }
 
-// countConsumers counts the consumers that can authenticate: those with at least one hash in
-// the index. A consumer whose only hash is shared with another is not among them.
+// countConsumers counts the consumers with at least one hash in the index, declared in Consul or
+// not. A consumer whose only hash is shared with another is not among them.
 func countConsumers(byHash map[string]entry) int {
 	names := make(map[string]struct{}, len(byHash))
 	for _, e := range byHash {
@@ -420,8 +485,15 @@ func (s *Store) readConsumer(ctx context.Context, name string, now time.Time) (e
 	if len(hashes) == 0 {
 		s.log.Warn("consumer has no valid key_sha256 and cannot authenticate", "consumer", name)
 	}
+	if stringField(data, "quota_profile") != "" {
+		// Until v0.2.0 the quota profile was in Vault; it is in the declaration now.
+		s.noteOnce("vault-quota:"+name, 24*time.Hour, func() {
+			s.log.Warn("consumer has quota_profile in Vault, which is ignored; set it in the consumer's declaration in Consul",
+				"consumer", name)
+		})
+	}
 	return entry{
-		consumer: Consumer{Name: name, QuotaProfile: stringField(data, "quota_profile")},
+		consumer: Consumer{Name: name},
 		hashes:   hashes,
 		readAt:   now,
 	}, nil

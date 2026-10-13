@@ -22,12 +22,12 @@
 //	AISA_LEDGER_DEDUP_TTL       how long request IDs are kept for dedup           15m
 //	AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS  tokens charged for missing usage with no
 //	                            history of the consumer and model (0: nothing)    0
-//	CONSUL_HTTP_ADDR            Consul's address; with AISA_REDIS_ADDR, turns token quotas on
+//	CONSUL_HTTP_ADDR            Consul's address, required: the consumers are declared there
 //	CONSUL_CACERT               CA certificate of Consul, PEM                     system CAs
 //	CONSUL_HTTP_TOKEN           a fixed Consul ACL token, for development
 //	CONSUL_HTTP_TOKEN_FILE      file with the Consul ACL token, read for each request
 //	AISA_CONSUL_PREFIX          prefix of aisa's keys in Consul KV                aisa
-//	AISA_REDIS_ADDR             Redis host:port for the quota counters
+//	AISA_REDIS_ADDR             Redis host:port for the quota counters; turns token quotas on
 //	AISA_REDIS_USERNAME         Redis ACL user
 //	AISA_REDIS_PASSWORD         Redis password
 //
@@ -103,6 +103,18 @@ func run(args []string) error {
 		return fmt.Errorf("vault: %w", err)
 	}
 	m := metrics.New(version.Version)
+	cc, err := consul.New(consul.Options{
+		Addr: cfg.Consul.Addr, CACert: cfg.Consul.CACert, Token: cfg.Consul.Token, TokenFile: cfg.Consul.TokenFile,
+	})
+	if err != nil {
+		return fmt.Errorf("consul: %w", err)
+	}
+	// The consumers: declared in Consul KV, with the hashes of their keys in Vault.
+	declarations := consumers.NewDeclarations(
+		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/consumers/", What: "consumer declarations"},
+		log.With("component", "consumers"),
+		consumers.DeclarationOptions{OnLoad: func(s consumers.DeclarationStats) { observeDeclarations(m, s) }})
+	go declarations.Run(ctx)
 	store := consumers.New(
 		consumers.Vault{Client: vc, Mount: cfg.Vault.KVMount, Prefix: cfg.Vault.Prefix},
 		log.With("component", "consumers"),
@@ -111,26 +123,27 @@ func run(args []string) error {
 			MissRefresh: cfg.Consumers.MissRefresh,
 			MaxStale:    cfg.Consumers.MaxStale,
 			OnLoad:      func(s consumers.Stats) { observeLoad(m, s, time.Now()) },
+			Declared:    declarations,
 		})
 	go store.Run(ctx)
 
-	checks := []server.Check{{Name: "consumers", Probe: store.Ready}}
+	checks := []server.Check{
+		{Name: "consumers", Probe: store.Ready},
+		{Name: "consumer_declarations", Probe: declarations.Ready},
+	}
 	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
 	var (
 		quota   decide.QuotaChecker
 		charger ledger.Charger
 	)
 	if cfg.QuotasEnabled() {
-		q, profiles, closeQuotas, err := newQuotas(cfg, m, log.With("component", "quotas"))
-		if err != nil {
-			return err
-		}
+		q, profiles, closeQuotas := newQuotas(cfg, cc, m, log.With("component", "quotas"))
 		defer closeQuotas()
 		go profiles.Run(ctx)
 		quota, charger = q, q
 		checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
 	} else {
-		log.Warn("token quotas are off: set CONSUL_HTTP_ADDR and AISA_REDIS_ADDR to turn them on")
+		log.Warn("token quotas are off: set AISA_REDIS_ADDR to turn them on")
 	}
 
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
@@ -148,13 +161,7 @@ func run(args []string) error {
 
 // newQuotas returns the token quotas with their profiles from Consul and counters in Redis,
 // and a function that closes the connections to Redis.
-func newQuotas(cfg config.Config, m *metrics.Metrics, log *slog.Logger) (*quotas.Quota, *quotas.Profiles, func(), error) {
-	cc, err := consul.New(consul.Options{
-		Addr: cfg.Consul.Addr, CACert: cfg.Consul.CACert, Token: cfg.Consul.Token, TokenFile: cfg.Consul.TokenFile,
-	})
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("consul: %w", err)
-	}
+func newQuotas(cfg config.Config, cc *consul.Client, m *metrics.Metrics, log *slog.Logger) (*quotas.Quota, *quotas.Profiles, func()) {
 	profiles := quotas.NewProfiles(
 		quotas.ConsulSource{Client: cc, Prefix: cfg.Consul.Prefix + "/quotas/"},
 		log,
@@ -163,7 +170,18 @@ func newQuotas(cfg config.Config, m *metrics.Metrics, log *slog.Logger) (*quotas
 		Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password,
 	})
 	q := quotas.New(profiles, quotas.NewWindow(rdb, "aisa:"), m, log, quotas.Options{})
-	return q, profiles, func() { _ = rdb.Close() }, nil
+	return q, profiles, func() { _ = rdb.Close() }
+}
+
+// observeDeclarations puts the result of a load of the consumer declarations into the metrics.
+func observeDeclarations(m *metrics.Metrics, s consumers.DeclarationStats) {
+	if s.Err != nil {
+		m.ConsumerDeclarationLoads.WithLabelValues(metrics.LoadError).Inc()
+		return
+	}
+	m.ConsumerDeclarationLoads.WithLabelValues(metrics.LoadOK).Inc()
+	m.ConsumerDeclarations.Set(float64(s.Valid))
+	m.ConsumerDeclarationsInvalid.Set(float64(s.Invalid))
 }
 
 // observeProfiles puts the result of a load of the quota profiles into the metrics.

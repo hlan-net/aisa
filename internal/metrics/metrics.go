@@ -100,6 +100,12 @@ type Metrics struct {
 	ConsumerLoads *prometheus.CounterVec
 	// ConsumersLoaded is when the consumers were last loaded, in seconds since the epoch.
 	ConsumersLoaded prometheus.Gauge
+	// ConsumerDeclarations and ConsumerDeclarationsInvalid count the consumers declared in
+	// Consul whose declarations could and could not be read.
+	ConsumerDeclarations        prometheus.Gauge
+	ConsumerDeclarationsInvalid prometheus.Gauge
+	// ConsumerDeclarationLoads counts the loads of the declarations by result, LoadOK or LoadError.
+	ConsumerDeclarationLoads *prometheus.CounterVec
 
 	// QuotaProfiles and QuotaProfilesInvalid count the quota profiles read from Consul that
 	// could and could not be parsed.
@@ -194,11 +200,11 @@ func New(version string) *Metrics {
 		}, []string{"consumer", "model", "backend"}),
 		Consumers: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers",
-			Help: "Consumers in memory that can authenticate.",
+			Help: "Consumers with key hashes from Vault in memory, declared in Consul or not; only declared ones authenticate (aisa_consumer_declarations).",
 		}),
 		ConsumerKeys: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumer_keys",
-			Help: "Key hashes of the consumers in memory.",
+			Help: "Key hashes from Vault in memory, of the consumers in aisa_consumers.",
 		}),
 		ConsumersUnreadable: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers_unreadable",
@@ -206,7 +212,19 @@ func New(version string) *Metrics {
 		}),
 		ConsumerLoads: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "aisa_consumer_loads_total",
-			Help: "Loads of the consumers from Vault.",
+			Help: "Loads of the consumers' key hashes from Vault.",
+		}, []string{"result"}),
+		ConsumerDeclarations: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_consumer_declarations",
+			Help: "Consumers declared in Consul KV whose declarations can be read.",
+		}),
+		ConsumerDeclarationsInvalid: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_consumer_declarations_invalid",
+			Help: "Consumers declared in Consul KV whose declarations cannot be read; their keys are answered 503.",
+		}),
+		ConsumerDeclarationLoads: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_consumer_declaration_loads_total",
+			Help: "Reads of the consumer declarations from Consul KV.",
 		}, []string{"result"}),
 		ConsumersLoaded: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_consumers_loaded_timestamp_seconds",
@@ -260,6 +278,7 @@ func New(version string) *Metrics {
 		m.UsageEvents, m.UsageRequestsRejected, m.UsageMissing, m.TokensEstimated,
 		m.ConfigRenders, m.ConfigRendered, m.ConfigBackends, m.ConfigModels,
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
+		m.ConsumerDeclarations, m.ConsumerDeclarationsInvalid, m.ConsumerDeclarationLoads,
 		m.QuotaProfiles, m.QuotaProfilesInvalid, m.QuotaProfileLoads, m.QuotaErrors,
 	)
 	// The reasons are fixed: start each at 0, so the first rejection is an increase that an

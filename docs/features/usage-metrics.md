@@ -26,9 +26,11 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | Metric | Meaning |
 |---|---|
 | `aisa_build_info{version}` | The running build |
-| `aisa_consumers`, `aisa_consumer_keys` | Consumers in memory that can authenticate, and their key hashes |
+| `aisa_consumers`, `aisa_consumer_keys` | Consumers with key hashes from Vault in memory, and those hashes; a consumer among them authenticates only when Consul declares it (`aisa_consumer_declarations`) |
 | `aisa_consumers_unreadable` | Consumers that Vault listed and aisa could not read at the last load |
-| `aisa_consumer_loads_total{result}` | Loads of the consumers from Vault, `ok` or `error` |
+| `aisa_consumer_loads_total{result}` | Loads of the consumers' key hashes from Vault, `ok` or `error` |
+| `aisa_consumer_declarations`, `aisa_consumer_declarations_invalid` | Consumers declared in Consul KV, and those whose declarations could not be parsed (their keys are answered 503) |
+| `aisa_consumer_declaration_loads_total{result}` | Reads of the consumer declarations from Consul, `ok` or `error` |
 | `aisa_consumers_loaded_timestamp_seconds` | When the consumers were last loaded |
 | `aisa_quota_profiles`, `aisa_quota_profiles_invalid` | Quota profiles read from Consul, and those that could not be parsed |
 | `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
@@ -71,6 +73,7 @@ To be shipped as a `PrometheusRule` with the dashboard (`ROADMAP.md`, v0.2.0 PR 
 | `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |
 | `AisaQuotaProfileInvalid` | `aisa_quota_profiles_invalid > 0`: the consumers of a broken profile get 503 |
+| `AisaConsumerDeclarationInvalid` | `aisa_consumer_declarations_invalid > 0`: a consumer with a broken declaration in Consul gets 503 |
 | `AisaQuotaCountersFailing` | `aisa_quota_errors_total` increases for 5 min: Redis is unreachable and token quotas are not enforced |
 | `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h |
 | `AisaUsageMissing` | `aisa_usage_missing_total` increases for 15 min on a backend: its requests are charged by estimate, not counted. The gateway's own token metrics miss the same usage, so `AisaUsageEventsLost` cannot see it |

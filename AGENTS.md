@@ -1,6 +1,6 @@
 # AGENTS.md
 
-aisa — AI Service [Access, Admin, Authority] — offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, with Vault and Consul as its sources of truth. It stands between the applications and the model providers; an existing AI gateway (APISIX first) is its proxy, which aisa installs and configures. It is not a gateway and never proxies model traffic. Go, Apache 2.0. **Early development (v0.2.0)**: aisa (`cmd/aisa`, `internal/`) has config, health endpoints, metrics and the decision API with consumers from Vault next to the dev stack in `dev/` (mock backend, stub aisa); start from `docs/concepts/ARCHITECTURE.md`, `docs/concepts/PROXY_CONTRACT.md`, `docs/process/SPIKES.md` and `ROADMAP.md` v0.2.0.
+aisa — AI Service [Access, Admin, Authority] — offers inference to the applications of a Kubernetes cluster as a service of the cluster itself, with Vault and Consul as its sources of truth. It stands between the applications and the model providers; an existing AI gateway (APISIX first) is its proxy, which aisa installs and configures. It is not a gateway and never proxies model traffic. Go, Apache 2.0. **Early development (v0.2.0)**: aisa (`cmd/aisa`, `internal/`) has config, health endpoints, metrics and the decision API with consumers declared in Consul and their key hashes in Vault next to the dev stack in `dev/` (mock backend, stub aisa); start from `docs/concepts/ARCHITECTURE.md`, `docs/concepts/PROXY_CONTRACT.md`, `docs/process/SPIKES.md` and `ROADMAP.md` v0.2.0.
 
 `CLAUDE.md` covers the same ground in more detail; keep the two reconciled when changing one.
 
@@ -21,7 +21,7 @@ Pre-push hook: `./scripts/install-git-hooks.sh`; bypass with `SKIP_PRE_PUSH_TEST
 
 - The core (`cmd/`, `internal/`) knows no gateway. Gateway-specific code lives only in `proxies/<name>/`.
 - Gateways integrate through three contracts: `POST /v1/decide` (forward-auth), usage events (access log sink) and config rendering (consul-template). Changing a contract means an update to `PROXY_CONTRACT.md` in the same PR; an addition that breaks nothing stays in `/v1/`, a breaking change (rename, removal, changed meaning or unit) gets a new version (`PROXY_CONTRACT.md`, Versioning).
-- Consul holds everything that is not a secret (backends, prices, budgets, quota profiles); Vault holds the secrets (provider keys; today also the consumers); Redis holds hot counters. Kubernetes objects are what aisa creates from these, never where it reads from.
+- Consul holds everything that is not a secret (backends, prices, budgets, quota profiles); Vault holds the secrets (provider keys and the hashes of the consumers' keys); Redis holds hot counters. Kubernetes objects are what aisa creates from these, never where it reads from.
 - Terms (`docs/concepts/ARCHITECTURE.md`, What aisa is): aisa (control), proxy (carries the traffic), adapter (specific to a kind of provider). What makes a gateway work as aisa's proxy lives in `proxies/<name>/`.
 - Quota and budget rules live only in aisa, never in gateway plugins.
 - `aisa_*` metrics are primary; nothing may depend only on gateway-native metrics.

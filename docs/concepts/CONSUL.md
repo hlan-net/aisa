@@ -1,6 +1,6 @@
 # Concept: Consul integration
 
-Consul holds three things for aisa: **where the model backends are**, **what models cost** and **what each consumer may spend**. aisa reads them directly. Gateways get backends only through rendered config ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#3-config-rendering-gateway-configuration)).
+Consul holds four things for aisa: **who the consumers are**, **where the model backends are**, **what models cost** and **what each consumer may spend**. aisa reads them directly. Gateways get backends only through rendered config ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#3-config-rendering-gateway-configuration)).
 
 Related: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`VAULT.md`](./VAULT.md), [`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md).
 
@@ -45,6 +45,19 @@ resource "consul_service" "ollama_1" {
 - A backend that needs an API key names it with the meta `key`: the secret `secret/aisa/providers/<key>` in Vault ([`VAULT.md`](./VAULT.md#provider-keys)).
 - A failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically. Until then, requests sent to it fail. That window is the check's interval and timeout, plus the template's quiet period and the gateway's reload: with a 2 s interval it was about 3 s (spike S9). Requests already sent to the backend can wait until the gateway's timeout.
 
+## Consumers: Consul KV
+
+```
+aisa/consumers/<name>   {"quota_profile": "batch", "namespace": "news", "secret": "aisa"}
+```
+
+A consumer is declared here by the holder, and Vault holds only the hashes of its keys ([`VAULT.md`](./VAULT.md#consumer-credentials)). The declaration is a JSON object; every field is optional, and fields aisa does not know are ignored:
+
+- `quota_profile` names the consumer's token quota, `aisa/quotas/<profile>` below; without it the consumer has no quota.
+- `namespace` and `secret`, together, say where the consumer's application runs and the Secret aisa is to write its key into ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret), v0.2.0 PR 12); one without the other is invalid.
+- A key whose consumer is not declared does not authenticate, however valid its hash in Vault: the declaration is what makes a consumer exist. A declaration that is not valid JSON, or named `unknown`, is logged, counted in `aisa_consumer_declarations_invalid`, and its consumer's keys are answered 503 until it is fixed, so a typo does not lift a quota.
+- aisa follows the prefix with blocking queries, so a consumer declared or changed in Consul applies within seconds; its key, added in Vault, is picked up on the next reload or the first request with it ([`VAULT.md`](./VAULT.md#consumer-credentials)).
+
 ## Prices and budgets: Consul KV
 
 ```
@@ -57,7 +70,7 @@ aisa/state/<consumer>/<YYYY-MM>   persisted monthly tokens (written by aisa)
 - A quota profile is a JSON object with `tokens_per_hour`, a non-negative integer; other fields are ignored. A profile without it, or one that is not valid JSON, is logged and counted in `aisa_quota_profiles_invalid`, and its consumers are denied with 503 until it is fixed ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#token-quotas-v020)).
 - Budgets are in tokens; prices only turn tokens into currency for reports ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#budgets-v030)).
 - Local models cost 0 by default. An energy-based price per token can be set from measured power use.
-- **Single source of truth:** prices, budgets and quota profiles are Terraform variables. Terraform writes them to Consul KV, and aisa watches the prefix (blocking queries) and picks up changes without a restart.
+- **Single source of truth:** consumers, prices, budgets and quota profiles are Terraform variables. Terraform writes them to Consul KV, and aisa watches the prefixes (blocking queries) and picks up changes without a restart.
 - Hot counters live in Redis. Consul KV only gets the persisted monthly totals once a minute, because Consul's Raft log is not meant for a write per request.
 
 ## ACLs

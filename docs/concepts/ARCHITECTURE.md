@@ -63,7 +63,7 @@ The sections after this one describe what is designed and, where the status says
 | aisa installing and removing the proxy with its own chart | Built: aisa's chart depends on the proxy's ([Packaging](#packaging-and-deployment)) |
 | `Model` objects for consumers | Designed, not built ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)); `ROADMAP.md` v0.2.0 PR 12 |
 | A consumer's credential as a Kubernetes object | Designed, not built: a Secret with a key aisa generates ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret), [#32](https://github.com/hlan-net/aisa/issues/32)) |
-| The non-secret part of a consumer (name, quota profile) in Consul instead of Vault | Decided, follows from the rule above; `ROADMAP.md` v0.2.0 PR 11. Today the whole consumer is in Vault ([`VAULT.md`](./VAULT.md)) |
+| The non-secret part of a consumer (name, quota profile, the namespace and Secret of its application) in Consul instead of Vault | Built (v0.2.0 PR 11): a consumer is declared in Consul KV `aisa/consumers/<name>` ([`CONSUL.md`](./CONSUL.md#consumers-consul-kv)), and Vault holds only the hashes of its keys ([`VAULT.md`](./VAULT.md)) |
 | Admin interface | Decided, not designed (US-3) |
 | Provider adapters beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains itself can be used | Decided, not designed |
 | No way around the proxy | Decided, not designed |
@@ -151,7 +151,7 @@ The proxy is the egress of inference traffic, and a quota holds only if nothing 
 |---|---|
 | aisa down | Per-backend fail policy (Consul service meta `fail_policy`): a request is served by the requested model's `open` backends, typically local models, and rejected with 503 when the model has none, as for paid providers. The consumer plays no part, because the gateway cannot identify it without aisa. Usage is recorded under the consumer `unknown` if the log sink delivers it ([#4](https://github.com/hlan-net/aisa/issues/4)). |
 | Redis down | Token quotas are not enforced: aisa allows the requests of consumers with a quota and counts the failed reads in `aisa_quota_errors_total`, and tokens used meanwhile are not counted towards the window. The credential is still checked; a quota only limits the rate. Budgets fall back to the persisted monthly totals in Consul KV (v0.3.0). |
-| Consul down | aisa keeps the quota profiles it has read and follows changes again when Consul is back. A consumer whose profile is missing or broken gets 503 (fail closed), so a typo does not lift a limit unnoticed. |
+| Consul down | aisa keeps the consumer declarations and quota profiles it has read and follows changes again when Consul is back; a consumer declared meanwhile is not known until then. A consumer whose declaration is missing does not exist: its keys get 401. One whose declaration cannot be read, or whose profile is missing or broken, gets 503 (fail closed), so a typo does not lift a limit unnoticed. |
 | A backend down | Consul health check → consul-template re-renders without it → the gateway falls back to another instance |
 | Vault down | aisa keeps deciding with its cached consumers for up to 15 min (`AISA_CONSUMER_MAX_STALE`), then fails closed: `/v1/decide` answers 503. Keys created meanwhile are not accepted until Vault is back ([`VAULT.md`](./VAULT.md#consumer-credentials)) |
 

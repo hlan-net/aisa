@@ -28,7 +28,7 @@ A release name that does not contain `aisa` gets `-aisa` appended to aisa's obje
 
 The chart creates no Vault or Consul configuration; the Terraform module (ROADMAP v0.2.0 PR 6) is to. Until then, [`../test/install_test.sh`](../test/install_test.sh) shows every step for a test cluster.
 
-- **Vault**, Kubernetes auth: the role `aisa` bound to the service account `<release>` in the release's namespace, reading `secret/aisa/consumers/*` and `consul/creds/aisa`; the role `aisa-render` bound to `<release>-apisix`, reading `secret/aisa/providers/*` and `consul/creds/aisa-render` ([`VAULT.md`](../../../docs/concepts/VAULT.md)).
+- **Vault**, Kubernetes auth: the role `aisa` bound to the service account `<release>` in the release's namespace, reading `secret/aisa/consumers/*` (the consumers' key hashes) and `consul/creds/aisa`; the role `aisa-render` bound to `<release>-apisix`, reading `secret/aisa/providers/*` and `consul/creds/aisa-render` ([`VAULT.md`](../../../docs/concepts/VAULT.md)).
 - **Consul**, with ACLs: the policies `aisa` and `aisa-render` ([`CONSUL.md`](../../../docs/concepts/CONSUL.md#acls)), as roles of Vault's Consul secrets engine. Without ACLs, set `consul.token.fromVault: false` and `apisix.vaultAgent.consulToken.enabled: false`.
 - **Kubernetes** 1.29 or newer: the Vault Agents run as sidecar init containers.
 
@@ -41,7 +41,7 @@ The full list with comments is in [`values.yaml`](./values.yaml). The ones an in
 | `global.vault.addr`, `global.consul.addr` | (required) | Shared with the proxy |
 | `vault.auth.role`, `vault.auth.mount`, `vault.auth.audience` | `aisa`, `kubernetes`, none | aisa's login |
 | `consul.token.fromVault`, `consul.token.path` | `true`, `consul/creds/aisa` | aisa's Consul token |
-| `quotas.enabled` | `true` | Off: no Consul and no Redis for aisa |
+| `quotas.enabled` | `true` | Off: no Redis for aisa, and no quota is enforced; Consul is always read, the consumers are declared there |
 | `redis.enabled`, `redis.addr` | `true`, none | Off: an external Redis at `redis.addr` |
 | `networkPolicy.extraFrom` | none | Who may reach aisa's metrics port 9090, e.g. Prometheus. Not the API: a peer here cannot send usage events or ask for decisions (#46) |
 | `global.aisa.fullnameOverride` | none | The name of aisa's objects; global, so the proxy finds aisa's Service by it |
