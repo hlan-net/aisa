@@ -7,12 +7,13 @@
 # It uses the current kubectl context (CONTEXT overrides it): Docker Desktop's Kubernetes or a
 # kind cluster. It builds aisa's images and loads them into the cluster, applies the test
 # fixtures (a dev-mode Vault with Kubernetes auth, a dev-mode Consul with ACLs, two mock
-# backends), registers the host's Ollama in Consul with every model it serves, creates one
-# consumer, installs aisa's chart with the proxy published on localhost, and writes the
-# consumer's Secret into an application namespace, in the shape of KUBERNETES_OBJECTS.md.
+# backends), registers the host's Ollama in Consul with every model it serves, declares one
+# consumer with the namespace of its application, and installs aisa's chart with the proxy
+# published on localhost. aisa then issues the consumer's key and writes it into a Secret in
+# that namespace, and a Model object per model (KUBERNETES_OBJECTS.md).
 #
 # Nothing of this is for a real cluster: the fixtures keep everything in memory and have fixed
-# root tokens. ./down.sh removes it all. Needs docker, kubectl, helm, curl, jq and openssl.
+# root tokens. ./down.sh removes it all. Needs docker, kubectl, helm, curl and jq.
 #
 #   CONTEXT        kubectl context                          (the current one)
 #   NAMESPACE      aisa's namespace                         aisa
@@ -40,7 +41,7 @@ case "${PUBLISH:-}" in
     "") case "$CONTEXT" in docker-desktop) PUBLISH=lb ;; *) PUBLISH=forward ;; esac ;;
     *) echo "PUBLISH: want lb or forward, got '$PUBLISH'" >&2; exit 1 ;;
 esac
-# The consumer's name is a Vault path and a file name here; the label below takes any name.
+# The consumer's name is a path in Consul and Vault.
 [[ "$CONSUMER" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "CONSUMER: letters, digits, '.', '_' and '-' only" >&2; exit 1; }
 K=(kubectl --context "$CONTEXT")
 KN=("${K[@]}" -n "$NS")
@@ -55,17 +56,6 @@ fail() { echo "FAIL $*" >&2; exit 1; }
 pf_pid=""
 cleanup() { [[ -n "$pf_pid" ]] && kill "$pf_pid" 2>/dev/null; true; }
 trap cleanup EXIT
-# sha256 <text>: with openssl, which macOS has and sha256sum it has not.
-sha256() { local text=$1; printf %s "$text" | openssl dgst -sha256 | sed 's/^.*= //'; }
-# derived_name <name> <fallback>: the rule of KUBERNETES_OBJECTS.md for a label value and an
-# object name: lowercase, runs of other characters to one '-', trimmed, cut to 54, trimmed
-# again, the fallback if nothing is left, then '-' and 8 hex digits of the exact name's SHA-256.
-derived_name() {
-    local name=$1 fallback=$2 safe
-    safe=$(printf %s "$name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-//; s/-$//' | cut -c1-54 | sed -E 's/-$//')
-    [[ -n "$safe" ]] || safe=$fallback
-    printf '%s-%s' "$safe" "$(sha256 "$name" | cut -c1-8)"
-}
 # owned_ns <name>: whether up.sh created the namespace, and everything in it is this setup's.
 owned_ns() { local ns=$1; [[ "$("${K[@]}" get namespace "$ns" -o jsonpath='{.metadata.labels.aisa\.hlan\.net/local-setup}' 2>/dev/null)" == true ]]; }
 # ensure_ns <name>: creates the namespace if it is missing, labelled as this setup's, so that
@@ -150,7 +140,9 @@ ok "ready"
 
 echo "== Consul: policies, a quota profile, the backends"
 consul acl policy create -name aisa \
-    -rules 'key_prefix "aisa/" { policy = "write" } service "aisa-backend" { policy = "read" }' >/dev/null 2>&1 || true
+    -rules 'key_prefix "aisa/" { policy = "write" } service "aisa-backend" { policy = "read" } node_prefix "" { policy = "read" }' >/dev/null 2>&1 ||
+    consul acl policy update -name aisa \
+        -rules 'key_prefix "aisa/" { policy = "write" } service "aisa-backend" { policy = "read" } node_prefix "" { policy = "read" }' >/dev/null
 consul acl policy create -name aisa-render \
     -rules 'service "aisa-backend" { policy = "read" } node_prefix "" { policy = "read" }' >/dev/null 2>&1 || true
 consul kv put aisa/quotas/interactive "{\"tokens_per_hour\": $TOKENS_PER_HOUR}" >/dev/null
@@ -181,7 +173,7 @@ echo "== Vault: Kubernetes auth, the roles, the Consul secrets engine, the consu
 vault auth enable kubernetes >/dev/null 2>&1 || true
 vault write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc >/dev/null
 vault policy write aisa - >/dev/null <<'HCL'
-path "secret/data/aisa/consumers/*" { capabilities = ["read"] }
+path "secret/data/aisa/consumers/*" { capabilities = ["create", "read", "update"] }
 path "secret/metadata/aisa/consumers" { capabilities = ["list"] }
 path "secret/metadata/aisa/consumers/*" { capabilities = ["list"] }
 path "consul/creds/aisa" { capabilities = ["read"] }
@@ -198,22 +190,17 @@ vault secrets enable consul >/dev/null 2>&1 || true
 vault write consul/config/access address=consul:8500 token=test-root >/dev/null
 vault write consul/roles/aisa consul_policies=aisa ttl=1h >/dev/null
 vault write consul/roles/aisa-render consul_policies=aisa-render ttl=1h >/dev/null
-# The consumer is declared in Consul, with the namespace and Secret of its application, as
-# KUBERNETES_OBJECTS.md describes. Its key: the plaintext stays in .local/ (git-ignored), Vault
-# gets its hash. Until ROADMAP v0.2.0 PR 12, which has aisa generate the key, this is done
-# here by hand.
+ok "Vault configured"
+
+echo "== the consumer $CONSUMER"
+# Declared in Consul with the namespace and Secret of its application. aisa issues its key and
+# writes the Secret; it never takes over a Secret of that name that is not its own.
+ensure_ns "$APP_NS"
+taken=$("${K[@]}" -n "$APP_NS" get secret aisa --ignore-not-found -o json |
+    jq -r 'select(.metadata.labels["app.kubernetes.io/managed-by"] != "aisa") | .metadata.name')
+[[ -z "$taken" ]] || fail "the namespace $APP_NS has a Secret aisa that is not aisa's (another APP_NAMESPACE, or remove it)"
 consul kv put "aisa/consumers/$CONSUMER" "$(jq -cn --arg ns "$APP_NS" '{quota_profile: "interactive", namespace: $ns, secret: "aisa"}')" >/dev/null
-KEYFILE="$ROOT/.local/$CONSUMER.key"
-if [[ ! -s "$KEYFILE" ]]; then
-    mkdir -p "$ROOT/.local"
-    rm -f "$KEYFILE" # an empty file would keep its mode through the redirect
-    (umask 077; openssl rand -hex 24 > "$KEYFILE")
-fi
-chmod 600 "$KEYFILE" # a key from an earlier run, or put there by hand, too
-KEY=$(cat "$KEYFILE")
-HASH=$(sha256 "$KEY")
-vault kv put "secret/aisa/consumers/$CONSUMER" key_sha256="$HASH" >/dev/null
-ok "consumer $CONSUMER (its key is in $KEYFILE)"
+ok "consumer $CONSUMER declared, its Secret to be aisa in $APP_NS"
 
 echo "== aisa's chart"
 helm dependency update "$ROOT/deploy/helm/aisa" >/dev/null 2>&1
@@ -229,31 +216,15 @@ helm --kube-context "$CONTEXT" upgrade --install "$RELEASE" "$ROOT/deploy/helm/a
 }
 ok "aisa, Redis and the proxy are ready"
 
-echo "== the consumer's Secret in the namespace $APP_NS"
-# What ROADMAP v0.2.0 PR 12 is to write; the same shape, written here by hand until then: the
-# label by the derived-name rule, the annotation the exact name as a quoted string.
-ensure_ns "$APP_NS"
-# A Secret aisa that is not this setup's is an application's: apply would overwrite its keys and
-# down.sh delete it.
-taken=""
-owned_ns "$APP_NS" || taken=$("${K[@]}" -n "$APP_NS" get secret aisa --ignore-not-found -o json |
-    jq -r --arg l "$LABEL" 'select(.metadata.labels[$l] != "true") | .metadata.name')
-[[ -z "$taken" ]] || fail "the namespace $APP_NS has a Secret aisa that is not this setup's (another APP_NAMESPACE, or remove it)"
-"${K[@]}" -n "$APP_NS" apply -f - >/dev/null <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: aisa
-  labels:
-    aisa.hlan.net/consumer: $(derived_name "$CONSUMER" consumer)
-    aisa.hlan.net/local-setup: "true"
-  annotations:
-    aisa.hlan.net/consumer-name: $(jq -Rn --arg v "$CONSUMER" '$v')
-stringData:
-  OPENAI_BASE_URL: http://$RELEASE-apisix.$NS.svc.cluster.local/v1
-  OPENAI_API_KEY: $KEY
-EOF
+echo "== the consumer's Secret and the Model objects, written by aisa"
+for _ in $(seq 1 60); do
+    KEY=$("${K[@]}" -n "$APP_NS" get secret aisa -o jsonpath='{.data.OPENAI_API_KEY}' 2>/dev/null | base64 -d || true)
+    [[ -n "$KEY" ]] && break
+    sleep 1
+done
+[[ -n "$KEY" ]] || fail "aisa wrote no Secret aisa in $APP_NS: see kubectl -n $NS logs deploy/$FULLNAME"
 ok "Secret aisa in $APP_NS: OPENAI_BASE_URL and OPENAI_API_KEY, for envFrom"
+ok "Model objects: $("${K[@]}" get models.aisa.hlan.net -o jsonpath='{range .items[*]}{.spec.model} {end}')"
 
 echo "== through the proxy at $BASE_URL"
 if [[ "$PUBLISH" == forward ]]; then
@@ -287,9 +258,10 @@ fi
 cat <<EOF
 
   export OPENAI_BASE_URL=$BASE_URL/v1
-  export OPENAI_API_KEY=\$(cat $KEYFILE)
+  export OPENAI_API_KEY=\$(kubectl --context $CONTEXT -n $APP_NS get secret aisa -o jsonpath='{.data.OPENAI_API_KEY}' | base64 -d)
 
-OpenCode (opencode.json), with AISA_API_KEY set from that file:
+The key is aisa's: it replaces it every 30 days (kubernetes.keys in the chart's values), so read it
+from the Secret again then. OpenCode (opencode.json), with AISA_API_KEY set the same way:
 
   "provider": {
     "aisa": {

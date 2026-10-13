@@ -1,5 +1,6 @@
 // Package vault is the small part of Vault's HTTP API that aisa uses: logging in with a
-// Kubernetes service account token (or using a given token) and reading a KV v2 mount.
+// Kubernetes service account token (or using a given token), and reading and writing a KV v2
+// mount.
 //
 // It uses the standard library only. The official client would bring a large dependency tree
 // for three endpoints, and aisa runs on small arm64 nodes.
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,10 @@ import (
 // data. A 404 for any other reason, such as a mount that does not exist or an answer from a
 // proxy in front of Vault, is a StatusError.
 var ErrNotFound = errors.New("not found")
+
+// ErrConflict is returned by Write when the secret's current version is not the one given for
+// check-and-set: someone else wrote it since it was read.
+var ErrConflict = errors.New("check-and-set: the secret changed since it was read")
 
 // Auth obtains a Vault token.
 type Auth interface {
@@ -168,6 +174,13 @@ var errNoEnvelope = errors.New("answer is not a Vault KV v2 answer")
 // Read returns the current version of a KV v2 secret's data. A deleted or destroyed version
 // returns ErrNotFound. Any other answer without data.data is an error.
 func (c *Client) Read(ctx context.Context, mount, path string) (map[string]any, error) {
+	data, _, err := c.ReadVersion(ctx, mount, path)
+	return data, err
+}
+
+// ReadVersion is Read that also returns the number of the version read, for a Write with
+// check-and-set. A secret that does not exist is ErrNotFound with version 0.
+func (c *Client) ReadVersion(ctx context.Context, mount, path string) (map[string]any, int, error) {
 	var out struct {
 		Data *struct {
 			Data     map[string]any   `json:"data"`
@@ -175,17 +188,39 @@ func (c *Client) Read(ctx context.Context, mount, path string) (map[string]any, 
 		} `json:"data"`
 	}
 	if err := c.authed(ctx, http.MethodGet, mount+"/data/"+path, nil, &out); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	switch {
 	case out.Data == nil:
-		return nil, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
+		return nil, 0, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
 	case out.Data.Data != nil:
-		return out.Data.Data, nil
+		version := 0
+		if out.Data.Metadata != nil {
+			version = out.Data.Metadata.Version
+		}
+		return out.Data.Data, version, nil
 	case out.Data.Metadata.deleted():
-		return nil, ErrNotFound
+		return nil, 0, ErrNotFound
 	}
-	return nil, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
+	return nil, 0, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
+}
+
+// Write replaces a KV v2 secret's data with a new version, only if the current version is cas:
+// 0 for a secret that does not exist yet. Otherwise it returns ErrConflict and writes nothing,
+// so a write never undoes one it did not read. One write is atomic.
+func (c *Client) Write(ctx context.Context, mount, path string, data map[string]any, cas int) error {
+	body, err := json.Marshal(map[string]any{"options": map[string]int{"cas": cas}, "data": data})
+	if err != nil {
+		return fmt.Errorf("encode %s/data/%s: %w", mount, path, err)
+	}
+	err = c.authed(ctx, http.MethodPost, mount+"/data/"+path, body, nil)
+	var se *StatusError
+	if errors.As(err, &se) && se.Code == http.StatusBadRequest && slices.ContainsFunc(se.Errors, func(e string) bool {
+		return strings.Contains(e, "check-and-set")
+	}) {
+		return fmt.Errorf("vault POST %s/data/%s: %w", mount, path, ErrConflict)
+	}
+	return err
 }
 
 // lookupSelf is allowed to every token by Vault's default policy.
@@ -353,6 +388,7 @@ type deletedVersion struct {
 type versionMetadata struct {
 	DeletionTime string `json:"deletion_time"`
 	Destroyed    bool   `json:"destroyed"`
+	Version      int    `json:"version"`
 }
 
 // deleted reports whether the metadata is that of a deleted or destroyed version.

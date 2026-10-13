@@ -54,9 +54,17 @@ aisa/consumers/<name>   {"quota_profile": "batch", "namespace": "news", "secret"
 A consumer is declared here by the holder, and Vault holds only the hashes of its keys ([`VAULT.md`](./VAULT.md#consumer-credentials)). The declaration is a JSON object; every field is optional, and fields aisa does not know are ignored:
 
 - `quota_profile` names the consumer's token quota, `aisa/quotas/<profile>` below; without it the consumer has no quota.
-- `namespace` and `secret`, together, say where the consumer's application runs and the Secret aisa is to write its key into ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret), v0.2.0 PR 12); one without the other is invalid.
+- `namespace` and `secret`, together, say where the consumer's application runs and the Secret aisa writes its key into ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret)); one without the other is invalid. aisa issues the key, so its hash in Vault is aisa's to write; a consumer without them gets its key by hand.
 - A key whose consumer is not declared does not authenticate, however valid its hash in Vault: the declaration is what makes a consumer exist. A declaration that is not valid JSON, or named `unknown`, is logged, counted in `aisa_consumer_declarations_invalid`, and its consumer's keys are answered 503 until it is fixed, so a typo does not lift a quota.
 - aisa follows the prefix with blocking queries, so a consumer declared or changed in Consul applies within seconds; its key, added in Vault, is picked up on the next reload or the first request with it ([`VAULT.md`](./VAULT.md#consumer-credentials)).
+
+## Model descriptions: Consul KV
+
+```
+aisa/models/<model>   {"features": ["TextGeneration"], "contextLength": 32768, "capabilities": ["tools"]}
+```
+
+What a model can do, for its `Model` object ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)); `<model>` is the exact name in the backends' `models`. Every field is optional: `features` from `TextGeneration`, `TextEmbedding`, `Reranking` and `SpeechToText` (`TextGeneration` when absent), `contextLength` in tokens, `capabilities` from `tools`, `vision` and `json_mode`. A model without a description, or with one that cannot be read, gets `features: [TextGeneration]`; the latter is logged and counted in `aisa_model_descriptions_invalid`.
 
 ## Prices and budgets: Consul KV
 
@@ -79,5 +87,5 @@ Terraform-managed Consul policies. The tokens come from Vault's Consul secrets e
 
 | Role | Rules |
 |---|---|
-| `aisa` | `key_prefix "aisa/" { policy = "write" }`, `service "aisa-backend" { policy = "read" }` |
+| `aisa` | `key_prefix "aisa/" { policy = "write" }`, `service "aisa-backend" { policy = "read" }`, `node_prefix "" { policy = "read" }`: aisa reads the backends' health for the `Model` objects, and Consul leaves out the instances on nodes the token may not read |
 | `aisa-render` | `service "aisa-backend" { policy = "read" }`, `node_prefix "" { policy = "read" }` |

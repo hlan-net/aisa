@@ -1,0 +1,63 @@
+# The Model objects: one per model that the proxy offers, written by aisa from the Consul
+# catalog and the models' descriptions in Consul KV (docs/concepts/KUBERNETES_OBJECTS.md, Model).
+# Applications read them; nothing they write changes what they may do. Helm installs a CRD from
+# crds/ with the chart and never upgrades or deletes it: a new version of this file is applied
+# by hand (kubectl apply -f), and the objects stay after the chart is uninstalled.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: models.aisa.hlan.net
+spec:
+  group: aisa.hlan.net
+  scope: Cluster
+  names:
+    kind: Model
+    listKind: ModelList
+    plural: models
+    singular: model
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - {name: Model, type: string, jsonPath: .spec.model}
+        - {name: Available, type: boolean, jsonPath: .status.available}
+        - {name: Context, type: integer, jsonPath: .spec.contextLength}
+        - {name: Age, type: date, jsonPath: .metadata.creationTimestamp}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [model, endpoint]
+              properties:
+                model:
+                  description: The exact name to send in requests.
+                  type: string
+                features:
+                  description: What the model does, in KubeAI's vocabulary.
+                  type: array
+                  items:
+                    type: string
+                    enum: [TextGeneration, TextEmbedding, Reranking, SpeechToText]
+                contextLength:
+                  description: The context window in tokens; absent when not described.
+                  type: integer
+                  minimum: 1
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                    enum: [tools, vision, json_mode]
+                endpoint:
+                  description: The proxy's OpenAI-compatible base URL of this install.
+                  type: string
+            status:
+              type: object
+              properties:
+                available:
+                  description: At least one backend of the model passes its health checks.
+                  type: boolean

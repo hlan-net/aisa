@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Lints aisa's chart and the proxy's chart, renders them for the usual combinations of values,
 # and validates every rendered object against the Kubernetes schemas (kubeconform; the
-# ServiceMonitor against the CRD catalog). Needs helm and kubeconform; no cluster.
+# ServiceMonitor against the CRD catalog, the Model CRD against the schema of a CRD, which has
+# no strict standalone form). Needs helm and kubeconform; no cluster.
 #
 #   ./deploy/helm/test/charts_test.sh
 set -euo pipefail
@@ -37,11 +38,13 @@ validate() {
     kubeconform -strict -summary -kubernetes-version "$KUBE_VERSION" \
         -schema-location default \
         -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+        -schema-location 'https://raw.githubusercontent.com/yannh/kubernetes-json-schema/master/{{.NormalizedKubernetesVersion}}/{{.ResourceKind}}{{.KindSuffix}}.json' \
         "$OUT/$name.yaml"
     echo "ok: $name"
 }
 
-validate "defaults" "$AISA"
+validate "defaults" "$AISA" --include-crds
+validate "no-kubernetes" "$AISA" --set kubernetes.enabled=false
 validate "monitoring" "$AISA" --set serviceMonitor.enabled=true --set apisix.serviceMonitor.enabled=true
 validate "consul-without-acls" "$AISA" --set consul.token.fromVault=false --set apisix.vaultAgent.consulToken.enabled=false
 validate "external-redis" "$AISA" --set redis.enabled=false --set redis.addr=redis.example.svc:6379
@@ -104,5 +107,38 @@ echo "ok: a peer in extraFrom reaches aisa's metrics port only"
 got=$(rules "$OUT/defaults.yaml" | tr '\n' ';')
 [[ "$got" == "http/ proxy/;" ]] || fail "aisa's NetworkPolicy rules by default: $got"
 echo "ok: by default no rule for the metrics port"
+
+# The URL that aisa writes into the consumers' Secrets and the Models is the proxy's client
+# Service of the release, whatever its name and port.
+for case in "aisa" "prod --set apisix.fullnameOverride=gateway" "aisa --set apisix.service.port=8080"; do
+    read -r release extra <<<"$case"
+    # shellcheck disable=SC2086 # $extra is a list of helm arguments
+    helm template $release "$AISA" --namespace llm "${REQUIRED[@]}" $extra >"$OUT/url.yaml" 2>/dev/null
+    # The proxy's client Service: component proxy, and not its metrics.
+    svc=$(awk '/^kind:/{s = ($2 == "Service"); n = ""} s && /^  name:/{n = $2} s && /component: proxy/ && n !~ /-metrics$/ {print n; s = 0}' "$OUT/url.yaml")
+    port=$(awk -v svc="$svc" '/^kind:/{s = ($2 == "Service"); f = 0} s && /^  name:/ && $2 == svc {f=1} f && /port: /{print; exit}' "$OUT/url.yaml" |
+        sed -E 's/.*port: ([0-9]+).*/\1/')
+    url=$(awk '/name: AISA_PROXY_URL/{getline; print $2; exit}' "$OUT/url.yaml" | tr -d '"')
+    want="http://$svc.llm.svc.cluster.local/v1"
+    [[ "$port" == 80 ]] || want="http://$svc.llm.svc.cluster.local:$port/v1"
+    [[ "$url" == "$want" ]] || fail "$case: aisa gives applications $url, the proxy's Service is $svc:$port"
+    echo "ok: $case: applications get the proxy's Service, $url"
+done
+helm template aisa "$AISA" "${REQUIRED[@]}" --set kubernetes.proxyURL=https://llm.example.internal/v1 >"$OUT/url.yaml" 2>/dev/null
+grep -A1 'name: AISA_PROXY_URL' "$OUT/url.yaml" | grep -q '"https://llm.example.internal/v1"' || fail "kubernetes.proxyURL is not used"
+echo "ok: kubernetes.proxyURL replaces the proxy's Service"
+
+# Without kubernetes.enabled aisa gets no rights in the API and no token for it.
+for f in no-kubernetes defaults; do
+    roles=$(grep -c '^kind: \(Cluster\)\?Role\(Binding\)\?$' "$OUT/$f.yaml" || true)
+    automount=$(awk '/^kind:/{d = ($2 == "Deployment"); a = 0} d && /^  name: aisa$/{a = 1} a && /automountServiceAccountToken:/{print $2; exit}' "$OUT/$f.yaml")
+    case "$f" in
+        no-kubernetes) [[ "$roles" == 0 && "$automount" == false ]] || fail "$f: $roles RBAC objects, automount $automount" ;;
+        defaults) [[ "$roles" == 6 && "$automount" == true ]] || fail "$f: $roles RBAC objects, automount $automount" ;;
+    esac
+    echo "ok: $f: $roles RBAC objects, the API token mounted: $automount"
+done
+grep -q '^kind: CustomResourceDefinition$' "$OUT/defaults.yaml" || fail "the Model CRD is not in the chart"
+echo "ok: the Model CRD is in the chart"
 
 echo "ok: all chart tests passed"

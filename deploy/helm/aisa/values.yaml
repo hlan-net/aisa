@@ -73,6 +73,31 @@ redis:
     requests: {cpu: 10m, memory: 16Mi, ephemeral-storage: 16Mi}
     limits: {memory: 64Mi, ephemeral-storage: 64Mi}
 
+# What aisa writes to the Kubernetes API (docs/concepts/KUBERNETES_OBJECTS.md): a Secret with an
+# OpenAI base URL and a key for each consumer whose declaration in Consul names a namespace and a
+# Secret, and a Model object per model on offer. The chart gives aisa a ClusterRole for it:
+# Secrets in every namespace (aisa changes only those with its own labels) and the Models. The
+# CRD is in crds/.
+kubernetes:
+  enabled: true
+  # The proxy's URL that applications call; empty: the proxy's Service in this release,
+  # http://<release>-apisix.<namespace>.svc.cluster.local/v1.
+  proxyURL: ""
+  # How often aisa compares the objects with Consul and Vault; a change of the consumers'
+  # declarations is applied at once.
+  resync: 30s
+  keys:
+    # A consumer's key is replaced at this age; "0" never replaces one for its age. A pod that
+    # read the key into its environment keeps the old one until it restarts, so restart such
+    # pods within the grace period (a tool such as Reloader does), or mount the Secret as a file.
+    rotationInterval: 720h
+    # How long a replaced key stays valid.
+    rotationGrace: 168h
+  models:
+    # A ClusterRoleBinding that lets every service account read the Models: the catalog holds
+    # nothing secret. Off: bind the ClusterRole <namespace>-<fullname>-model-reader yourself.
+    readableByAllServiceAccounts: true
+
 # Not measured on a Raspberry Pi 4 yet (#16).
 resources:
   requests: {cpu: 20m, memory: 32Mi, ephemeral-storage: 16Mi}

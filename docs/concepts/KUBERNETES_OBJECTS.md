@@ -1,6 +1,6 @@
 # Concept: Kubernetes objects
 
-> **Status: draft design.** Nothing here is built. It turns the direction of 2026-10-01 ([`ARCHITECTURE.md`](./ARCHITECTURE.md#state-of-this-direction)) into objects, and closes the design gaps of US-1 criteria 2 and 8 ([`../process/USER_STORIES.md`](../process/USER_STORIES.md#us-1-cost-safe-inference-that-looks-kubernetes-native)).
+> **Status: built** (`ROADMAP.md` v0.2.0 PR 12, `internal/kube`). It turns the direction of 2026-10-01 ([`ARCHITECTURE.md`](./ARCHITECTURE.md#state-of-this-direction)) into objects, and closes the design gaps of US-1 criteria 2 and 8 ([`../process/USER_STORIES.md`](../process/USER_STORIES.md#us-1-cost-safe-inference-that-looks-kubernetes-native)). aisa writes the objects when `AISA_KUBERNETES=true`, which the chart sets (`kubernetes.enabled`).
 
 Related: [`ARCHITECTURE.md`](./ARCHITECTURE.md), [`VAULT.md`](./VAULT.md), [`CONSUL.md`](./CONSUL.md), [#32](https://github.com/hlan-net/aisa/issues/32), [#34](https://github.com/hlan-net/aisa/issues/34).
 
@@ -42,6 +42,11 @@ metadata:
   labels:
     feature.aisa.hlan.net/TextGeneration: "true"
     capability.aisa.hlan.net/tools: "true"
+    app.kubernetes.io/managed-by: aisa
+    aisa.hlan.net/install: aisa  # the namespace of the aisa that keeps it
+    aisa.hlan.net/model: qwen3-8b-6f1d2c9a
+  annotations:
+    aisa.hlan.net/model-name: "qwen3:8b"
 spec:                           # written by aisa only
   model: "qwen3:8b"             # the name to send in requests
   features: [TextGeneration]    # KubeAI's vocabulary: TextGeneration, TextEmbedding, Reranking, SpeechToText
@@ -60,9 +65,12 @@ status:
 
   The result is at most 63 characters, starts and ends with a letter or digit, and is a valid object name and label value. `qwen3:8b` and `qwen3-8b` get different names. Should two names still map to one, aisa creates neither, logs an error and reports it in its metrics.
 - **Found through Kubernetes.** An application lists the objects by what they can do with a label selector, for example `kubectl get models.aisa.hlan.net -l feature.aisa.hlan.net/TextGeneration,capability.aisa.hlan.net/tools`, and maps its tasks to them (US-1 criterion 8). aisa sets one label per feature and per capability from `spec`, because a selector cannot match an element of a list. Because `Model` is cluster-scoped, only a ClusterRoleBinding can grant reading it. aisa's chart ships a ClusterRole that may `get`, `list` and `watch` models and, by default, a ClusterRoleBinding of it to the group `system:serviceaccounts`, so every pod can read the catalog; it holds nothing secret. An operator who wants it narrower turns the binding off and binds the role to chosen service accounts. An application that does not talk to the Kubernetes API reads the available ones, those with a healthy backend, at `/v1/models` through the proxy ([#34](https://github.com/hlan-net/aisa/issues/34)); the OpenAI shape has no field for `available`, so a model without a backend is not on that list.
-- **Endpoint.** The URL of the proxy's Service in the namespace aisa is installed in, both taken from the install (the chart's values), never fixed.
+- **Endpoint.** The URL of the proxy's Service in the namespace aisa is installed in, both taken from the install (the chart's values, `AISA_PROXY_URL`), never fixed.
+- **Which models.** Those of the backends that the proxy's template renders: registered as `aisa-backend` with `models`, the provider `openai-compatible` and a valid `timeout` if any. `available` is true when at least one of them passes all its checks. aisa reads the health of the service, so its Consul token needs read on the nodes too ([`CONSUL.md`](./CONSUL.md#acls)).
+- **Ownership.** aisa changes and deletes only the objects with its labels and the install of the namespace it runs in. An object of the same name that is another's, such as another install's, is left alone; the model gets no object and is counted in `aisa_model_conflicts`.
+- **The CRD** is in aisa's chart, in `crds/`: Helm installs it with the chart and never upgrades or deletes it, so a new version is applied by hand, and the objects stay after the chart is uninstalled.
 - **Nothing about the provider.** No backend address, provider, account or key is in the object (US-2). Whether a model is local or paid is open question 3.
-- **Description in Consul.** `features`, `contextLength` and `capabilities` are not in the catalog today. They go in Consul KV, `aisa/models/<model>`, written by the holder; a model without a description gets `features: [TextGeneration]` and no other fields.
+- **Description in Consul.** `features`, `contextLength` and `capabilities` are not in the catalog today. They go in Consul KV, `aisa/models/<model>`, written by the holder, such as `{"features": ["TextGeneration"], "contextLength": 32768, "capabilities": ["tools"]}`; every field is optional. A model without a description gets `features: [TextGeneration]` and no other fields, and so does one whose description cannot be read (not a JSON object, or a value outside the vocabularies above), which is logged and counted in `aisa_model_descriptions_invalid`.
 - **A model without healthy backends** keeps its object with `available: false`, so an application can tell "not on offer" from "down".
 - **Every consumer sees every model.** Which models a consumer may use is not decided per consumer today; when it is, the object stays the same and the decision API denies.
 
@@ -76,12 +84,18 @@ aisa/consumers/batch-jobs   {"quota_profile": "batch", "namespace": "news", "sec
 
 aisa then:
 
-1. **Makes a new key valid before anyone sees it.** aisa generates the key and, in one write of the Vault secret `secret/aisa/consumers/batch-jobs`, adds its SHA-256 to `key_sha256` and the same hash with the time to `unwritten_sha256`. One KV v2 write is atomic, and aisa makes it with check-and-set on the version it read, so no crash or concurrent write can leave the hash valid without its mark. The decision API reads `key_sha256` as it does today and ignores the other fields ([`VAULT.md`](./VAULT.md#consumer-credentials)).
+1. **Makes a new key valid before anyone sees it.** aisa generates the key (`aisa-` and 32 random bytes in hex) and, in one write of the Vault secret `secret/aisa/consumers/batch-jobs`, adds its SHA-256 to `key_sha256`, the same hash with the time to `unwritten_sha256`, and the time to `issued_at`. One KV v2 write is atomic, and aisa makes it with check-and-set on the version it read, so no crash or concurrent write can leave the hash valid without its mark. The decision API reads `key_sha256` as it does today and ignores the other fields ([`VAULT.md`](./VAULT.md#consumer-credentials)). The marks are JSON objects of hash and RFC 3339 time:
+   ```json
+   {"key_sha256": "<old>,<new>", "unwritten_sha256": {"<new>": "2026-10-13T12:00:00Z"},
+    "superseded_sha256": {"<old>": "2026-10-13T12:00:00Z"}, "issued_at": "2026-10-13T12:00:00Z"}
+   ```
 2. **Writes the Secret** `aisa` in the namespace `news`:
    ```yaml
    metadata:
      labels:
-       aisa.hlan.net/consumer: batch-jobs-3c9e1f0a   # the consumer's name by the rule above
+       aisa.hlan.net/consumer: batch-jobs-405cbf45   # the consumer's name by the rule above
+       app.kubernetes.io/managed-by: aisa
+       aisa.hlan.net/install: aisa                   # the namespace of the aisa that wrote it
      annotations:
        aisa.hlan.net/consumer-name: batch-jobs     # exact
    stringData:
@@ -90,20 +104,20 @@ aisa then:
    ```
    An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret, and it is valid from the moment it appears there.
 3. **Clears the mark**: removes the hash from `unwritten_sha256`, again in one write.
-4. **Rotates the key** with the same three steps, keeping the old hash in `key_sha256` and removing it after a grace period (`AISA_KEY_ROTATION_GRACE`). The same write records the old hash with the time in `superseded_sha256`, so the grace period survives a restart. A pod that read the key into its environment keeps the old one until it restarts; open question 4.
-5. **Deletes** the Secret and the hashes when the consumer is removed from Consul.
+4. **Rotates the key** with the same three steps when it is `AISA_KEY_ROTATION_INTERVAL` old (30 days by default; `0` never rotates), keeping the old hash in `key_sha256` and removing it after a grace period (`AISA_KEY_ROTATION_GRACE`, 7 days by default). The same write records the old hash with the time in `superseded_sha256`, so the grace period survives a restart. A pod that read the key into its environment keeps the old one until it restarts, so it must restart within the grace period (a restarter such as Reloader does it), or mount the Secret as a file and read it again.
+5. **Deletes** the Secret and the hashes when the consumer is removed from Consul, or its declaration no longer names a Secret. When it names another Secret, the old one is deleted and the new one gets a new key, the old key's hash staying for the grace period. A consumer whose declaration cannot be read is left as it is.
 
 **Reconciling is restart-safe, and accepts only keys aisa issued.** Every hash in `key_sha256` was added by aisa before its key was written anywhere, so a key written into the Secret by anyone else never becomes valid. Each pass compares the Secret with Vault and repairs the difference, so a crash between any two steps is finished on the next pass:
 
 | State found | Action |
 |---|---|
-| Secret owned by the consumer, its key's hash in `key_sha256` | Clear a leftover mark in `unwritten_sha256` (a crash after step 2). Restore the other fields aisa manages, `OPENAI_BASE_URL`, its labels and annotation, if they were changed; the key stays |
+| Secret owned by the consumer, its key's hash in `key_sha256` | Clear a leftover mark in `unwritten_sha256` (a crash after step 2). Restore `OPENAI_BASE_URL` if it was changed; the key stays. Rotate the key when it is due |
 | Secret owned by the consumer, its key's hash not in `key_sha256` | The key was not issued by aisa, or was edited by hand. Issue a new key with steps 1 to 3, superseding the hashes already there as in rotation; the unknown key is never accepted. Logged and counted |
 | No Secret | Issue a new key with steps 1 to 3. Hashes already in `key_sha256` are recorded in `superseded_sha256` and kept for the grace period, because a running pod may still hold their key. The consumer's credential changes, so this is logged and counted |
 | A hash in `unwritten_sha256` that the Secret does not hold, older than a minute | Remove it: a crash between steps 1 and 2 left a valid hash whose key nobody has |
 | Hashes in `superseded_sha256` longer ago than the grace period | Remove them from both fields |
 
-**Ownership.** aisa changes or deletes only a Secret that carries its label with this consumer's name. A Secret of that name without the label, or with another consumer's, is never adopted, overwritten or deleted: the consumer's reconcile fails, and the failure is logged and reported in aisa's metrics until the holder renames one of them.
+**Ownership.** aisa changes or deletes only a Secret that carries its labels, with this consumer's name and the install of the namespace aisa runs in, and the annotation with the exact name; a Secret whose labels were changed by hand is no longer aisa's. A Secret of that name without the label, or with another consumer's, is never adopted, overwritten or deleted: the consumer's reconcile fails, and the failure is logged and reported in aisa's metrics until the holder renames one of them.
 
 **One Secret, one consumer.** Before reconciling, aisa checks the consumers in Consul for duplicate targets. When two or more name the same namespace and Secret, none of them is reconciled, whichever came first, and each is reported until the holder changes one; their existing Secrets and hashes are left as they are.
 
@@ -111,10 +125,11 @@ This is option 1 of [#32](https://github.com/hlan-net/aisa/issues/32) with aisa 
 
 ## What aisa needs
 
-- **Kubernetes API access**, the first time aisa talks to it: create and update `Model` objects (cluster-wide), and create, update and delete Secrets with a label of its own in the namespaces of its consumers. A ClusterRole on Secrets is broad; open question 2.
-- **Write access in Vault** to `secret/aisa/consumers/*` for the hashes. Today aisa only reads there.
+- **Kubernetes API access**: create, update and delete `Model` objects (cluster-wide), and Secrets in the namespaces of its consumers. The chart gives aisa a ClusterRole for both (open question 2), and the token for the API alongside the one it projects for Vault.
+- **Write access in Vault** to `secret/aisa/consumers/*` for the hashes: `create`, `read` and `update` ([`VAULT.md`](./VAULT.md#who-reads-what)).
+- **Read access to the nodes in Consul**, for the health of the backends ([`CONSUL.md`](./CONSUL.md#acls)).
 - **The CRD**, shipped in aisa's chart ([`ARCHITECTURE.md`](./ARCHITECTURE.md#packaging-and-deployment)).
-- **One writer.** With more than one replica, a lease elects the one that reconciles.
+- **One writer.** A Lease in aisa's namespace (`<fullname>-leader`) elects the replica that writes; two would each issue a key. The passes run every `AISA_KUBE_RESYNC` (30 s), and at once when the consumers' declarations change.
 
 ## Failure modes
 
@@ -125,11 +140,12 @@ This is option 1 of [#32](https://github.com/hlan-net/aisa/issues/32) with aisa 
 | Vault down | No new key is issued and no rotation finishes; existing keys keep working as long as the decision API can decide |
 | Kubernetes API down | Nothing changes in the cluster; aisa retries |
 | An object changed by hand | Restored on the next reconcile |
+| A consumer's Secret cannot be written (its namespace does not exist, say) | Counted in `aisa_consumer_secrets{state="error"}` and logged; the next attempt to issue its key waits a minute, doubling up to 30 minutes, so the failure does not add a hash to Vault on every pass |
 
 ## Open questions
 
 1. **API group.** Decided: `aisa.hlan.net`, a domain the maintainer controls (2026-10-07).
-2. **Scope of Secret writes.** A ClusterRole, or a Role per namespace that the chart creates from a list in its values. The second is narrower but needs a chart change for each new namespace.
+2. **Scope of Secret writes.** Decided: a ClusterRole (2026-10-13). A Role per namespace from a list in the chart's values would be narrower, but needs a chart change for each new namespace; aisa's code changes only the Secrets that carry its labels.
 3. **Local or paid in `Model`.** An application may want to prefer a free model. It reveals nothing about the account, but it is a fact about the holder's costs.
-4. **Rotation and running pods.** Mount the Secret as a file and read it per request, rely on a restarter such as Reloader, or rotate only on request.
+4. **Rotation and running pods.** Decided: rotation on a schedule, with a grace period (2026-10-13). An application restarts within the grace period, or reads the Secret as a file.
 5. **Where the key hash lives.** In Vault as today, or in Consul next to the rest of the consumer; a SHA-256 of a random key is not a secret, but the rule keeps credentials in Vault.

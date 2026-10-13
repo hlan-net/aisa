@@ -10,3 +10,11 @@ aisa logs in to Vault as the role "{{ .Values.vault.auth.role }}" with the servi
 "{{ include "aisa.serviceAccountName" . }}". Check that it is ready:
 
   kubectl -n {{ .Release.Namespace }} rollout status deployment/{{ include "aisa.fullname" . }}
+{{- if .Values.kubernetes.enabled }}
+
+A consumer whose declaration in Consul names a namespace and a Secret gets that Secret from aisa,
+with OPENAI_BASE_URL ({{ include "aisa.proxyURL" . }}) and a key that aisa issues and
+replaces every {{ .Values.kubernetes.keys.rotationInterval }}. The models on offer:
+
+  kubectl get models.aisa.hlan.net
+{{- end }}

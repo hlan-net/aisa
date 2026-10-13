@@ -62,3 +62,22 @@ app.kubernetes.io/component: counters
 {{- define "aisa.vaultAddr" -}}
 {{- required "global.vault.addr is required: the address of Vault" .Values.global.vault.addr }}
 {{- end }}
+
+{{- /* The proxy's URL that applications call, for their Secrets and the Model objects: the
+       proxy chart's client Service in this release's namespace (proxies/apisix/chart,
+       "proxy.fullname"), or kubernetes.proxyURL. */}}
+{{- define "aisa.proxyURL" -}}
+{{- if .Values.kubernetes.proxyURL }}
+{{- .Values.kubernetes.proxyURL }}
+{{- else }}
+{{- /* The parent sees only the values given here, not the proxy chart's defaults. */}}
+{{- $proxy := .Values.apisix | default dict }}
+{{- $name := dig "fullnameOverride" "" $proxy | default (printf "%s-%s" .Release.Name (dig "nameOverride" "" $proxy | default "apisix")) | trunc 63 | trimSuffix "-" }}
+{{- $port := dig "service" "port" 80 $proxy | int }}
+{{- if eq $port 80 }}
+{{- printf "http://%s.%s.svc.cluster.local/v1" $name .Release.Namespace }}
+{{- else }}
+{{- printf "http://%s.%s.svc.cluster.local:%d/v1" $name .Release.Namespace $port }}
+{{- end }}
+{{- end }}
+{{- end }}

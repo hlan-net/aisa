@@ -5,8 +5,9 @@
 # Consul with ACLs and the policies of docs/concepts/CONSUL.md; two mock backends.
 #
 # It checks what only a cluster shows: the logins with Kubernetes auth, the Consul tokens from
-# Vault, a provider key rendered from Vault, the NetworkPolicy in front of aisa, and that
-# helm uninstall removes the proxy with aisa.
+# Vault, a provider key rendered from Vault, the consumer's Secret and the Model objects that
+# aisa writes, the NetworkPolicy in front of aisa, and that helm uninstall removes the proxy
+# with aisa.
 #
 #   kind create cluster --name aisa
 #   docker build -t aisa:ci . && docker build -f dev/Dockerfile -t aisa-dev-tools:ci .
@@ -20,6 +21,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 NS="${NAMESPACE:-aisa}"
 RELEASE=aisa
+# Where the consumer batch-jobs runs: aisa writes its Secret there.
+APP_NS="${APP_NAMESPACE:-aisa-app}"
 K=(kubectl -n "$NS")
 
 pass=0
@@ -60,8 +63,10 @@ done
 ok "Vault, Consul and the mock backends are ready"
 
 echo "== Consul: ACL policies, quota profiles, backends"
+# aisa reads the backends' health for the Model objects; Consul filters the health of a
+# service by the nodes the token may read.
 consul acl policy create -name aisa \
-    -rules 'key_prefix "aisa/" { policy = "write" } service "aisa-backend" { policy = "read" }' >/dev/null
+    -rules 'key_prefix "aisa/" { policy = "write" } service "aisa-backend" { policy = "read" } node_prefix "" { policy = "read" }' >/dev/null
 consul acl policy create -name aisa-render \
     -rules 'service "aisa-backend" { policy = "read" } node_prefix "" { policy = "read" }' >/dev/null
 consul kv put aisa/quotas/interactive '{"tokens_per_hour": 1000000}' >/dev/null
@@ -103,7 +108,7 @@ vault auth enable kubernetes >/dev/null
 # Vault runs in the cluster: it reviews tokens with its own service account and CA.
 vault write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc >/dev/null
 vault policy write aisa - >/dev/null <<'HCL'
-path "secret/data/aisa/consumers/*" { capabilities = ["read"] }
+path "secret/data/aisa/consumers/*" { capabilities = ["create", "read", "update"] }
 path "secret/metadata/aisa/consumers" { capabilities = ["list"] }
 path "secret/metadata/aisa/consumers/*" { capabilities = ["list"] }
 path "consul/creds/aisa" { capabilities = ["read"] }
@@ -124,6 +129,11 @@ sha256() {
 # The consumer: declared in Consul, its key's hash in Vault.
 consul kv put aisa/consumers/chat-ui '{"quota_profile": "interactive"}' >/dev/null
 vault kv put secret/aisa/consumers/chat-ui key_sha256="$(sha256 test-key-chat-ui)" >/dev/null
+# A consumer whose key aisa issues and writes into a Secret in its application's namespace.
+kubectl create namespace "$APP_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+consul kv put aisa/consumers/batch-jobs "{\"quota_profile\": \"interactive\", \"namespace\": \"$APP_NS\", \"secret\": \"aisa\"}" >/dev/null
+# A description of one model, for its Model object.
+consul kv put aisa/models/qwen3 '{"contextLength": 32768, "capabilities": ["tools"]}' >/dev/null
 vault kv put secret/aisa/providers/cloud api_key=test-provider-key >/dev/null
 vault secrets enable consul >/dev/null
 vault write consul/config/access address=consul:8500 token=test-root >/dev/null
@@ -203,6 +213,58 @@ done
 [[ "$tokens" != 0 ]] || fail "usage events reached aisa"
 ok "usage events reached aisa ($tokens tokens for chat-ui)"
 
+echo "== Kubernetes objects"
+# The consumer's Secret: written by aisa, with a key that it issued.
+for _ in $(seq 1 60); do
+    key=$(kubectl -n "$APP_NS" get secret aisa -o jsonpath='{.data.OPENAI_API_KEY}' 2>/dev/null | base64 -d || true)
+    [[ -n "$key" ]] && break
+    sleep 1
+done
+[[ -n "$key" ]] || fail "aisa wrote the Secret of batch-jobs in $APP_NS"
+ok "aisa wrote the Secret of batch-jobs in $APP_NS"
+expect "the Secret's base URL is the proxy's Service" "http://$RELEASE-apisix.$NS.svc.cluster.local/v1" \
+    "$(kubectl -n "$APP_NS" get secret aisa -o jsonpath='{.data.OPENAI_BASE_URL}' | base64 -d)"
+expect "the Secret names its consumer" batch-jobs \
+    "$(kubectl -n "$APP_NS" get secret aisa -o jsonpath='{.metadata.annotations.aisa\.hlan\.net/consumer-name}')"
+# aisa learns the new key's hash from Vault on the first request that carries it.
+for _ in $(seq 1 15); do
+    status=$(chat "$key" qwen3 || true)
+    [[ "$status" = 200 ]] && break
+    sleep 1
+done
+expect "the key in the Secret passes the proxy" 200 "$status"
+issued=$(curl -fsS http://127.0.0.1:18090/metrics | awk '/^aisa_consumer_keys_issued_total\{reason="new"\}/{print $2}')
+expect "aisa counted the key it issued" 1 "$issued"
+
+# The Model objects: one per model on offer, found by what they can do.
+for _ in $(seq 1 60); do
+    models=$(kubectl get models.aisa.hlan.net -l feature.aisa.hlan.net/TextGeneration -o jsonpath='{range .items[*]}{.spec.model} {end}' 2>/dev/null || true)
+    [[ "$models" == *qwen3* && "$models" == *cloud-large* ]] && break
+    sleep 1
+done
+[[ "$models" == *qwen3* && "$models" == *cloud-large* ]] || fail "a Model object for each model on offer: got '$models'"
+ok "a Model object for each model on offer: $models"
+expect "a model found by its capability" qwen3 \
+    "$(kubectl get models.aisa.hlan.net -l capability.aisa.hlan.net/tools -o jsonpath='{.items[*].spec.model}')"
+qwen=$(kubectl get models.aisa.hlan.net -l capability.aisa.hlan.net/tools -o json | jq -c '.items[0] | [.spec.contextLength, .spec.endpoint, .status.available]')
+expect "qwen3's description, endpoint and health" "[32768,\"http://$RELEASE-apisix.$NS.svc.cluster.local/v1\",true]" "$qwen"
+expect "any service account reads the models" yes \
+    "$(kubectl auth can-i list models.aisa.hlan.net --as=system:serviceaccount:default:default)"
+expect "no other service account writes them" no \
+    "$(kubectl auth can-i create models.aisa.hlan.net --as=system:serviceaccount:default:default)"
+
+# A consumer removed from Consul loses its Secret, and its key no longer passes.
+consul kv delete aisa/consumers/batch-jobs >/dev/null
+for _ in $(seq 1 60); do
+    kubectl -n "$APP_NS" get secret aisa >/dev/null 2>&1 || break
+    sleep 1
+done
+if kubectl -n "$APP_NS" get secret aisa >/dev/null 2>&1; then
+    fail "the Secret of a removed consumer is deleted"
+fi
+ok "the Secret of a removed consumer is deleted"
+expect "the key of a removed consumer" 401 "$(chat "$key" qwen3)"
+
 echo "== NetworkPolicy"
 # probe_aisa <name> <url> [labels]: asks url from a new pod with these labels. /healthz answers on
 # both of aisa's ports, so it shows whether the pod reaches the port at all.
@@ -239,7 +301,9 @@ echo "== helm uninstall"
 cleanup
 pf_pids=()
 helm uninstall "$RELEASE" -n "$NS" --wait --timeout 2m >/dev/null
-left=$("${K[@]}" get deploy,svc,cm,sa,networkpolicy -l app.kubernetes.io/part-of=aisa -o name | wc -l)
+left=$("${K[@]}" get deploy,svc,cm,sa,networkpolicy,role,rolebinding -l app.kubernetes.io/part-of=aisa -o name | wc -l)
 expect "helm uninstall removes aisa, Redis and the proxy" 0 "$left"
+left=$(kubectl get clusterrole,clusterrolebinding -l app.kubernetes.io/part-of=aisa -o name | wc -l)
+expect "helm uninstall removes aisa's ClusterRoles and their bindings" 0 "$left"
 
 echo "ok: $pass checks passed"
