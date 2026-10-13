@@ -135,6 +135,7 @@ for f in no-kubernetes defaults; do
     case "$f" in
         no-kubernetes) [[ "$roles" == 0 && "$automount" == false ]] || fail "$f: $roles RBAC objects, automount $automount" ;;
         defaults) [[ "$roles" == 6 && "$automount" == true ]] || fail "$f: $roles RBAC objects, automount $automount" ;;
+        *) fail "no expectation for $f" ;;
     esac
     echo "ok: $f: $roles RBAC objects, the API token mounted: $automount"
 done

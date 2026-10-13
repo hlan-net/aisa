@@ -226,35 +226,7 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (st
 	changed := rec.clean(now, current, k.opts.Unwritten, k.opts.Grace)
 
 	if current != "" && slices.Contains(rec.hashes, current) {
-		// The Secret holds a key that aisa issued: clear its marks, restore what else was
-		// changed, and replace the key when it is due.
-		if _, ok := rec.unwritten[current]; ok {
-			delete(rec.unwritten, current)
-			changed = true
-		}
-		if _, ok := rec.superseded[current]; ok {
-			delete(rec.superseded, current)
-			changed = true
-		}
-		if rec.issuedAt.IsZero() {
-			// A key from before aisa recorded when it issued one: its age starts now.
-			rec.issuedAt = now
-			changed = true
-		}
-		if changed {
-			if err := k.write(ctx, name, rec); err != nil {
-				return StateError, err
-			}
-		}
-		if secret, err = k.restore(ctx, secret, name); err != nil {
-			return StateError, err
-		}
-		if k.opts.Rotation > 0 && now.Sub(rec.issuedAt) >= k.opts.Rotation {
-			if err := k.issue(ctx, name, t, rec, secret, IssueRotation); err != nil {
-				return StateError, err
-			}
-		}
-		return StateOK, nil
+		return k.keep(ctx, name, t, rec, secret, current, changed)
 	}
 
 	reason := IssueMissing
@@ -267,6 +239,40 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (st
 	}
 	if err := k.issue(ctx, name, t, rec, secret, reason); err != nil {
 		return StateError, err
+	}
+	return StateOK, nil
+}
+
+// keep handles a Secret that holds a key aisa issued: it clears the key's marks, restores what
+// else was changed, and replaces the key when it is due.
+func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, current string, changed bool) (string, error) {
+	now := k.opts.Now()
+	if _, ok := rec.unwritten[current]; ok {
+		delete(rec.unwritten, current)
+		changed = true
+	}
+	if _, ok := rec.superseded[current]; ok {
+		delete(rec.superseded, current)
+		changed = true
+	}
+	if rec.issuedAt.IsZero() {
+		// A key from before aisa recorded when it issued one: its age starts now.
+		rec.issuedAt = now
+		changed = true
+	}
+	if changed {
+		if err := k.write(ctx, name, rec); err != nil {
+			return StateError, err
+		}
+	}
+	secret, err := k.restore(ctx, secret, name)
+	if err != nil {
+		return StateError, err
+	}
+	if k.opts.Rotation > 0 && now.Sub(rec.issuedAt) >= k.opts.Rotation {
+		if err := k.issue(ctx, name, t, rec, secret, IssueRotation); err != nil {
+			return StateError, err
+		}
 	}
 	return StateOK, nil
 }

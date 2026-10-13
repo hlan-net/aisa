@@ -168,7 +168,8 @@ func run(args []string) error {
 	}
 
 	if cfg.Kubernetes.Enabled {
-		if err := runKubernetes(ctx, cfg, vc, cc, declarations, declared, m, log.With("component", "kubernetes")); err != nil {
+		src := kubeSources{vault: vc, consul: cc, declarations: declarations, declared: declared}
+		if err := runKubernetes(ctx, cfg, src, m, log.With("component", "kubernetes")); err != nil {
 			return err
 		}
 	} else {
@@ -202,10 +203,18 @@ func newQuotas(cfg config.Config, cc *consul.Client, m *metrics.Metrics, log *sl
 	return q, profiles, func() { _ = rdb.Close() }
 }
 
+// kubeSources are what the Kubernetes objects are made from: the consumers' declarations, a
+// signal of their changes, the hashes in Vault and the catalog in Consul.
+type kubeSources struct {
+	vault        *vault.Client
+	consul       *consul.Client
+	declarations *consumers.Declarations
+	declared     <-chan struct{}
+}
+
 // runKubernetes starts the passes over the consumers' Secrets and the Model objects, on the
 // replica that the leader's Lease elects.
-func runKubernetes(ctx context.Context, cfg config.Config, vc *vault.Client, cc *consul.Client,
-	declarations *consumers.Declarations, declared <-chan struct{}, m *metrics.Metrics, log *slog.Logger) error {
+func runKubernetes(ctx context.Context, cfg config.Config, src kubeSources, m *metrics.Metrics, log *slog.Logger) error {
 	// client-go logs through klog, its leader election included: into aisa's log, as JSON.
 	klog.SetSlogLogger(log)
 	rc, err := rest.InClusterConfig()
@@ -222,19 +231,19 @@ func runKubernetes(ctx context.Context, cfg config.Config, vc *vault.Client, cc 
 	}
 	k := cfg.Kubernetes
 	obs := newKubeObserver(m)
-	keys := kube.NewKeys(vc, k8s, declarations, log, kube.KeysOptions{
+	keys := kube.NewKeys(src.vault, k8s, src.declarations, log, kube.KeysOptions{
 		Mount: cfg.Vault.KVMount, Prefix: cfg.Vault.Prefix, BaseURL: k.ProxyURL, Install: k.Namespace,
 		Rotation: k.Rotation, Grace: k.Grace, OnIssue: obs.issued, OnPass: obs.secrets,
 	})
-	models := kube.NewModels(cc, dyn, log, kube.ModelsOptions{
+	models := kube.NewModels(src.consul, dyn, log, kube.ModelsOptions{
 		Service:      "aisa-backend",
-		Descriptions: consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
+		Descriptions: consul.KVPrefix{Client: src.consul, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
 		Endpoint:     k.ProxyURL,
 		Install:      k.Namespace,
 		OnPass:       obs.models,
 	})
 	go kube.Run(ctx, k8s, log, kube.RunOptions{
-		Namespace: k.Namespace, Identity: k.PodName, Lease: k.Lease, Resync: k.Resync, Trigger: declared,
+		Namespace: k.Namespace, Identity: k.PodName, Lease: k.Lease, Resync: k.Resync, Trigger: src.declared,
 		OnLeader: obs.leader,
 	},
 		kube.Pass{Name: metrics.KubeSecrets, Run: keys.Reconcile, Done: obs.passed(metrics.KubeSecrets)},

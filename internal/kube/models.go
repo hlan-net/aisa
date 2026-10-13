@@ -117,6 +117,22 @@ func (m *Models) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("read the model descriptions: %w", err)
 	}
 	stats := ModelStats{}
+	descs := m.descriptions(pairs, &stats)
+	models := offeredModels(instances, descs)
+	keep, errs := m.applyAll(ctx, models, &stats)
+
+	if err := m.removeStale(ctx, keep); err != nil {
+		errs = append(errs, err)
+	}
+	if m.opts.OnPass != nil {
+		m.opts.OnPass(stats)
+	}
+	return errors.Join(errs...)
+}
+
+// descriptions reads the models' descriptions; one that cannot be read is logged and counted,
+// and its model gets the default one.
+func (m *Models) descriptions(pairs []consul.Pair, stats *ModelStats) map[string]description {
 	descs := map[string]description{}
 	for _, p := range pairs {
 		if p.Key == "" || strings.HasSuffix(p.Key, "/") {
@@ -130,7 +146,12 @@ func (m *Models) Reconcile(ctx context.Context) error {
 		}
 		descs[p.Key] = d
 	}
+	return descs
+}
 
+// offeredModels returns the models of the backends the proxy renders, each available when one
+// of its backends passes its checks.
+func offeredModels(instances []consul.Instance, descs map[string]description) map[string]*offered {
 	models := map[string]*offered{}
 	for _, in := range instances {
 		if !usable(in.Meta) {
@@ -152,8 +173,12 @@ func (m *Models) Reconcile(ctx context.Context) error {
 			o.available = o.available || in.Passing
 		}
 	}
+	return models
+}
 
-	// Names that derive to one object name: neither gets an object.
+// applyAll creates or updates the object of each model, except for names that derive to one
+// object name, where neither gets one. It returns the objects to keep.
+func (m *Models) applyAll(ctx context.Context, models map[string]*offered, stats *ModelStats) (map[string]bool, []error) {
 	byObject := map[string][]string{}
 	for name := range models {
 		obj := DerivedName(name, "model")
@@ -186,14 +211,7 @@ func (m *Models) Reconcile(ctx context.Context) error {
 			}
 		}
 	}
-
-	if err := m.removeStale(ctx, keep); err != nil {
-		errs = append(errs, err)
-	}
-	if m.opts.OnPass != nil {
-		m.opts.OnPass(stats)
-	}
-	return errors.Join(errs...)
+	return keep, errs
 }
 
 // usable reports whether the proxy's template renders a backend (proxies/apisix/apisix.yaml.ctmpl):
