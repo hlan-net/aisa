@@ -160,7 +160,7 @@ isolated() {
     local sent
     sent=$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase')
     expect "$what: none of the client's headers to the provider" "" \
-        "$(grep -E '^(openai-|x-custom$|cookie$|authorization$|x-aisa-)' <<<"$sent" | grep -v '^x-aisa-no-key$' || true)"
+        "$(grep -E '^(openai-|x-custom$|cookie$|authorization$|x-aisa-)' <<<"$sent" || true)"
     expect "$what: not the client's User-Agent" "0" \
         "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers["User-Agent"][0] // ""' | grep -c client-sdk || true)"
     sleep 2
@@ -190,6 +190,24 @@ isolated "the provider refuses the key" "mock:error:401" 502 provider_error
 isolated "the provider limits the account" "mock:error:429" 429 provider_rate_limited
 isolated "the provider rejects the request" "mock:error:400" 400 invalid_request_error
 isolated "the provider fails" "mock:error:500" 500 provider_error
+# APISIX reads at most 100 request headers, its own included: a request with more is refused,
+# so none can hide behind the others; one with nearly that many passes, and the hop's headers
+# on top of them, which take it past 100, do not hide one of the client's from the model route.
+many=()
+for i in $(seq 1 110); do many+=(-H "X-Filler-$i: $i"); done
+expect "more than 100 request headers: refused" "431" "$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' "${many[@]}" \
+    -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
+many=()
+for i in $(seq 1 85); do many+=(-H "X-Filler-$i: $i"); done
+curl -fsS -o /dev/null -X DELETE "$MOCK_LOCAL/debug/last-request"
+expect "nearly 100 request headers: status" "200" "$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' "${many[@]}" \
+    -H 'OpenAI-Organization: org-client' -H 'X-Aisa-Consumer: smuggled' \
+    -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
+expect "nearly 100 request headers: none of them reaches the provider" "" \
+    "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase | select(test("^(openai-|x-filler-|x-aisa-)"))')"
+
 # A stream passes the response filters whole: every model route's response goes through them.
 curl -sS -D "$OUT/headers" -o "$OUT/body" -H 'Authorization: Bearer dev-key-chat-ui' -H 'Content-Type: application/json' \
     -d '{"model":"qwen3","stream":true,"messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions"

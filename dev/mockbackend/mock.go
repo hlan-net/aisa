@@ -89,6 +89,12 @@ func newServer(cfg Config, log *slog.Logger) http.Handler {
 		defer s.mu.Unlock()
 		devutil.WriteJSON(w, http.StatusOK, map[string]any{"headers": s.last})
 	})
+	mux.HandleFunc("DELETE /debug/last-request", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.last = nil
+		w.WriteHeader(http.StatusNoContent)
+	})
 	return mux
 }
 
