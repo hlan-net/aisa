@@ -148,8 +148,9 @@ The provider accounts are the holder's. Nothing about them reaches an applicatio
    | 429 | 429 | `provider_rate_limited` |
    | other 4xx | the same | `invalid_request_error` |
    | 5xx | the same | `provider_error` |
+   | none: the gateway could not reach one (5xx of its own) | the same | `gateway_error` |
 
-   The original goes to the gateway's log for the holder, cut to 1 KiB. The usage event reports the status the client got.
+   A provider's answer is told from the gateway's own by where it came from (APISIX: the response source `upstream`). The gateway's 5xx are replaced too, because their text can name a backend or an address; its 4xx are about the client's request and pass. The original goes to the gateway's log for the holder, cut to 1 KiB. The usage event reports the status the client got.
 4. **A backend with a key is reached only through a model route**: the internal listener is on `127.0.0.1`, and only the client-facing route, after the decision, sends requests to it. `fail_policy = "open"` on a backend with a key is the holder's explicit choice: requests without a decision then reach the paid account.
 
 The gateway's own answers (no backend, aisa unreachable) and aisa's are not a provider's, and are passed as they are. In APISIX the model route removes the request headers before `ai-proxy-multi`, which forwards every header of the request it gets, and a global rule filters the response of a model route. `runtime_test.sh` checks each rule against APISIX with a mock backend that names its account in headers and error bodies.

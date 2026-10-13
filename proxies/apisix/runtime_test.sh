@@ -34,6 +34,7 @@ DOLLAR_MODEL='vendor/$model'
 OUT=$(mktemp -d)
 cleanup() {
     curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test" || true
+    curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test-down" || true
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     rm -rf "$OUT"
 }
@@ -181,17 +182,22 @@ curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
 {"ID": "runtime-test", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
  "Meta": {"provider": "openai-compatible", "models": "$DOLLAR_MODEL", "fail_policy": "open"}}
 EOF
+# A backend that nothing answers on: the gateway's own error, not a provider's.
+curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "runtime-test-down", "Name": "aisa-backend", "Address": "mock-local", "Port": 1,
+ "Meta": {"provider": "openai-compatible", "models": "down-model"}}
+EOF
 
 echo "== aisa reachable"
 curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
 render "$OUT/reachable" http://stub-aisa:8080/v1/decide
 # The first render is promoted unchecked, and reported: the dev backends and the test's.
-expect "the first render is reported as promoted" "promoted 3 4" "$(renders)"
+expect "the first render is reported as promoted" "promoted 4 5" "$(renders)"
 proxy "$OUT/reachable"
 one "allowed" dev-key-chat-ui qwen3 200 chat-ui
 one "denied by a quota" dev-key-blocked qwen3 429 ""
 one "unknown key" wrong-key qwen3 401 ""
-models "the model list, a dollar in a name included" "cloud-large llama3.2 qwen3 $DOLLAR_MODEL"
+models "the model list, a dollar in a name included" "cloud-large down-model llama3.2 qwen3 $DOLLAR_MODEL"
 
 echo "== account isolation"
 isolated "a completion" "hello there" 200 none
@@ -229,6 +235,12 @@ curl -sS -D "$OUT/headers" -o "$OUT/body" -H "$CHAT_UI" -H "$JSON" \
     -d '{"model":"qwen3","stream":true,"messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions"
 expect "a stream: event stream" "text/event-stream" "$(grep -i '^content-type:' "$OUT/headers" | tr -d '\r' | awk '{print $2}' | cut -d';' -f1)"
 expect "a stream: ends with [DONE]" "data: [DONE]" "$(grep -v '^$' "$OUT/body" | tail -n1)"
+# The gateway cannot reach a provider: its own error, its status kept, and no text of its, which
+# can name a backend or an address.
+code=$(curl -sS -o "$OUT/body" -w "$STATUS" -H "$CHAT_UI" -H "$JSON" \
+    -d '{"model":"down-model","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")
+expect "no provider answers: the gateway's error" "500 gateway_error" "$code $(jq -r '.error.type' "$OUT/body")"
+expect "no provider answers: no backend or address named" "0" "$(grep -c -E 'mock-local|refused' "$OUT/body" || true)"
 logs=$(docker logs "$CONTAINER" 2>&1)
 grep -q 'provider error 401, answered as 502: .*sk-mock' <<<"$logs" ||
     fail "the provider's original error is not in the gateway's log"
@@ -236,6 +248,7 @@ ok "account isolation: the provider's original error is in the gateway's log, fo
 
 echo "== a model loses its last backend"
 curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test"
+curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test-down"
 render "$OUT/reachable-again" http://stub-aisa:8080/v1/decide
 proxy "$OUT/reachable-again"
 models "the model list after the next render" "cloud-large llama3.2 qwen3"

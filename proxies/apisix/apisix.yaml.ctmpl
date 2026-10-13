@@ -81,19 +81,32 @@ global_rules:
               if status < 400 then
                 return
               end
-              -- A provider's error: its status is mapped, and its body replaced below, so no
-              -- text of the provider's, which can name the account or the key, reaches a client.
-              local kind, message = "provider_error", "the provider could not answer this request"
-              if status == 401 or status == 403 then
-                status, message = 502, "the provider refused the gateway's credentials"
-              elseif status == 429 then
-                kind, message = "provider_rate_limited", "the provider is limiting the gateway's requests; try again later"
-              elseif status < 500 then
-                kind, message = "invalid_request_error", "the provider rejected the request"
+              local core = require("apisix.core")
+              local kind, message, from
+              if core.response.get_response_source(ctx) == "upstream" then
+                -- A provider's error: its status is mapped, and its body replaced below, so no
+                -- text of the provider's, which can name the account or the key, reaches a client.
+                from = "provider"
+                kind, message = "provider_error", "the provider could not answer this request"
+                if status == 401 or status == 403 then
+                  status, message = 502, "the provider refused the gateway's credentials"
+                elseif status == 429 then
+                  kind, message = "provider_rate_limited", "the provider is limiting the gateway's requests; try again later"
+                elseif status < 500 then
+                  kind, message = "invalid_request_error", "the provider rejected the request"
+                end
+              elseif status >= 500 then
+                -- The gateway's own failure to reach a provider: its text can name a backend or
+                -- an address, so it is replaced too, as the gateway's.
+                from = "gateway"
+                kind, message = "gateway_error", "the gateway could not reach a provider for this request"
+              else
+                -- The gateway's own answer about the request, such as a body it cannot read.
+                return
               end
               ctx.aisa_provider_error = {
-                status = ngx.status, seen = "",
-                body = require("apisix.core").json.encode({error = {message = message, type = kind}}),
+                from = from, status = ngx.status, seen = "",
+                body = core.json.encode({error = {message = message, type = kind}}),
               }
               ngx.status = status
               ngx.header["Content-Type"] = "application/json"
@@ -117,7 +130,7 @@ global_rules:
                 return
               end
               -- The original goes to the gateway's log, for the holder.
-              require("apisix.core").log.warn("provider error ", e.status, ", answered as ", ngx.status, ": ",
+              require("apisix.core").log.warn(e.from, " error ", e.status, ", answered as ", ngx.status, ": ",
                                               (e.seen:gsub("%s+$", "")))
               ngx.arg[1] = e.body
             end
