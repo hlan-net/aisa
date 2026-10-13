@@ -46,8 +46,8 @@ var (
 // value is left out of the gateway's config, and so out of the models on offer.
 var timeoutMeta = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
 
-// Catalog is where the backends are registered; consul.Client implements it.
-type Catalog interface {
+// HealthReader reads the backends registered in the catalog; consul.Client implements it.
+type HealthReader interface {
 	Health(ctx context.Context, service string) ([]consul.Instance, error)
 }
 
@@ -80,14 +80,14 @@ type ModelStats struct {
 
 // Models keeps one Model object per model that the proxy offers.
 type Models struct {
-	catalog Catalog
+	catalog HealthReader
 	dyn     dynamic.Interface
 	opts    ModelsOptions
 	log     *slog.Logger
 }
 
 // NewModels returns Models; call Reconcile for each pass.
-func NewModels(catalog Catalog, dyn dynamic.Interface, log *slog.Logger, opts ModelsOptions) *Models {
+func NewModels(catalog HealthReader, dyn dynamic.Interface, log *slog.Logger, opts ModelsOptions) *Models {
 	return &Models{catalog: catalog, dyn: dyn, opts: opts, log: log}
 }
 
@@ -164,16 +164,21 @@ func offeredModels(instances []consul.Instance, descs map[string]description) ma
 			}
 			o, ok := models[name]
 			if !ok {
-				o = &offered{name: name, desc: description{Features: []string{"TextGeneration"}}}
-				if d, ok := descs[name]; ok {
-					o.desc = d
-				}
+				o = newOffered(name, descs)
 				models[name] = o
 			}
 			o.available = o.available || in.Passing
 		}
 	}
 	return models
+}
+
+// newOffered is a model with its description, or the default one.
+func newOffered(name string, descs map[string]description) *offered {
+	if d, ok := descs[name]; ok {
+		return &offered{name: name, desc: d}
+	}
+	return &offered{name: name, desc: description{Features: []string{"TextGeneration"}}}
 }
 
 // applyAll creates or updates the object of each model, except for names that derive to one

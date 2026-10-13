@@ -68,8 +68,8 @@ type KV interface {
 	Write(ctx context.Context, mount, path string, data map[string]any, cas int) error
 }
 
-// Declarations are the consumers declared in Consul; consumers.Declarations implements it.
-type Declarations interface {
+// Snapshotter gives the consumers declared in Consul; consumers.Declarations implements it.
+type Snapshotter interface {
 	Snapshot() (valid map[string]consumers.Declaration, invalid map[string]bool, loaded bool)
 }
 
@@ -103,7 +103,7 @@ type KeysOptions struct {
 type Keys struct {
 	kv    KV
 	k8s   kubernetes.Interface
-	decls Declarations
+	decls Snapshotter
 	opts  KeysOptions
 	log   *slog.Logger
 
@@ -125,7 +125,7 @@ const (
 )
 
 // NewKeys returns Keys; call Reconcile for each pass.
-func NewKeys(kv KV, k8s kubernetes.Interface, decls Declarations, log *slog.Logger, opts KeysOptions) *Keys {
+func NewKeys(kv KV, k8s kubernetes.Interface, decls Snapshotter, log *slog.Logger, opts KeysOptions) *Keys {
 	if opts.Unwritten <= 0 {
 		opts.Unwritten = time.Minute
 	}

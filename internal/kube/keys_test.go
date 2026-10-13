@@ -521,22 +521,29 @@ func TestAFailedWriteIsFinishedByTheNextPass(t *testing.T) {
 			}
 			kt.now = kt.now.Add(2 * time.Minute)
 			kt.pass()
-			key := kt.key("news", "aisa")
-			if got := kt.kv.hashes(t, "batch-jobs"); !slices.Equal(got, []string{hashKey(key)}) {
-				t.Errorf("hashes = %v, want only the key in the Secret", got)
-			}
-			data := kt.kv.get(t, "batch-jobs")
-			if _, ok := data[fieldUnwritten]; ok {
-				t.Error("a mark was left")
-			}
-			if data[fieldIssuedAt] == nil {
-				t.Error("no issued_at")
-			}
-			// Counted once, also when the key reached the Secret and only its mark was left.
-			if !slices.Equal(kt.issued, []string{IssueNew}) {
-				t.Errorf("issued %v", kt.issued)
-			}
+			kt.checkIssuedOnce()
 		})
+	}
+}
+
+// checkIssuedOnce checks that batch-jobs has one key, in its Secret, issued and counted once.
+func (kt *keysTest) checkIssuedOnce() {
+	t := kt.t
+	t.Helper()
+	key := kt.key("news", "aisa")
+	if got := kt.kv.hashes(t, "batch-jobs"); !slices.Equal(got, []string{hashKey(key)}) {
+		t.Errorf("hashes = %v, want only the key in the Secret", got)
+	}
+	data := kt.kv.get(t, "batch-jobs")
+	if _, ok := data[fieldUnwritten]; ok {
+		t.Error("a mark was left")
+	}
+	if data[fieldIssuedAt] == nil {
+		t.Error("no issued_at")
+	}
+	// Counted once, also when the key reached the Secret and only its mark was left.
+	if !slices.Equal(kt.issued, []string{IssueNew}) {
+		t.Errorf("issued %v", kt.issued)
 	}
 }
 
