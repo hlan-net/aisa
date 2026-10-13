@@ -237,11 +237,16 @@ func TestAnObjectForAnotherModelIsNotTakenOver(t *testing.T) {
 	if _, err := mt.dyn.Resource(ModelGVR).Create(context.Background(), clash, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := mt.pass(); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := mt.pass(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if mt.stats.Conflicts != 1 {
 		t.Errorf("stats = %+v", mt.stats)
+	}
+	if o := mt.object("qwen3"); o == nil || o.GetAnnotations()[AnnotationModel] != "something-else" {
+		t.Errorf("the object was deleted or taken over: %v", o)
 	}
 }
 

@@ -38,8 +38,9 @@ func newMemKV() *memKV { return &memKV{data: map[string][]byte{}, versions: map[
 
 func (m *memKV) ReadVersion(_ context.Context, mount, path string) (map[string]any, int, error) {
 	b, ok := m.data[mount+"/"+path]
-	if !ok {
-		return nil, 0, vault.ErrNotFound
+	if !ok || b == nil {
+		// Never written, or its current version deleted: Vault answers with that version.
+		return nil, m.versions[mount+"/"+path], vault.ErrNotFound
 	}
 	var data map[string]any
 	if err := json.Unmarshal(b, &data); err != nil {
@@ -65,6 +66,9 @@ func (m *memKV) Write(_ context.Context, mount, path string, data map[string]any
 	m.versions[key]++
 	return nil
 }
+
+// del deletes the current version, as `vault kv delete` does: the version stays.
+func (m *memKV) del(name string) { m.data["secret/aisa/consumers/"+name] = nil }
 
 func (m *memKV) put(name string, data map[string]any) {
 	b, _ := json.Marshal(data)
@@ -107,6 +111,7 @@ type keysTest struct {
 	now    time.Time
 	issued []string
 	states map[string]int
+	err    error
 	keys   *Keys
 }
 
@@ -139,7 +144,7 @@ func (f readerFunc) Read(b []byte) (int, error) { return f(b) }
 
 func (kt *keysTest) pass() {
 	kt.t.Helper()
-	_ = kt.keys.Reconcile(context.Background())
+	kt.err = kt.keys.Reconcile(context.Background())
 }
 
 func (kt *keysTest) secret(ns, name string) *corev1.Secret {
@@ -583,5 +588,66 @@ func TestASecretThatCannotBeWrittenIsRetriedLater(t *testing.T) {
 	key := kt.key("news", "aisa")
 	if got := kt.kv.hashes(t, "batch-jobs"); !slices.Equal(got, []string{hashKey(key)}) {
 		t.Errorf("hashes = %v, want only the key in the Secret: the unwritten ones are removed", got)
+	}
+}
+
+func TestAKeyIsIssuedOnADeletedVaultSecret(t *testing.T) {
+	kt := newKeysTest(t, news())
+	kt.pass()
+	if err := kt.k8s.CoreV1().Secrets("news").Delete(context.Background(), "aisa", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	kt.kv.del("batch-jobs")
+	kt.pass()
+	if kt.err != nil || kt.secret("news", "aisa") == nil {
+		t.Fatalf("err %v: want a key issued on the deleted secret's version", kt.err)
+	}
+}
+
+func TestADroppedSecretTargetRevokesTheKeysFromVault(t *testing.T) {
+	// The Secret is gone before the declaration stops naming it: nothing in Kubernetes is left
+	// to start the revocation from.
+	kt := newKeysTest(t, news())
+	kt.pass()
+	if err := kt.k8s.CoreV1().Secrets("news").Delete(context.Background(), "aisa", metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	kt.decls.valid = map[string]consumers.Declaration{"batch-jobs": {QuotaProfile: "batch"}}
+	kt.pass()
+	if got := kt.kv.hashes(t, "batch-jobs"); len(got) != 0 {
+		t.Errorf("hashes = %v, want none", got)
+	}
+	// A consumer whose hashes the holder wrote by hand is left alone.
+	kt.kv.put("chat-ui", map[string]any{fieldHashes: hashKey("by-hand")})
+	kt.decls.valid["chat-ui"] = consumers.Declaration{}
+	kt.pass()
+	if got := kt.kv.hashes(t, "chat-ui"); len(got) != 1 {
+		t.Errorf("hand-written hashes = %v, want them kept", got)
+	}
+}
+
+func TestTheSecretStaysUntilItsHashesAreRevoked(t *testing.T) {
+	kt := newKeysTest(t, news())
+	kt.pass()
+	kt.decls.valid = map[string]consumers.Declaration{}
+	kt.kv.failWrite, kt.kv.fail = kt.kv.writes+1, errors.New("vault is down")
+	kt.pass()
+	if kt.err == nil || kt.secret("news", "aisa") == nil {
+		t.Fatalf("err %v: want an error and the Secret kept while its hashes are valid", kt.err)
+	}
+	kt.pass()
+	if kt.err != nil || kt.secret("news", "aisa") != nil || len(kt.kv.hashes(t, "batch-jobs")) != 0 {
+		t.Errorf("err %v: want the hashes revoked and the Secret deleted on the next pass", kt.err)
+	}
+}
+
+func TestAPassWithAFailedConsumerIsAnError(t *testing.T) {
+	kt := newKeysTest(t, map[string]consumers.Declaration{
+		"team/app": {Namespace: "news", Secret: "a"},
+		"fine":     {Namespace: "news", Secret: "b"},
+	})
+	kt.pass()
+	if kt.err == nil || !strings.Contains(kt.err.Error(), "team/app") || kt.secret("news", "b") == nil {
+		t.Errorf("err = %v, want the failed consumer named, and the others reconciled", kt.err)
 	}
 }

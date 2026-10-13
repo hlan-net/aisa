@@ -282,12 +282,20 @@ func (o kubeObserver) models(s kube.ModelStats) {
 	o.m.ModelDescriptionsInvalid.Set(float64(s.InvalidDescriptions))
 }
 
+// leader marks this replica as the one that writes, or not. A replica that stops clears what its
+// passes reported, so that only the leader's state is exported, and a fixed problem does not
+// stay in an old leader's gauges.
 func (o kubeObserver) leader(on bool) {
-	v := 0.0
 	if on {
-		v = 1
+		o.m.KubeLeader.Set(1)
+		return
 	}
-	o.m.KubeLeader.Set(v)
+	o.m.KubeLeader.Set(0)
+	o.m.ConsumerSecrets.Reset()
+	o.m.Models.Set(0)
+	o.m.ModelsAvailable.Set(0)
+	o.m.ModelConflicts.Set(0)
+	o.m.ModelDescriptionsInvalid.Set(0)
 }
 
 // passed returns the Done of a kind of pass.

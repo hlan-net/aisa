@@ -128,16 +128,21 @@ helm template aisa "$AISA" "${REQUIRED[@]}" --set kubernetes.proxyURL=https://ll
 grep -A1 'name: AISA_PROXY_URL' "$OUT/url.yaml" | grep -q '"https://llm.example.internal/v1"' || fail "kubernetes.proxyURL is not used"
 echo "ok: kubernetes.proxyURL replaces the proxy's Service"
 
-# Without kubernetes.enabled aisa gets no rights in the API and no token for it.
+# Without kubernetes.enabled aisa gets no rights in the API and no token for it. With it, the
+# token is mounted into aisa's container only, never automatically into the Vault Agent's: the
+# service account may read every Secret.
 for f in no-kubernetes defaults; do
     roles=$(grep -c '^kind: \(Cluster\)\?Role\(Binding\)\?$' "$OUT/$f.yaml" || true)
     automount=$(awk '/^kind:/{d = ($2 == "Deployment"); a = 0} d && /^  name: aisa$/{a = 1} a && /automountServiceAccountToken:/{print $2; exit}' "$OUT/$f.yaml")
+    # The containers of aisa's Deployment that mount the API token, by name.
+    mounts=$(awk '/^kind:/{d = ($2 == "Deployment"); a = 0} d && /^  name: aisa$/{a = 1}
+                  a && /^        - name: /{c = $3} a && /mountPath: \/var\/run\/secrets\/kubernetes.io\/serviceaccount/{print c}' "$OUT/$f.yaml" | tr '\n' ' ')
     case "$f" in
-        no-kubernetes) [[ "$roles" == 0 && "$automount" == false ]] || fail "$f: $roles RBAC objects, automount $automount" ;;
-        defaults) [[ "$roles" == 6 && "$automount" == true ]] || fail "$f: $roles RBAC objects, automount $automount" ;;
+        no-kubernetes) [[ "$roles" == 0 && "$automount" == false && -z "$mounts" ]] || fail "$f: $roles RBAC objects, automount $automount, token in: $mounts" ;;
+        defaults) [[ "$roles" == 6 && "$automount" == false && "$mounts" == "aisa " ]] || fail "$f: $roles RBAC objects, automount $automount, token in: $mounts" ;;
         *) fail "no expectation for $f" ;;
     esac
-    echo "ok: $f: $roles RBAC objects, the API token mounted: $automount"
+    echo "ok: $f: $roles RBAC objects, the API token in: ${mounts:-no container}"
 done
 grep -q '^kind: CustomResourceDefinition$' "$OUT/defaults.yaml" || fail "the Model CRD is not in the chart"
 echo "ok: the Model CRD is in the chart"

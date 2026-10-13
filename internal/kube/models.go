@@ -201,8 +201,10 @@ func (m *Models) applyAll(ctx context.Context, models map[string]*offered, stats
 			errs = append(errs, fmt.Errorf("model %q: %w", o.name, err))
 			keep[obj] = true
 		case !owned:
+			// Left alone: not changed here, and not deleted as stale either.
 			m.log.Error("a Model object of that name exists and is not this install's; it is left alone", "model", o.name, "object", obj)
 			stats.Conflicts++
+			keep[obj] = true
 		default:
 			keep[obj] = true
 			stats.Models++

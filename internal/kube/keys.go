@@ -157,6 +157,7 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 	}
 
 	states := map[string]int{StateOK: 0, StateNotOwned: 0, StateDuplicate: 0, StateError: 0}
+	var errs []error
 	for _, t := range sortedTargets(byTarget) {
 		names := byTarget[t]
 		if len(names) > 1 {
@@ -171,18 +172,49 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 		if err != nil {
 			k.log.Error("reconciling the consumer's Secret failed", "consumer", names[0],
 				"namespace", t.namespace, "secret", t.name, "error", err)
+			if state == StateError {
+				errs = append(errs, fmt.Errorf("consumer %q: %w", names[0], err))
+			}
 		}
 		states[state]++
 	}
 
-	err := k.removeStale(ctx, valid, invalid)
-	if err != nil {
+	if err := k.removeStale(ctx, valid, invalid); err != nil {
 		k.log.Error("removing the Secrets of removed consumers failed", "error", err)
+		errs = append(errs, err)
+	}
+	if err := k.revokeDropped(ctx, valid); err != nil {
+		errs = append(errs, err)
 	}
 	if k.opts.OnPass != nil {
 		k.opts.OnPass(states)
 	}
-	return err
+	return errors.Join(errs...)
+}
+
+// revokeDropped removes the hashes of the keys aisa issued to consumers that are declared and no
+// longer name a Secret, from Vault's side: it holds even when their Secret is already gone, or
+// a revocation failed after it was deleted. A key aisa issued has issued_at; the hashes of a
+// consumer that never had a Secret are left as the holder wrote them.
+func (k *Keys) revokeDropped(ctx context.Context, valid map[string]consumers.Declaration) error {
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(valid)) {
+		if valid[name].Namespace != "" || strings.Contains(name, "/") {
+			continue
+		}
+		rec, err := k.read(ctx, name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("consumer %q: %w", name, err))
+			continue
+		}
+		if rec.issuedAt.IsZero() {
+			continue
+		}
+		if err := k.revoke(ctx, name, rec); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func sortedTargets(m map[target][]string) []target {
@@ -340,6 +372,19 @@ func (k *Keys) removeStale(ctx context.Context, valid map[string]consumers.Decla
 		if declared && decl.Namespace == s.Namespace && decl.Secret == s.Name {
 			continue
 		}
+		// The hashes go first: when that fails, the Secret stays, and the next pass tries again.
+		// A consumer moved to another Secret keeps them: the next pass issues a key there and
+		// supersedes these.
+		if !declared || decl.Namespace == "" {
+			rec, err := k.read(ctx, name)
+			if err == nil {
+				err = k.revoke(ctx, name, rec)
+			}
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
 		err := k.k8s.CoreV1().Secrets(s.Namespace).Delete(ctx, s.Name, metav1.DeleteOptions{
 			Preconditions: &metav1.Preconditions{UID: &s.UID},
 		})
@@ -349,23 +394,15 @@ func (k *Keys) removeStale(ctx context.Context, valid map[string]consumers.Decla
 		}
 		k.log.Info("deleted the Secret of a consumer that no longer names it", "consumer", name,
 			"namespace", s.Namespace, "secret", s.Name)
-		if declared && decl.Namespace != "" {
-			// Moved to another Secret: the next pass issues a key there and supersedes this one.
-			continue
-		}
-		if err := k.revoke(ctx, name); err != nil {
-			errs = append(errs, err)
-		}
 	}
 	return errors.Join(errs...)
 }
 
 // revoke removes the hashes of a consumer that is no longer declared, or no longer names a
 // Secret.
-func (k *Keys) revoke(ctx context.Context, name string) error {
-	rec, err := k.read(ctx, name)
-	if err != nil || rec.version == 0 {
-		return err
+func (k *Keys) revoke(ctx context.Context, name string, rec *record) error {
+	if len(rec.hashes) == 0 && len(rec.unwritten) == 0 && len(rec.superseded) == 0 && rec.issuedAt.IsZero() {
+		return nil
 	}
 	rec.hashes = nil
 	clear(rec.unwritten)
@@ -450,7 +487,8 @@ func (k *Keys) read(ctx context.Context, name string) (*record, error) {
 	data, version, err := k.kv.ReadVersion(ctx, k.opts.Mount, k.path(name))
 	switch {
 	case errors.Is(err, vault.ErrNotFound):
-		data, version = map[string]any{}, 0
+		// A secret whose current version is deleted keeps that version for check-and-set.
+		data = map[string]any{}
 	case err != nil:
 		return nil, fmt.Errorf("read the consumer's hashes: %w", err)
 	}

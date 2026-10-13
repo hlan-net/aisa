@@ -472,3 +472,26 @@ func TestWriteWithCheckAndSet(t *testing.T) {
 		t.Fatalf("after the second write: %v at %d", data, v)
 	}
 }
+
+func TestADeletedVersionKeepsItsNumberForCheckAndSet(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+	}{
+		// Vault's KV v2 answers a read of a deleted current version with 404 and its metadata.
+		"404 with metadata": {http.StatusNotFound, `{"data":{"data":null,"metadata":{"deletion_time":"2026-01-01T00:00:00Z","version":4}}}`},
+		"200 with metadata": {http.StatusOK, `{"data":{"data":null,"metadata":{"destroyed":true,"version":4}}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeStatus(w, tc.status, tc.body)
+			}))
+			defer srv.Close()
+			c, _ := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+			_, v, err := c.ReadVersion(context.Background(), "secret", "aisa/consumers/batch-jobs")
+			if !errors.Is(err, ErrNotFound) || v != 4 {
+				t.Errorf("ReadVersion = %d, %v; want 4, ErrNotFound", v, err)
+			}
+		})
+	}
+}

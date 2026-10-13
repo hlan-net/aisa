@@ -24,9 +24,12 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "aisa.serviceAccountName" . }}
-      # The token for the Kubernetes API, when aisa writes the consumers' Secrets and the Models.
-      # The one for Vault's Kubernetes auth is projected below with Vault's audience.
-      automountServiceAccountToken: {{ .Values.kubernetes.enabled }}
+      # No token in every container: the one for the Kubernetes API, when aisa writes the
+      # consumers' Secrets and the Models, is projected into aisa's container only, where
+      # client-go looks for it, and the one for Vault's Kubernetes auth is projected with Vault's
+      # audience. The Vault Agent next to aisa gets neither: the service account may read
+      # Secrets in every namespace.
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
@@ -142,6 +145,9 @@ spec:
             capabilities: {drop: [ALL]}
           volumeMounts:
             - {name: serviceaccount, mountPath: /var/run/secrets/aisa/serviceaccount, readOnly: true}
+            {{- if .Values.kubernetes.enabled }}
+            - {name: kube-api, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}
+            {{- end }}
             {{- if $consulToken }}
             - {name: tokens, mountPath: /vault, readOnly: true}
             {{- end }}
@@ -160,6 +166,18 @@ spec:
                   {{- with .Values.vault.auth.audience }}
                   audience: {{ . | quote }}
                   {{- end }}
+        {{- if .Values.kubernetes.enabled }}
+        # What automountServiceAccountToken would mount, for aisa's container alone.
+        - name: kube-api
+          projected:
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+              - downwardAPI:
+                  items: [{path: namespace, fieldRef: {fieldPath: metadata.namespace}}]
+        {{- end }}
         {{- if $consulToken }}
         - name: vault-agent
           configMap: {name: {{ include "aisa.fullname" . }}-vault-agent}

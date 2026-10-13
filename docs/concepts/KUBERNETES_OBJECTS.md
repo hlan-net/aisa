@@ -105,7 +105,7 @@ aisa then:
    An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret, and it is valid from the moment it appears there.
 3. **Clears the mark**: removes the hash from `unwritten_sha256`, again in one write.
 4. **Rotates the key** with the same three steps when it is `AISA_KEY_ROTATION_INTERVAL` old (30 days by default; `0` never rotates), keeping the old hash in `key_sha256` and removing it after a grace period (`AISA_KEY_ROTATION_GRACE`, 7 days by default). The same write records the old hash with the time in `superseded_sha256`, so the grace period survives a restart. A pod that read the key into its environment keeps the old one until it restarts, so it must restart within the grace period (a restarter such as Reloader does it), or mount the Secret as a file and read it again.
-5. **Deletes** the Secret and the hashes when the consumer is removed from Consul, or its declaration no longer names a Secret. When it names another Secret, the old one is deleted and the new one gets a new key, the old key's hash staying for the grace period. A consumer whose declaration cannot be read is left as it is.
+5. **Deletes** the Secret and the hashes when the consumer is removed from Consul, or its declaration no longer names a Secret: the hashes first, so a failure leaves the Secret for the next pass to try again. A consumer that is still declared and names no Secret loses the hashes of the keys aisa issued (those with `issued_at`) even when its Secret is already gone; the hashes of a consumer that never had a Secret are the holder's and stay. When it names another Secret, the old one is deleted and the new one gets a new key, the old key's hash staying for the grace period. A consumer whose declaration cannot be read is left as it is.
 
 **Reconciling is restart-safe, and accepts only keys aisa issued.** Every hash in `key_sha256` was added by aisa before its key was written anywhere, so a key written into the Secret by anyone else never becomes valid. Each pass compares the Secret with Vault and repairs the difference, so a crash between any two steps is finished on the next pass:
 
@@ -125,7 +125,7 @@ This is option 1 of [#32](https://github.com/hlan-net/aisa/issues/32) with aisa 
 
 ## What aisa needs
 
-- **Kubernetes API access**: create, update and delete `Model` objects (cluster-wide), and Secrets in the namespaces of its consumers. The chart gives aisa a ClusterRole for both (open question 2), and the token for the API alongside the one it projects for Vault.
+- **Kubernetes API access**: create, update and delete `Model` objects (cluster-wide), and Secrets in the namespaces of its consumers. The chart gives aisa a ClusterRole for both (open question 2), and projects the token for the API into aisa's container only: the Vault Agent next to it gets none, since the service account may read Secrets in every namespace.
 - **Write access in Vault** to `secret/aisa/consumers/*` for the hashes: `create`, `read` and `update` ([`VAULT.md`](./VAULT.md#who-reads-what)).
 - **Read access to the nodes in Consul**, for the health of the backends ([`CONSUL.md`](./CONSUL.md#acls)).
 - **The CRD**, shipped in aisa's chart ([`ARCHITECTURE.md`](./ARCHITECTURE.md#packaging-and-deployment)).

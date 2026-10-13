@@ -167,7 +167,8 @@ func TestKubeObserver(t *testing.T) {
 		}
 	}
 	o.leader(false)
-	if testutil.ToFloat64(m.KubeLeader) != 0 {
-		t.Error("leader stays 1 after the Lease is lost")
+	if testutil.ToFloat64(m.KubeLeader) != 0 || testutil.ToFloat64(m.ModelConflicts) != 0 ||
+		testutil.CollectAndCount(m.ConsumerSecrets) != 0 {
+		t.Error("a replica that lost the Lease still exports its passes' state")
 	}
 }

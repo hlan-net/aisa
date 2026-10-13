@@ -26,7 +26,9 @@ type RunOptions struct {
 	Resync time.Duration
 	// Trigger starts a pass at once, such as after a change of the consumers' declarations.
 	Trigger <-chan struct{}
-	// OnLeader is called with true when this replica starts to write and false when it stops.
+	// OnLeader is called with true when this replica starts to write, and with false when it
+	// has stopped: after its last pass has returned, so that nothing the passes report comes
+	// after it.
 	OnLeader func(bool)
 }
 
@@ -56,10 +58,10 @@ func Run(ctx context.Context, k8s kubernetes.Interface, log *slog.Logger, opts R
 					log.Info("this replica writes the Kubernetes objects", "lease", opts.Lease)
 					leader(true)
 					Loop(lctx, log, opts.Resync, opts.Trigger, passes...)
+					leader(false)
 				},
 				OnStoppedLeading: func() {
 					log.Info("this replica no longer writes the Kubernetes objects", "lease", opts.Lease)
-					leader(false)
 				},
 			},
 		})
