@@ -512,6 +512,30 @@ func TestAMovedConsumerGetsANewSecretAndKey(t *testing.T) {
 	}
 }
 
+func TestAMovedConsumerKeepsItsOldSecretUntilTheNewOneIsThere(t *testing.T) {
+	kt := newKeysTest(t, news())
+	kt.pass()
+	old := kt.key("news", "aisa")
+	failing := true
+	kt.k8s.PrependReactor("create", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if failing {
+			return true, nil, errors.New(`namespaces "reports" not found`)
+		}
+		return false, nil, nil
+	})
+	kt.decls.valid = map[string]consumers.Declaration{"batch-jobs": {Namespace: "reports", Secret: "llm"}}
+	kt.pass()
+	if kt.states[StateError] != 1 || kt.key("news", "aisa") != old {
+		t.Fatalf("states %v: the old Secret went before the new one was written", kt.states)
+	}
+	failing = false
+	kt.now = kt.now.Add(2 * time.Minute)
+	kt.pass()
+	if kt.secret("news", "aisa") != nil || kt.key("reports", "llm") == "" {
+		t.Error("want the new Secret written and then the old one deleted")
+	}
+}
+
 func TestAConsumerWhoseDeclarationCannotBeReadKeepsItsSecret(t *testing.T) {
 	kt := newKeysTest(t, news())
 	kt.pass()

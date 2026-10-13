@@ -158,8 +158,9 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 	}
 
 	states := map[string]int{StateOK: 0, StateNotOwned: 0, StateDuplicate: 0, StateError: 0}
-	// Left as they are, Secrets included: the consumers whose declaration cannot be read, and
-	// those that name one Secret together.
+	// Left as they are, Secrets included: the consumers whose declaration cannot be read, those
+	// that name one Secret together, and those whose Secret this pass could not bring in step,
+	// so that a consumer moved to another Secret keeps the old one until the new one is there.
 	hold := maps.Clone(invalid)
 	var errs []error
 	for _, t := range sortedTargets(byTarget) {
@@ -176,6 +177,9 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 			continue
 		}
 		state, err := k.reconcileConsumer(ctx, names[0], t)
+		if state != StateOK {
+			hold[names[0]] = true
+		}
 		if err != nil {
 			k.log.Error("reconciling the consumer's Secret failed", "consumer", names[0],
 				"namespace", t.namespace, "secret", t.name, "error", err)
@@ -373,8 +377,8 @@ func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, se
 
 // removeStale deletes the Secrets of this install whose consumer no longer names them, and
 // the hashes of consumers no longer declared. A consumer in hold is left as it is: one whose
-// declaration cannot be read, where aisa cannot tell what it names, and one that names a Secret
-// with another consumer, until the holder resolves it.
+// declaration cannot be read, where aisa cannot tell what it names, one that names a Secret
+// with another consumer, until the holder resolves it, and one whose new Secret is not there yet.
 func (k *Keys) removeStale(ctx context.Context, valid map[string]consumers.Declaration, hold map[string]bool) error {
 	selector := labels.Set{LabelManagedBy: ManagedBy, LabelInstall: k.opts.Install}.String() + "," + LabelConsumer
 	list, err := k.k8s.CoreV1().Secrets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: selector})
