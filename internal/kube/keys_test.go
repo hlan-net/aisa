@@ -444,6 +444,30 @@ func TestConsumersThatNameOneSecretAreNotReconciled(t *testing.T) {
 	}
 }
 
+func TestConsumersMovedOntoOneSecretKeepTheirOldOnes(t *testing.T) {
+	kt := newKeysTest(t, map[string]consumers.Declaration{
+		"a": {Namespace: "news", Secret: "a"},
+		"b": {Namespace: "news", Secret: "b"},
+	})
+	kt.pass()
+	keyA, keyB := kt.key("news", "a"), kt.key("news", "b")
+	// Both are moved onto one Secret: a conflict, which leaves their Secrets and hashes alone.
+	kt.decls.valid = map[string]consumers.Declaration{
+		"a": {Namespace: "news", Secret: "shared"},
+		"b": {Namespace: "news", Secret: "shared"},
+	}
+	kt.pass()
+	if kt.err != nil || kt.states[StateDuplicate] != 2 {
+		t.Fatalf("states %v, err %v", kt.states, kt.err)
+	}
+	if kt.key("news", "a") != keyA || kt.key("news", "b") != keyB || kt.secret("news", "shared") != nil {
+		t.Error("a conflict changed the consumers' Secrets")
+	}
+	if !slices.Equal(kt.kv.hashes(t, "a"), []string{hashKey(keyA)}) || !slices.Equal(kt.kv.hashes(t, "b"), []string{hashKey(keyB)}) {
+		t.Error("a conflict changed the consumers' hashes")
+	}
+}
+
 func TestARemovedConsumerLosesItsSecretAndItsHashes(t *testing.T) {
 	for name, decls := range map[string]map[string]consumers.Declaration{
 		"undeclared":          {},

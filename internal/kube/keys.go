@@ -158,6 +158,9 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 	}
 
 	states := map[string]int{StateOK: 0, StateNotOwned: 0, StateDuplicate: 0, StateError: 0}
+	// Left as they are, Secrets included: the consumers whose declaration cannot be read, and
+	// those that name one Secret together.
+	hold := maps.Clone(invalid)
 	var errs []error
 	for _, t := range sortedTargets(byTarget) {
 		names := byTarget[t]
@@ -167,6 +170,9 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 			k.log.Error("consumers name the same Secret; none of them is reconciled",
 				"consumers", names, "namespace", t.namespace, "secret", t.name)
 			states[StateDuplicate] += len(names)
+			for _, name := range names {
+				hold[name] = true
+			}
 			continue
 		}
 		state, err := k.reconcileConsumer(ctx, names[0], t)
@@ -180,7 +186,7 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 		states[state]++
 	}
 
-	if err := k.removeStale(ctx, valid, invalid); err != nil {
+	if err := k.removeStale(ctx, valid, hold); err != nil {
 		k.log.Error("removing the Secrets of removed consumers failed", "error", err)
 		errs = append(errs, err)
 	}
@@ -366,9 +372,10 @@ func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, se
 }
 
 // removeStale deletes the Secrets of this install whose consumer no longer names them, and
-// the hashes of consumers no longer declared. A consumer whose declaration cannot be read is
-// left as it is: aisa cannot tell what it names.
-func (k *Keys) removeStale(ctx context.Context, valid map[string]consumers.Declaration, invalid map[string]bool) error {
+// the hashes of consumers no longer declared. A consumer in hold is left as it is: one whose
+// declaration cannot be read, where aisa cannot tell what it names, and one that names a Secret
+// with another consumer, until the holder resolves it.
+func (k *Keys) removeStale(ctx context.Context, valid map[string]consumers.Declaration, hold map[string]bool) error {
 	selector := labels.Set{LabelManagedBy: ManagedBy, LabelInstall: k.opts.Install}.String() + "," + LabelConsumer
 	list, err := k.k8s.CoreV1().Secrets(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
@@ -378,7 +385,7 @@ func (k *Keys) removeStale(ctx context.Context, valid map[string]consumers.Decla
 	for i := range list.Items {
 		s := &list.Items[i]
 		name := s.Annotations[AnnotationConsumer]
-		if name == "" || !k.owns(s, name) || invalid[name] {
+		if name == "" || !k.owns(s, name) || hold[name] {
 			continue
 		}
 		decl, declared := valid[name]

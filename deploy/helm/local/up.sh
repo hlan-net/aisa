@@ -196,9 +196,13 @@ echo "== the consumer $CONSUMER"
 # Declared in Consul with the namespace and Secret of its application. aisa issues its key and
 # writes the Secret; it never takes over a Secret of that name that is not its own.
 ensure_ns "$APP_NS"
+# A Secret of that name is this setup's only with aisa's labels, this install's namespace and this
+# consumer's exact name: aisa leaves any other alone, and its key would not be this consumer's.
 taken=$("${K[@]}" -n "$APP_NS" get secret aisa --ignore-not-found -o json |
-    jq -r 'select(.metadata.labels["app.kubernetes.io/managed-by"] != "aisa") | .metadata.name')
-[[ -z "$taken" ]] || fail "the namespace $APP_NS has a Secret aisa that is not aisa's (another APP_NAMESPACE, or remove it)"
+    jq -r --arg ns "$NS" --arg consumer "$CONSUMER" 'select(.metadata.labels["app.kubernetes.io/managed-by"] != "aisa"
+        or .metadata.labels["aisa.hlan.net/install"] != $ns
+        or .metadata.annotations["aisa.hlan.net/consumer-name"] != $consumer) | .metadata.name')
+[[ -z "$taken" ]] || fail "the namespace $APP_NS has a Secret aisa that is not this consumer's of this install (another APP_NAMESPACE, or remove it)"
 consul kv put "aisa/consumers/$CONSUMER" "$(jq -cn --arg ns "$APP_NS" '{quota_profile: "interactive", namespace: $ns, secret: "aisa"}')" >/dev/null
 ok "consumer $CONSUMER declared, its Secret to be aisa in $APP_NS"
 
