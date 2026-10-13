@@ -123,6 +123,12 @@ events() {
     curl -fsS "$STUB/debug/requests?kind=usage" | jq -c '.[].body | if type == "array" then .[] else . end'
 }
 
+# outcomes: the status and consumer of each usage event since the last clear, one per line.
+OUTCOME='"\(.status) \(.consumer // "")"'
+outcomes() {
+    events | jq -r "$OUTCOME"
+}
+
 # one <description> <key> <model> <status> <consumer>: sends one request and checks its status
 # and that exactly one usage event reports it, with that status and consumer.
 one() {
@@ -133,7 +139,7 @@ one() {
     local got
     got=$(events)
     expect "$what: one usage event" "1" "$(grep -c . <<<"$got" || true)"
-    expect "$what: event status and consumer" "$status $consumer" "$(jq -r '"\(.status) \(.consumer // "")"' <<<"$got")"
+    expect "$what: event status and consumer" "$status $consumer" "$(jq -r "$OUTCOME" <<<"$got")"
     if [[ "$status" == 200 ]]; then
         # Served: the event is the internal hop's, with the backend's token counts.
         expect "$what: event has the token counts" "true" "$(jq -r '(.prompt_tokens | tonumber) > 0' <<<"$got")"
@@ -168,7 +174,7 @@ isolated() {
         "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers["User-Agent"][0] // ""' | grep -c client-sdk || true)"
     sleep 2
     expect "$what: one usage event, with the client's status and consumer" "$status chat-ui" \
-        "$(events | jq -r '"\(.status) \(.consumer // "")"' | tr '\n' ' ' | sed 's/ $//')"
+        "$(outcomes | tr '\n' ' ' | sed 's/ $//')"
 }
 
 curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
@@ -204,7 +210,7 @@ expect "more than 100 request headers: refused" "431" "$(curl -sS -o /dev/null -
     -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
 sleep 2
 expect "more than 100 request headers: reported, with no consumer of the client's" "431 " \
-    "$(events | jq -r '"\(.status) \(.consumer // "")"')"
+    "$(outcomes)"
 many=()
 for i in $(seq 1 85); do many+=(-H "X-Filler-$i: $i"); done
 curl -fsS -o /dev/null -X DELETE "$MOCK_LOCAL/debug/last-request"
@@ -216,7 +222,7 @@ expect "nearly 100 request headers: none of them reaches the provider" "" \
     "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase | select(test("^(openai-|x-filler-|x-aisa-)"))')"
 sleep 2
 expect "nearly 100 request headers: reported under the consumer aisa named" "200 chat-ui" \
-    "$(events | jq -r '"\(.status) \(.consumer // "")"' | tail -n1)"
+    "$(outcomes | tail -n1)"
 
 # A stream passes the response filters whole: every model route's response goes through them.
 curl -sS -D "$OUT/headers" -o "$OUT/body" -H "$CHAT_UI" -H "$JSON" \
