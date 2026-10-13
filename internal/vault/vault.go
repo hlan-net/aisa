@@ -385,7 +385,11 @@ func (c *Client) do(ctx context.Context, method, path, token string, body []byte
 	if out == nil {
 		return nil
 	}
-	if err := json.Unmarshal(data, out); err != nil {
+	// Numbers in a secret's data stay as written (json.Number): aisa writes back the fields it
+	// does not know, and a float64 would round an integer above 2^53.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(out); err != nil {
 		return fmt.Errorf("vault %s %s: decode answer: %w", method, path, err)
 	}
 	return nil

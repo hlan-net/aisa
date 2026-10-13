@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -470,6 +471,34 @@ func TestWriteWithCheckAndSet(t *testing.T) {
 	}
 	if data, v, _ := c.ReadVersion(ctx, "secret", path); v != 2 || data["key_sha256"] != "a,b" {
 		t.Fatalf("after the second write: %v at %d", data, v)
+	}
+}
+
+func TestNumbersInASecretAreWrittenBackAsTheyWere(t *testing.T) {
+	var written string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			b, _ := io.ReadAll(r.Body)
+			written = string(b)
+			_, _ = w.Write([]byte(`{"data":{"version":2}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"data":{"key_sha256":"a","holder_id":9007199254740993},"metadata":{"version":1}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(Options{Addr: srv.URL, Auth: TokenAuth{Token: "root"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, v, err := c.ReadVersion(context.Background(), "secret", "aisa/consumers/batch-jobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Write(context.Background(), "secret", "aisa/consumers/batch-jobs", data, v); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(written, `"holder_id":9007199254740993`) {
+		t.Errorf("written %s: an integer above 2^53 was changed", written)
 	}
 }
 
