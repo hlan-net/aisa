@@ -242,9 +242,10 @@ code=$(curl -sS -o "$OUT/body" -w "$STATUS" -H "$CHAT_UI" -H "$JSON" \
 expect "no provider answers: the gateway's error" "500 gateway_error" "$code $(jq -r '.error.type' "$OUT/body")"
 expect "no provider answers: no backend or address named" "0" "$(grep -c -E 'mock-local|refused' "$OUT/body" || true)"
 logs=$(docker logs "$CONTAINER" 2>&1)
-grep -q 'provider error 401, answered as 502: .*sk-mock' <<<"$logs" ||
-    fail "the provider's original error is not in the gateway's log"
-ok "account isolation: the provider's original error is in the gateway's log, for the holder"
+grep -q 'provider error 401, answered as 502: type=invalid_request_error code=mock_error' <<<"$logs" ||
+    fail "the provider's error is not in the gateway's log"
+ok "account isolation: what the provider's error was is in the gateway's log, for the holder"
+expect "account isolation: no text of the provider's in the gateway's log" "0" "$(grep -c -E 'sk-mock|org-mock' <<<"$logs" || true)"
 
 echo "== a model loses its last backend"
 curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test"
