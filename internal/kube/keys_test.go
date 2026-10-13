@@ -528,11 +528,41 @@ func TestAMovedConsumerKeepsItsOldSecretUntilTheNewOneIsThere(t *testing.T) {
 	if kt.states[StateError] != 1 || kt.key("news", "aisa") != old {
 		t.Fatalf("states %v: the old Secret went before the new one was written", kt.states)
 	}
+	// However long the move fails, the old key stays valid: its grace period has not begun.
+	kt.now = kt.now.Add(8 * 24 * time.Hour)
+	kt.pass()
+	if !slices.Contains(kt.kv.hashes(t, "batch-jobs"), hashKey(old)) {
+		t.Fatal("the old key was revoked while the move failed")
+	}
 	failing = false
-	kt.now = kt.now.Add(2 * time.Minute)
+	kt.now = kt.now.Add(time.Hour)
 	kt.pass()
 	if kt.secret("news", "aisa") != nil || kt.key("reports", "llm") == "" {
 		t.Error("want the new Secret written and then the old one deleted")
+	}
+	if got := kt.kv.get(t, "batch-jobs")[fieldSuperseded]; got == nil {
+		t.Error("the old key's grace period did not begin once the new Secret was written")
+	}
+}
+
+func TestAKeyWrittenBeforeACrashSupersedesTheOldOnes(t *testing.T) {
+	kt := newKeysTest(t, news())
+	kt.pass()
+	old := kt.key("news", "aisa")
+	// A rotation whose last write, clearing the mark, fails: the next pass finishes it.
+	kt.now = kt.now.Add(30 * 24 * time.Hour)
+	kt.kv.failWrite, kt.kv.fail = kt.kv.writes+2, errors.New("vault is down")
+	kt.pass()
+	kt.kv.fail = nil
+	kt.pass()
+	data := kt.kv.get(t, "batch-jobs")
+	if kt.key("news", "aisa") == old || data[fieldUnwritten] != nil || data[fieldSuperseded] == nil {
+		t.Errorf("Vault = %v: want the mark cleared and the old key superseded", data)
+	}
+	kt.now = kt.now.Add(8 * 24 * time.Hour)
+	kt.pass()
+	if slices.Contains(kt.kv.hashes(t, "batch-jobs"), hashKey(old)) {
+		t.Error("the old key outlived its grace period")
 	}
 }
 

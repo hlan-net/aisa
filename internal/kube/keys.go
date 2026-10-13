@@ -298,9 +298,10 @@ func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, sec
 	now := k.opts.Now()
 	if at, ok := rec.unwritten[current]; ok {
 		// The key reached the Secret, and the pass that wrote it did not clear its mark: it
-		// was issued then.
+		// was issued then, and the keys before it are superseded since.
 		delete(rec.unwritten, current)
 		rec.issuedAt = at
+		rec.supersede(current, at)
 		changed = true
 	}
 	if _, ok := rec.superseded[current]; ok {
@@ -331,9 +332,10 @@ func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, sec
 
 // issue gives the consumer a new key in three steps, each of which a later pass can finish:
 // the hash becomes valid in Vault with a mark, the key is written to the Secret, the mark is
-// cleared. The hashes the consumer had are superseded and stay valid for the grace period.
-// issued_at changes with the last step only: until the key reaches the Secret, the key that the
-// Secret holds stays due, and a rotation whose Secret write failed is tried again.
+// cleared. The hashes the consumer had are superseded with the last step, and stay valid for the
+// grace period. Until the key reaches the Secret nothing else changes: the key that the
+// consumer's Secret holds, the new one's or, while a move fails, the old one's, stays valid and,
+// when it is due, due, so a failed rotation is tried again.
 func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, reason string) error {
 	if r, ok := k.backoff[name]; ok && k.opts.Now().Before(r.at) {
 		return fmt.Errorf("the last attempt to write the Secret failed; the next one is at %s", r.at.UTC().Format(time.RFC3339))
@@ -344,11 +346,6 @@ func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, se
 	}
 	hash := hashKey(key)
 	now := k.opts.Now()
-	for _, old := range rec.hashes {
-		if _, ok := rec.superseded[old]; !ok {
-			rec.superseded[old] = now
-		}
-	}
 	rec.hashes = append(rec.hashes, hash)
 	rec.unwritten[hash] = now
 	if err := k.write(ctx, name, rec); err != nil {
@@ -368,8 +365,9 @@ func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, se
 	}
 	delete(rec.unwritten, hash)
 	rec.issuedAt = now
+	rec.supersede(hash, now)
 	if err := k.write(ctx, name, rec); err != nil {
-		// The next pass clears the mark and sets issued_at: the Secret holds the key.
+		// The next pass finishes this write: the Secret holds the key.
 		return fmt.Errorf("clear the new key's mark: %w", err)
 	}
 	return nil
@@ -546,6 +544,15 @@ func (k *Keys) write(ctx context.Context, name string, r *record) error {
 	r.data = data
 	r.version++
 	return nil
+}
+
+// supersede starts the grace period of every hash but current that has none yet.
+func (r *record) supersede(current string, at time.Time) {
+	for _, h := range r.hashes {
+		if _, ok := r.superseded[h]; !ok && h != current {
+			r.superseded[h] = at
+		}
+	}
 }
 
 // clean removes the hashes whose time is over: a mark of a key that was never written to the
