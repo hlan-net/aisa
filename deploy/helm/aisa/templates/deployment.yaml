@@ -38,8 +38,9 @@ spec:
       # No token in every container: the one for the Kubernetes API, when aisa writes the
       # consumers' Secrets and the Models, is projected into aisa's container only, where
       # client-go looks for it, and the one for Vault's Kubernetes auth is projected with Vault's
-      # audience. The Vault Agent next to aisa gets neither: the service account may read
-      # Secrets in every namespace.
+      # audience, which the Kubernetes API does not accept. The Vault Agent next to aisa gets
+      # only the latter, never the API token: the service account may read Secrets in every
+      # namespace.
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
