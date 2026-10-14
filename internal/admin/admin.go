@@ -32,7 +32,7 @@ type ConsulClient interface {
 type VaultClient interface {
 	List(ctx context.Context, mount, path string) ([]string, error)
 	Read(ctx context.Context, mount, path string) (map[string]any, error)
-	Write(ctx context.Context, mount, path string, data map[string]any) error
+	Write(ctx context.Context, mount, path string, data map[string]any, cas int) error
 	Delete(ctx context.Context, mount, path string) error
 	Probe(ctx context.Context) error
 }

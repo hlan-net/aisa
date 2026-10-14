@@ -61,8 +61,8 @@ The sections after this one describe what is designed and, where the status says
 | Decision API, usage ledger, token quotas | Built |
 | The proxy rendering its own configuration (consul-template next to APISIX) | Built (`ROADMAP.md` v0.2.0 PR 5) |
 | aisa installing and removing the proxy with its own chart | Built: aisa's chart depends on the proxy's ([Packaging](#packaging-and-deployment)) |
-| `Model` objects for consumers | Designed, not built ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)); `ROADMAP.md` v0.2.0 PR 12 |
-| A consumer's credential as a Kubernetes object | Designed, not built: a Secret with a key aisa generates ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret), [#32](https://github.com/hlan-net/aisa/issues/32)) |
+| `Model` objects for consumers | Built ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)); `ROADMAP.md` v0.2.0 PR 12 |
+| A consumer's credential as a Kubernetes object | Built: a Secret with a key aisa generates and rotates ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret), [#32](https://github.com/hlan-net/aisa/issues/32)) |
 | The non-secret part of a consumer (name, quota profile, the namespace and Secret of its application) in Consul instead of Vault | Built (v0.2.0 PR 11): a consumer is declared in Consul KV `aisa/consumers/<name>` ([`CONSUL.md`](./CONSUL.md#consumers-consul-kv)), and Vault holds only the hashes of its keys ([`VAULT.md`](./VAULT.md)) |
 | Admin interface | Decided, not designed (US-3) |
 | Provider adapters beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains itself can be used | Decided, not designed |

@@ -21,8 +21,10 @@ jobs:
   test:
     strategy:
       matrix:
-        # arm64 is a first-class target, so the tests run natively on both.
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        # arm64 is a first-class target, so the tests run natively on both. The amd64 runner is
+        # pinned like the arm64 one, so that a new Ubuntu comes in a PR of its own, not with
+        # the label ubuntu-latest moving under some other change.
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -41,7 +43,7 @@ jobs:
         run: go test -race ./...
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -60,7 +62,7 @@ jobs:
     # The product image builds and starts on both architectures.
     strategy:
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -119,7 +121,7 @@ jobs:
     # End-to-end check of the dev stack: APISIX, stub aisa, mock backends, Vault, Consul, Redis.
     strategy:
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -148,7 +150,7 @@ jobs:
 
   charts:
     # The charts render for the usual values and validate against the Kubernetes schemas.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -177,7 +179,7 @@ jobs:
     # environment has them (deploy/helm/test/install_test.sh).
     strategy:
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
 
     steps:

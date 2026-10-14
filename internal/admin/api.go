@@ -255,7 +255,7 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 	hasKey := false
 	if keyHash != "" && h.vault != nil {
 		vaultPath := h.opts.VaultPrefix + pathConsumers + name
-		err := h.vault.Write(ctx, h.opts.VaultMount, vaultPath, map[string]any{"key_sha256": keyHash})
+		err := h.vault.Write(ctx, h.opts.VaultMount, vaultPath, map[string]any{"key_sha256": keyHash}, -1)
 		if err != nil {
 			h.log.Error("vault write consumer key failed", "consumer", name, "error", err)
 			writeError(w, http.StatusInternalServerError, "vault write key: "+err.Error())
@@ -327,7 +327,7 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vaultPath := h.opts.VaultPrefix + pathConsumers + name
-	if err := h.vault.Write(ctx, h.opts.VaultMount, vaultPath, map[string]any{"key_sha256": keyHash}); err != nil {
+	if err := h.vault.Write(ctx, h.opts.VaultMount, vaultPath, map[string]any{"key_sha256": keyHash}, -1); err != nil {
 		h.log.Error("vault rotate key failed", "consumer", name, "error", err)
 		writeError(w, http.StatusInternalServerError, "vault rotate key: "+err.Error())
 		return

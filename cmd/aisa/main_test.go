@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/hlan-net/aisa/internal/consumers"
+	"github.com/hlan-net/aisa/internal/kube"
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/server"
@@ -156,3 +157,52 @@ func TestRoutesAdmin(t *testing.T) {
 	}
 }
 
+func TestRunWithKubernetesOutsideACluster(t *testing.T) {
+	t.Setenv("VAULT_ADDR", "http://127.0.0.1:1")
+	t.Setenv("VAULT_TOKEN", "dev")
+	t.Setenv("CONSUL_HTTP_ADDR", "127.0.0.1:1")
+	t.Setenv("AISA_KUBERNETES", "true")
+	t.Setenv("AISA_PROXY_URL", "http://aisa-apisix.aisa.svc.cluster.local/v1")
+	t.Setenv("POD_NAMESPACE", "aisa")
+	t.Setenv("POD_NAME", "aisa-0")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	if err := run(nil); err == nil || !strings.Contains(err.Error(), "kubernetes") {
+		t.Errorf("err = %v, want one about the Kubernetes API", err)
+	}
+}
+
+func TestKubeObserver(t *testing.T) {
+	m := metrics.New("test")
+	o := newKubeObserver(m)
+	if n := testutil.CollectAndCount(m.ConsumerKeysIssued); n != 4 {
+		t.Errorf("issued reasons at start = %d, want 4", n)
+	}
+	o.issued(kube.IssueRotation)
+	o.secrets(map[string]int{kube.StateOK: 3, kube.StateNotOwned: 1})
+	o.models(kube.ModelStats{Models: 4, Available: 3, Conflicts: 1, InvalidDescriptions: 2})
+	o.leader(true)
+	o.passed(metrics.KubeSecrets)(nil)
+	o.passed(metrics.KubeModels)(errors.New("consul is down"))
+	for name, c := range map[string]struct{ got, want float64 }{
+		"issued rotation":      {testutil.ToFloat64(m.ConsumerKeysIssued.WithLabelValues(kube.IssueRotation)), 1},
+		"secrets ok":           {testutil.ToFloat64(m.ConsumerSecrets.WithLabelValues(kube.StateOK)), 3},
+		"secrets not owned":    {testutil.ToFloat64(m.ConsumerSecrets.WithLabelValues(kube.StateNotOwned)), 1},
+		"models":               {testutil.ToFloat64(m.Models), 4},
+		"models available":     {testutil.ToFloat64(m.ModelsAvailable), 3},
+		"model conflicts":      {testutil.ToFloat64(m.ModelConflicts), 1},
+		"descriptions invalid": {testutil.ToFloat64(m.ModelDescriptionsInvalid), 2},
+		"leader":               {testutil.ToFloat64(m.KubeLeader), 1},
+		"secrets passes ok":    {testutil.ToFloat64(m.KubePasses.WithLabelValues(metrics.KubeSecrets, metrics.LoadOK)), 1},
+		"models passes error":  {testutil.ToFloat64(m.KubePasses.WithLabelValues(metrics.KubeModels, metrics.LoadError)), 1},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %v, want %v", name, c.got, c.want)
+		}
+	}
+	o.leader(false)
+	if testutil.ToFloat64(m.KubeLeader) != 0 || testutil.ToFloat64(m.ModelConflicts) != 0 ||
+		testutil.CollectAndCount(m.ConsumerSecrets) != 0 {
+		t.Error("a replica that lost the Lease still exports its passes' state")
+	}
+}

@@ -1,0 +1,94 @@
+{{- if .Values.kubernetes.enabled }}
+{{- $name := printf "%s-%s" .Release.Namespace (include "aisa.fullname" .) | trunc 63 | trimSuffix "-" }}
+# aisa writes each consumer's Secret in the namespace its declaration names, and the Model
+# objects (docs/concepts/KUBERNETES_OBJECTS.md). Secrets in every namespace: aisa changes or
+# deletes only a Secret with its own labels, and never adopts another.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, create, update, delete]
+  - apiGroups: [aisa.hlan.net]
+    resources: [models]
+    verbs: [get, list, create, update, delete]
+  - apiGroups: [aisa.hlan.net]
+    resources: [models/status]
+    verbs: [update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aisa.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# The Lease that elects the replica that writes: two would issue a key each.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "aisa.fullname" . }}-leader
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "aisa.fullname" . }}-leader
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "aisa.fullname" . }}-leader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "aisa.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# Reading the catalog of models. A Model is cluster-scoped, so only a ClusterRoleBinding can
+# grant it; it holds nothing secret.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name | trunc 50 | trimSuffix "-" }}-model-reader
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [aisa.hlan.net]
+    resources: [models]
+    verbs: [get, list, watch]
+{{- if .Values.kubernetes.models.readableByAllServiceAccounts }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name | trunc 50 | trimSuffix "-" }}-model-reader
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name | trunc 50 | trimSuffix "-" }}-model-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:serviceaccounts
+{{- end }}
+{{- end }}

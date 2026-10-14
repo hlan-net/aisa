@@ -1,5 +1,6 @@
 // Package vault is the small part of Vault's HTTP API that aisa uses: logging in with a
-// Kubernetes service account token (or using a given token) and reading a KV v2 mount.
+// Kubernetes service account token (or using a given token), and reading and writing a KV v2
+// mount.
 //
 // It uses the standard library only. The official client would bring a large dependency tree
 // for three endpoints, and aisa runs on small arm64 nodes.
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,23 @@ import (
 // data. A 404 for any other reason, such as a mount that does not exist or an answer from a
 // proxy in front of Vault, is a StatusError.
 var ErrNotFound = errors.New("not found")
+
+// NotFoundError is ErrNotFound for a secret whose current version is deleted or destroyed: it
+// carries that version, which a Write with check-and-set needs.
+type NotFoundError struct {
+	// Version is the current version of the secret; 0 when the secret has none.
+	Version int
+	err     error
+}
+
+func (e *NotFoundError) Error() string { return e.err.Error() }
+
+// Unwrap makes errors.Is(err, ErrNotFound) hold.
+func (e *NotFoundError) Unwrap() error { return e.err }
+
+// ErrConflict is returned by Write when the secret's current version is not the one given for
+// check-and-set: someone else wrote it since it was read.
+var ErrConflict = errors.New("check-and-set: the secret changed since it was read")
 
 // Auth obtains a Vault token.
 type Auth interface {
@@ -168,6 +187,14 @@ var errNoEnvelope = errors.New("answer is not a Vault KV v2 answer")
 // Read returns the current version of a KV v2 secret's data. A deleted or destroyed version
 // returns ErrNotFound. Any other answer without data.data is an error.
 func (c *Client) Read(ctx context.Context, mount, path string) (map[string]any, error) {
+	data, _, err := c.ReadVersion(ctx, mount, path)
+	return data, err
+}
+
+// ReadVersion is Read that also returns the number of the version read, for a Write with
+// check-and-set. A secret that does not exist is ErrNotFound with version 0; one whose current
+// version is deleted or destroyed is ErrNotFound with that version, the one to write on.
+func (c *Client) ReadVersion(ctx context.Context, mount, path string) (map[string]any, int, error) {
 	var out struct {
 		Data *struct {
 			Data     map[string]any   `json:"data"`
@@ -175,26 +202,52 @@ func (c *Client) Read(ctx context.Context, mount, path string) (map[string]any, 
 		} `json:"data"`
 	}
 	if err := c.authed(ctx, http.MethodGet, mount+"/data/"+path, nil, &out); err != nil {
-		return nil, err
+		var nf *NotFoundError
+		if errors.As(err, &nf) {
+			return nil, nf.Version, err
+		}
+		return nil, 0, err
 	}
 	switch {
 	case out.Data == nil:
-		return nil, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
+		return nil, 0, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
 	case out.Data.Data != nil:
-		return out.Data.Data, nil
+		version := 0
+		if out.Data.Metadata != nil {
+			version = out.Data.Metadata.Version
+		}
+		return out.Data.Data, version, nil
 	case out.Data.Metadata.deleted():
-		return nil, ErrNotFound
+		return nil, out.Data.Metadata.Version, &NotFoundError{Version: out.Data.Metadata.Version, err: ErrNotFound}
 	}
-	return nil, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
+	return nil, 0, fmt.Errorf("vault GET %s/data/%s: %w", mount, path, errNoEnvelope)
 }
 
-// Write writes the current version of a KV v2 secret's data: <mount>/data/<path>.
-func (c *Client) Write(ctx context.Context, mount, path string, data map[string]any) error {
-	payload, err := json.Marshal(map[string]any{"data": data})
-	if err != nil {
-		return fmt.Errorf("encode secret payload: %w", err)
+// Write replaces a KV v2 secret's data with a new version, only if the current version is cas:
+// 0 for a secret that does not exist yet, or negative to write without check-and-set.
+// Otherwise it returns ErrConflict and writes nothing, so a write never undoes one it did not read.
+// One write is atomic.
+func (c *Client) Write(ctx context.Context, mount, path string, data map[string]any, cas int) error {
+	var (
+		body []byte
+		err  error
+	)
+	if cas >= 0 {
+		body, err = json.Marshal(map[string]any{"options": map[string]int{"cas": cas}, "data": data})
+	} else {
+		body, err = json.Marshal(map[string]any{"data": data})
 	}
-	return c.authed(ctx, http.MethodPost, mount+"/data/"+path, payload, nil)
+	if err != nil {
+		return fmt.Errorf("encode %s/data/%s: %w", mount, path, err)
+	}
+	err = c.authed(ctx, http.MethodPost, mount+"/data/"+path, body, nil)
+	var se *StatusError
+	if errors.As(err, &se) && se.Code == http.StatusBadRequest && slices.ContainsFunc(se.Errors, func(e string) bool {
+		return strings.Contains(e, "check-and-set")
+	}) {
+		return fmt.Errorf("vault POST %s/data/%s: %w", mount, path, ErrConflict)
+	}
+	return err
 }
 
 // Delete permanently removes a KV v2 secret and its metadata: <mount>/metadata/<path>.
@@ -341,16 +394,20 @@ func (c *Client) do(ctx context.Context, method, path, token string, body []byte
 	case resp.StatusCode == http.StatusNoContent:
 		return nil
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
-		errs, noData := errorAnswer(data)
+		errs, noData, version := errorAnswer(data)
 		if resp.StatusCode == http.StatusNotFound && noData {
-			return fmt.Errorf("vault %s %s: %w", method, path, ErrNotFound)
+			return &NotFoundError{Version: version, err: fmt.Errorf("vault %s %s: %w", method, path, ErrNotFound)}
 		}
 		return &StatusError{Code: resp.StatusCode, Errors: errs}
 	}
 	if out == nil {
 		return nil
 	}
-	if err := json.Unmarshal(data, out); err != nil {
+	// Numbers in a secret's data stay as written (json.Number): aisa writes back the fields it
+	// does not know, and a float64 would round an integer above 2^53.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(out); err != nil {
 		return fmt.Errorf("vault %s %s: decode answer: %w", method, path, err)
 	}
 	return nil
@@ -371,6 +428,7 @@ type deletedVersion struct {
 type versionMetadata struct {
 	DeletionTime string `json:"deletion_time"`
 	Destroyed    bool   `json:"destroyed"`
+	Version      int    `json:"version"`
 }
 
 // deleted reports whether the metadata is that of a deleted or destroyed version.
@@ -380,19 +438,19 @@ func (m *versionMetadata) deleted() bool {
 
 // errorAnswer reads the body of an error from Vault: its errors, and whether it is Vault's way of
 // saying "no data here". That is an empty errors list, or the metadata of a deleted or destroyed
-// version.
+// version, whose number it returns too.
 // With errors, a 404 is about the mount. Any other answer, a JSON one from a proxy included, is
 // not from Vault.
-func errorAnswer(data []byte) (errs []string, noData bool) {
+func errorAnswer(data []byte) (errs []string, noData bool, version int) {
 	var e errorBody
 	if json.Unmarshal(data, &e) != nil {
-		return nil, false
+		return nil, false, 0
 	}
 	if e.Errors != nil {
-		return *e.Errors, len(*e.Errors) == 0
+		return *e.Errors, len(*e.Errors) == 0, 0
 	}
-	if e.Data == nil {
-		return nil, false
+	if e.Data == nil || !e.Data.Metadata.deleted() {
+		return nil, false, 0
 	}
-	return nil, e.Data.Metadata.deleted()
+	return nil, true, e.Data.Metadata.Version
 }

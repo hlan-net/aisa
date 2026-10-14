@@ -94,7 +94,7 @@ func (m *mockVault) Read(ctx context.Context, mount, path string) (map[string]an
 	return data, nil
 }
 
-func (m *mockVault) Write(ctx context.Context, mount, path string, data map[string]any) error {
+func (m *mockVault) Write(ctx context.Context, mount, path string, data map[string]any, cas int) error {
 	m.secrets[mount+"/"+path] = data
 	return nil
 }
@@ -129,7 +129,7 @@ func TestOverviewEndpoint(t *testing.T) {
 	h, mc, mv := setupTestHandler()
 	// Seed one consumer and one quota
 	_ = mc.Put(context.Background(), "aisa/consumers/chat-ui", []byte(`{"quota_profile":"interactive"}`))
-	_ = mv.Write(context.Background(), "secret", "aisa/consumers/chat-ui", map[string]any{"key_sha256": "hash"})
+	_ = mv.Write(context.Background(), "secret", "aisa/consumers/chat-ui", map[string]any{"key_sha256": "hash"}, -1)
 	_ = mc.Put(context.Background(), "aisa/quotas/interactive", []byte(`{"tokens_per_hour":1000000}`))
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)

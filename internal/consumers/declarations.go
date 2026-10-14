@@ -93,6 +93,22 @@ func (d *Declarations) Get(name string) (Declaration, error) {
 	return Declaration{}, fmt.Errorf("%w: %q", ErrUndeclared, name)
 }
 
+// Snapshot returns a copy of the declarations: the valid ones by name, the names of those that
+// cannot be read, and whether they have been read at all.
+func (d *Declarations) Snapshot() (valid map[string]Declaration, invalid map[string]bool, loaded bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	valid = make(map[string]Declaration, len(d.valid))
+	for name, decl := range d.valid {
+		valid[name] = decl
+	}
+	invalid = make(map[string]bool, len(d.invalid))
+	for name := range d.invalid {
+		invalid[name] = true
+	}
+	return valid, invalid, d.loaded
+}
+
 // Ready returns nil once the declarations have been read, for aisa's readiness.
 func (d *Declarations) Ready(context.Context) error {
 	d.mu.RLock()

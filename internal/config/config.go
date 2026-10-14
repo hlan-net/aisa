@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -32,8 +33,9 @@ type Config struct {
 	// configured too.
 	Consul Consul
 	Redis  Redis
-
 	Admin Admin
+	// Kubernetes is off outside a cluster.
+	Kubernetes Kubernetes
 }
 
 // Admin configures the admin interface and Web UI at /admin.
@@ -41,6 +43,35 @@ type Admin struct {
 	// Enabled reports whether the admin interface is served at /admin (AISA_ADMIN_ENABLED).
 	// Default true.
 	Enabled bool
+}
+
+// Kubernetes sets what aisa writes to the Kubernetes API: each consumer's Secret with a key it
+// issues, and the Model objects (docs/concepts/KUBERNETES_OBJECTS.md).
+type Kubernetes struct {
+	// Enabled turns it on (AISA_KUBERNETES=true); aisa then runs in a pod and uses its service
+	// account.
+	Enabled bool
+	// ProxyURL is the proxy's URL that applications call, such as
+	// http://aisa-apisix.aisa.svc.cluster.local/v1 (AISA_PROXY_URL): OPENAI_BASE_URL in the
+	// Secrets and spec.endpoint of the Models. Required when enabled.
+	ProxyURL string
+	// Namespace and PodName are aisa's own (POD_NAMESPACE, POD_NAME, from the downward API).
+	// The namespace names the install on its objects and holds the leader's Lease.
+	Namespace string
+	PodName   string
+	// Lease is the name of the Lease that elects the replica that writes (AISA_LEADER_LEASE).
+	Lease string
+	// Resync is the interval of the passes over the objects (AISA_KUBE_RESYNC); a change of
+	// the consumers' declarations starts one at once.
+	Resync time.Duration
+	// Rotation is the age at which a consumer's key is replaced (AISA_KEY_ROTATION_INTERVAL);
+	// 0 never replaces one for its age.
+	Rotation time.Duration
+	// Grace is how long a replaced key stays valid (AISA_KEY_ROTATION_GRACE).
+	Grace time.Duration
+	// EmptyGrace is how long the catalog may offer no model before the Model objects are
+	// deleted (AISA_MODELS_EMPTY_GRACE): the proxy keeps its model routes as long.
+	EmptyGrace time.Duration
 }
 
 // Consul is where aisa reads its quota profiles from (docs/concepts/CONSUL.md). The variables
@@ -141,6 +172,14 @@ func Defaults() Config {
 		Ledger: Ledger{
 			DedupCapacity: 100_000,
 			DedupTTL:      15 * time.Minute,
+		},
+		Kubernetes: Kubernetes{
+			Lease:    "aisa-leader",
+			Resync:   30 * time.Second,
+			Rotation: 30 * 24 * time.Hour,
+			Grace:    7 * 24 * time.Hour,
+			// As the proxy's guard (GUARD_EMPTY_GRACE).
+			EmptyGrace: 5 * time.Minute,
 		},
 		Consul: Consul{Prefix: "aisa"},
 		Admin:  Admin{Enabled: true},
@@ -252,7 +291,56 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err := quotasFromEnv(getenv, &cfg); err != nil {
 		return cfg, err
 	}
+	if err := kubernetesFromEnv(getenv, &cfg.Kubernetes); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+// kubernetesFromEnv reads what aisa writes to the Kubernetes API.
+func kubernetesFromEnv(getenv func(string) string, k *Kubernetes) error {
+	switch v := strings.ToLower(getenv("AISA_KUBERNETES")); v {
+	case "", "false", "0":
+	case "true", "1":
+		k.Enabled = true
+	default:
+		return fmt.Errorf("AISA_KUBERNETES: want true or false, got %q", v)
+	}
+	for _, d := range []struct {
+		name string
+		dst  *time.Duration
+	}{
+		{"AISA_KUBE_RESYNC", &k.Resync},
+		{"AISA_KEY_ROTATION_GRACE", &k.Grace},
+		{"AISA_MODELS_EMPTY_GRACE", &k.EmptyGrace},
+	} {
+		if err := duration(getenv, d.name, d.dst); err != nil {
+			return err
+		}
+	}
+	if v := getenv("AISA_KEY_ROTATION_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < 0 {
+			return fmt.Errorf("AISA_KEY_ROTATION_INTERVAL: want a duration such as 720h, or 0 for no rotation, got %q", v)
+		}
+		k.Rotation = d
+	}
+	if v := getenv("AISA_LEADER_LEASE"); v != "" {
+		k.Lease = v
+	}
+	k.ProxyURL = getenv("AISA_PROXY_URL")
+	k.Namespace = getenv("POD_NAMESPACE")
+	k.PodName = getenv("POD_NAME")
+	if !k.Enabled {
+		return nil
+	}
+	if u, err := url.Parse(k.ProxyURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("AISA_PROXY_URL: want the proxy's URL such as http://aisa-apisix.aisa.svc.cluster.local/v1, got %q", k.ProxyURL)
+	}
+	if k.Namespace == "" || k.PodName == "" {
+		return fmt.Errorf("POD_NAMESPACE and POD_NAME are required with AISA_KUBERNETES: set them from the downward API")
+	}
+	return nil
 }
 
 // quotasFromEnv reads the Consul and Redis configuration. Consul is required, since the
