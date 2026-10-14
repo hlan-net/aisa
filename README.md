@@ -1,6 +1,6 @@
 # aisa — AI Service [Access, Admin, Authority]
 
-> **Status: early development.** The design is written down and its open questions are answered by spikes. aisa authenticates consumers against Vault in its decision API, accounts usage events and enforces token quotas. Next comes a working install in a cluster: the proxy, the Helm chart and the Kubernetes objects applications use; budgets follow.
+> **Status: early development, v0.2.0.** aisa installs into a cluster from one Helm chart with its proxy, authenticates the consumers declared in Consul, issues their keys into their applications' Secrets, publishes the models as `Model` objects, accounts usage events and enforces token quotas. Next come the Terraform module, the dashboard and the application developer's guide; budgets follow in v0.3.0.
 
 Pick the A that fits your day:
 - **Access**: decides who may use which model, through a decision API that your gateway asks before every request.
