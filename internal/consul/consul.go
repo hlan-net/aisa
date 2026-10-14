@@ -28,6 +28,11 @@ type Pair struct {
 	Value []byte
 }
 
+const (
+	headerConsulToken = "X-Consul-Token"
+	kvPrefix          = "/v1/kv/"
+)
+
 // Options configure a Client.
 type Options struct {
 	// Addr is Consul's address: host:port, or a URL such as https://consul.example:8501.
@@ -116,7 +121,7 @@ func (c *Client) List(ctx context.Context, prefix string, index uint64, wait tim
 	// Consul adds up to wait/16 to spread the answers of many watchers.
 	ctx, cancel := context.WithTimeout(ctx, wait+wait/16+10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.addr+"/v1/kv/"+escapePath(prefix)+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.addr+kvPrefix+escapePath(prefix)+"?"+q.Encode(), nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("consul request %s: %w", prefix, err)
 	}
@@ -125,7 +130,7 @@ func (c *Client) List(ctx context.Context, prefix string, index uint64, wait tim
 		return nil, 0, err
 	}
 	if token != "" {
-		req.Header.Set("X-Consul-Token", token)
+		req.Header.Set(headerConsulToken, token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -190,7 +195,7 @@ func escapePath(path string) string {
 func (c *Client) Put(ctx context.Context, key string, value []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.addr+"/v1/kv/"+escapePath(key), bytes.NewReader(value))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.addr+kvPrefix+escapePath(key), bytes.NewReader(value))
 	if err != nil {
 		return fmt.Errorf("consul request %s: %w", key, err)
 	}
@@ -199,7 +204,7 @@ func (c *Client) Put(ctx context.Context, key string, value []byte) error {
 		return err
 	}
 	if token != "" {
-		req.Header.Set("X-Consul-Token", token)
+		req.Header.Set(headerConsulToken, token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -217,7 +222,7 @@ func (c *Client) Put(ctx context.Context, key string, value []byte) error {
 func (c *Client) Delete(ctx context.Context, key string, recurse bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	u := c.addr + "/v1/kv/" + escapePath(key)
+	u := c.addr + kvPrefix + escapePath(key)
 	if recurse {
 		u += "?recurse=true"
 	}
@@ -230,7 +235,7 @@ func (c *Client) Delete(ctx context.Context, key string, recurse bool) error {
 		return err
 	}
 	if token != "" {
-		req.Header.Set("X-Consul-Token", token)
+		req.Header.Set(headerConsulToken, token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -285,7 +290,7 @@ func (c *Client) HealthService(ctx context.Context, service string, passingOnly 
 		return nil, err
 	}
 	if token != "" {
-		req.Header.Set("X-Consul-Token", token)
+		req.Header.Set(headerConsulToken, token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

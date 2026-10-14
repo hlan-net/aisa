@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -150,15 +151,12 @@ func TestOverviewEndpoint(t *testing.T) {
 	}
 }
 
-func TestConsumersCRUD(t *testing.T) {
-	h, mc, mv := setupTestHandler()
-
-	// 1. Create consumer with auto-generated key
+func createTestConsumer(t *testing.T, h *Handler, mc *mockConsul, mv *mockVault) CreateConsumerResponse {
+	t.Helper()
 	body := `{"name":"test-app","quota_profile":"batch","generate_key":true}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/consumers", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", w.Code, w.Body.String())
 	}
@@ -172,8 +170,6 @@ func TestConsumersCRUD(t *testing.T) {
 	if !strings.HasPrefix(created.PlaintextKey, "aisa_sec_") {
 		t.Errorf("expected key to start with aisa_sec_, got %s", created.PlaintextKey)
 	}
-
-	// Verify written in Consul and Vault
 	declBytes := mc.pairs["aisa/consumers/test-app"]
 	if !strings.Contains(string(declBytes), "batch") {
 		t.Errorf("consul declaration missing: %s", string(declBytes))
@@ -182,10 +178,13 @@ func TestConsumersCRUD(t *testing.T) {
 	if vaultSec == nil || vaultSec["key_sha256"] == nil {
 		t.Fatal("vault secret missing")
 	}
+	return created
+}
 
-	// 2. List consumers
-	req = httptest.NewRequest(http.MethodGet, "/admin/api/consumers", nil)
-	w = httptest.NewRecorder()
+func verifyConsumerList(t *testing.T, h *Handler) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/consumers", nil)
+	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("list status = %d", w.Code)
@@ -195,23 +194,27 @@ func TestConsumersCRUD(t *testing.T) {
 	if len(list) != 1 || list[0].Name != "test-app" || !list[0].HasKey {
 		t.Fatalf("unexpected list: %+v", list)
 	}
+}
 
-	// 3. Rotate key
-	req = httptest.NewRequest(http.MethodPost, "/admin/api/consumers/test-app/rotate-key", nil)
-	w = httptest.NewRecorder()
+func rotateTestConsumerKey(t *testing.T, h *Handler, oldKey string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/consumers/test-app/rotate-key", nil)
+	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("rotate status = %d: %s", w.Code, w.Body.String())
 	}
 	var rotResp map[string]string
 	_ = json.Unmarshal(w.Body.Bytes(), &rotResp)
-	if rotResp["plaintext_key"] == "" || rotResp["plaintext_key"] == created.PlaintextKey {
+	if rotResp["plaintext_key"] == "" || rotResp["plaintext_key"] == oldKey {
 		t.Fatalf("new key not generated or same: %v", rotResp)
 	}
+}
 
-	// 4. Delete consumer
-	req = httptest.NewRequest(http.MethodDelete, "/admin/api/consumers/test-app", nil)
-	w = httptest.NewRecorder()
+func deleteTestConsumer(t *testing.T, h *Handler, mc *mockConsul, mv *mockVault) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/consumers/test-app", nil)
+	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete status = %d", w.Code)
@@ -222,6 +225,14 @@ func TestConsumersCRUD(t *testing.T) {
 	if mv.secrets["secret/aisa/consumers/test-app"] != nil {
 		t.Error("expected consumer deleted from Vault")
 	}
+}
+
+func TestConsumersCRUD(t *testing.T) {
+	h, mc, mv := setupTestHandler()
+	created := createTestConsumer(t, h, mc, mv)
+	verifyConsumerList(t, h)
+	rotateTestConsumerKey(t, h, created.PlaintextKey)
+	deleteTestConsumer(t, h, mc, mv)
 }
 
 func TestQuotasCRUD(t *testing.T) {
@@ -383,5 +394,183 @@ func TestWebUIAssets(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("js status = %d, want 200", w.Code)
+	}
+}
+
+func TestConsumerValidation(t *testing.T) {
+	h, _, _ := setupTestHandler()
+
+	tests := []struct {
+		name string
+		body string
+		code int
+	}{
+		{"invalid json", `{"name":`, http.StatusBadRequest},
+		{"empty name", `{"name":""}`, http.StatusBadRequest},
+		{"name with spaces", `{"name":"bad name"}`, http.StatusBadRequest},
+		{"name with slash", `{"name":"bad/name"}`, http.StatusBadRequest},
+		{"name unknown", `{"name":"unknown"}`, http.StatusBadRequest},
+		{"namespace without secret", `{"name":"app","namespace":"ns"}`, http.StatusBadRequest},
+		{"secret without namespace", `{"name":"app","secret":"sec"}`, http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/consumers", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != tt.code {
+				t.Errorf("status = %d, want %d", w.Code, tt.code)
+			}
+		})
+	}
+}
+
+func TestConsumerCustomKey(t *testing.T) {
+	h, mc, mv := setupTestHandler()
+	body := `{"name":"custom-app","custom_key":"secret-123","namespace":"prod","secret":"app-sec"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/consumers", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var resp CreateConsumerResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.PlaintextKey != "secret-123" || resp.Namespace != "prod" || resp.Secret != "app-sec" {
+		t.Errorf("unexpected resp: %+v", resp)
+	}
+	if mv.secrets["secret/aisa/consumers/custom-app"] == nil {
+		t.Fatal("expected vault secret for custom key")
+	}
+	_ = mc
+}
+
+func TestConsumerDeleteAndRotateErrors(t *testing.T) {
+	h, _, _ := setupTestHandler()
+
+	// Empty name in rotate
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/consumers/%20/rotate-key", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("rotate empty name: status = %d, want 400", w.Code)
+	}
+
+	// Empty name in delete
+	req = httptest.NewRequest(http.MethodDelete, "/admin/api/consumers/%20", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("delete empty name: status = %d, want 400", w.Code)
+	}
+
+	// Rotate with nil vault
+	hNoVault := New(newMockConsul(), nil, metrics.New("v0.2.0-test"), slog.New(slog.NewJSONHandler(io.Discard, nil)), Options{
+		ConsulPrefix: "aisa",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/consumers/test-app/rotate-key", nil)
+	w = httptest.NewRecorder()
+	hNoVault.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("rotate nil vault: status = %d, want 500", w.Code)
+	}
+}
+
+func TestQuotaValidation(t *testing.T) {
+	h, _, _ := setupTestHandler()
+
+	tests := []struct {
+		name string
+		body string
+		code int
+	}{
+		{"invalid json", `{"name":`, http.StatusBadRequest},
+		{"empty name", `{"name":"","tokens_per_hour":1000}`, http.StatusBadRequest},
+		{"zero tokens", `{"name":"zero","tokens_per_hour":0}`, http.StatusBadRequest},
+		{"negative tokens", `{"name":"neg","tokens_per_hour":-10}`, http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/admin/api/quotas", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != tt.code {
+				t.Errorf("status = %d, want %d", w.Code, tt.code)
+			}
+		})
+	}
+
+	// Delete quota empty name
+	req := httptest.NewRequest(http.MethodDelete, "/admin/api/quotas/%20", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("delete empty quota: status = %d, want 400", w.Code)
+	}
+}
+
+func TestOverviewDegraded(t *testing.T) {
+	mc := newMockConsul()
+	mv := newMockVault()
+	met := metrics.New("v0.2.0-test")
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	check := server.Check{
+		Name:  "failing-check",
+		Probe: func(context.Context) error { return errors.New("check failed") },
+	}
+	h := New(mc, mv, met, log, Options{
+		ConsulPrefix: "aisa",
+		VaultMount:   "secret",
+		VaultPrefix:  "aisa",
+	}, check)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var resp OverviewResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Ready {
+		t.Errorf("ready = true, want false")
+	}
+	if resp.Status != "degraded" {
+		t.Errorf("status = %s, want degraded", resp.Status)
+	}
+}
+
+func TestBackendsHealthStatuses(t *testing.T) {
+	h, mc, _ := setupTestHandler()
+	mc.backends = []consul.ServiceHealth{
+		{
+			Service: consul.ServiceInfo{
+				ID:      "warning-backend",
+				Service: "aisa-backend",
+				Address: "127.0.0.1",
+				Port:    8080,
+				Meta:    map[string]string{"models": "mod1"},
+			},
+			Checks: []consul.ServiceCheck{
+				{CheckID: "chk-warn", Status: "warning", Output: "high load"},
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/backends", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("backends status = %d", w.Code)
+	}
+	var backends []BackendItem
+	_ = json.Unmarshal(w.Body.Bytes(), &backends)
+	if len(backends) != 1 || backends[0].Status != "warning" || backends[0].Output != "high load" {
+		t.Errorf("unexpected backend status: %+v", backends)
 	}
 }

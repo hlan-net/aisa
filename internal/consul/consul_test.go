@@ -278,3 +278,59 @@ func TestHealthService(t *testing.T) {
 		t.Errorf("unexpected checks: %+v", list[0].Checks)
 	}
 }
+
+func TestDeleteErrorsAndToken(t *testing.T) {
+	var gotToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotToken = r.Header.Get("X-Consul-Token")
+		if r.URL.Path == "/v1/kv/fail" {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("true"))
+	}))
+	defer srv.Close()
+
+	c, _ := New(Options{Addr: srv.URL, Token: "test-token"})
+	if err := c.Delete(context.Background(), "fail", false); err == nil {
+		t.Error("expected error on 500, got nil")
+	}
+	if err := c.Delete(context.Background(), "ok", false); err != nil {
+		t.Fatalf("delete ok failed: %v", err)
+	}
+	if gotToken != "test-token" {
+		t.Errorf("got token %q, want test-token", gotToken)
+	}
+}
+
+func TestHealthServiceErrorsAndToken(t *testing.T) {
+	var gotToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotToken = r.Header.Get("X-Consul-Token")
+		if r.URL.Path == "/v1/health/service/fail" {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path == "/v1/health/service/bad-json" {
+			_, _ = w.Write([]byte("not json"))
+			return
+		}
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	c, _ := New(Options{Addr: srv.URL, Token: "test-token"})
+	if _, err := c.HealthService(context.Background(), "fail", false); err == nil {
+		t.Error("expected error on 500, got nil")
+	}
+	if _, err := c.HealthService(context.Background(), "bad-json", false); err == nil {
+		t.Error("expected error on bad json, got nil")
+	}
+	if _, err := c.HealthService(context.Background(), "ok", false); err != nil {
+		t.Fatalf("healthservice ok failed: %v", err)
+	}
+	if gotToken != "test-token" {
+		t.Errorf("got token %q, want test-token", gotToken)
+	}
+}

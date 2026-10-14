@@ -1,7 +1,7 @@
 // aisa admin dashboard client script
 document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
-  loadOverview();
+  void loadOverview();
 });
 
 // Navigation tabs
@@ -16,10 +16,10 @@ function setupTabs() {
       if (target) target.classList.add('active');
 
       // Refresh data on tab switch
-      if (tab.dataset.tab === 'overview') loadOverview();
-      if (tab.dataset.tab === 'consumers') loadConsumers();
-      if (tab.dataset.tab === 'quotas') loadQuotas();
-      if (tab.dataset.tab === 'backends') loadBackends();
+      if (tab.dataset.tab === 'overview') void loadOverview();
+      if (tab.dataset.tab === 'consumers') void loadConsumers();
+      if (tab.dataset.tab === 'quotas') void loadQuotas();
+      if (tab.dataset.tab === 'backends') void loadBackends();
     });
   });
 }
@@ -27,12 +27,10 @@ function setupTabs() {
 // API helper
 async function api(path, options = {}) {
   try {
+    const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers);
     const res = await fetch('/admin/api' + path, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers || {})
-      }
+      headers
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -97,7 +95,8 @@ async function loadOverview() {
         <span class="badge ${status === 'ok' ? 'badge-ready' : 'badge-danger'}">${escapeHTML(status)}</span>
       </div>
     `).join('') || '<div style="color:var(--text-muted)">No checks reported</div>';
-  } catch (_) {
+  } catch (_err) {
+    // API request failed; show disconnected status indicator
     document.getElementById('system-status-indicator').className = 'status-dot dot-red';
     document.getElementById('system-status-text').textContent = 'Disconnected';
   }
@@ -183,13 +182,15 @@ async function handleCreateConsumer(e) {
     closeModal('modal-add-consumer');
     document.getElementById('form-add-consumer').reset();
     showToast(`Consumer '${name}' created!`, 'success');
-    loadConsumers();
+    await loadConsumers();
 
     if (res.plaintext_key) {
       document.getElementById('revealed-key-text').textContent = res.plaintext_key;
       openModal('modal-key-reveal');
     }
-  } catch (_) {}
+  } catch (_err) {
+    // API error notification is handled in api()
+  }
 }
 
 async function rotateKey(name) {
@@ -199,12 +200,14 @@ async function rotateKey(name) {
   try {
     const res = await api(`/consumers/${encodeURIComponent(name)}/rotate-key`, { method: 'POST' });
     showToast(`Key rotated for '${name}'`, 'success');
-    loadConsumers();
+    await loadConsumers();
     if (res.plaintext_key) {
       document.getElementById('revealed-key-text').textContent = res.plaintext_key;
       openModal('modal-key-reveal');
     }
-  } catch (_) {}
+  } catch (_err) {
+    // API error notification is handled in api()
+  }
 }
 
 async function deleteConsumer(name) {
@@ -214,14 +217,18 @@ async function deleteConsumer(name) {
   try {
     await api(`/consumers/${encodeURIComponent(name)}`, { method: 'DELETE' });
     showToast(`Consumer '${name}' deleted`, 'success');
-    loadConsumers();
-  } catch (_) {}
+    await loadConsumers();
+  } catch (_err) {
+    // API error notification is handled in api()
+  }
 }
 
 function copyRevealedKey() {
   const text = document.getElementById('revealed-key-text').textContent;
-  navigator.clipboard.writeText(text).then(() => {
+  void navigator.clipboard.writeText(text).then(() => {
     showToast('API Key copied to clipboard!', 'success');
+  }).catch(() => {
+    showToast('Failed to copy to clipboard', 'error');
   });
 }
 
@@ -256,7 +263,7 @@ function setQuotaPreset(val) {
 async function handleCreateQuota(e) {
   e.preventDefault();
   const name = document.getElementById('quota-name').value.trim();
-  const tokens = parseInt(document.getElementById('quota-tokens').value, 10);
+  const tokens = Number.parseInt(document.getElementById('quota-tokens').value, 10);
 
   try {
     await api('/quotas', {
@@ -266,8 +273,10 @@ async function handleCreateQuota(e) {
     closeModal('modal-add-quota');
     document.getElementById('form-add-quota').reset();
     showToast(`Quota profile '${name}' saved`, 'success');
-    loadQuotas();
-  } catch (_) {}
+    await loadQuotas();
+  } catch (_err) {
+    // API error notification is handled in api()
+  }
 }
 
 async function deleteQuota(name) {
@@ -277,8 +286,10 @@ async function deleteQuota(name) {
   try {
     await api(`/quotas/${encodeURIComponent(name)}`, { method: 'DELETE' });
     showToast(`Quota profile '${name}' deleted`, 'success');
-    loadQuotas();
-  } catch (_) {}
+    await loadQuotas();
+  } catch (_err) {
+    // API error notification is handled in api()
+  }
 }
 
 // Backends & Models
@@ -331,9 +342,9 @@ function formatTokens(n) {
 function escapeHTML(str) {
   if (!str) return '';
   return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
 }

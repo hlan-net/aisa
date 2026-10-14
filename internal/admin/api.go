@@ -66,9 +66,14 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	status := "ok"
+	if !ready {
+		status = "degraded"
+	}
+
 	resp := OverviewResponse{
 		Version: version.Version,
-		Status:  "ok",
+		Status:  status,
 		Ready:   ready,
 		Checks:  checks,
 		Counts: OverviewCounts{
@@ -82,6 +87,13 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+const (
+	pathConsumers           = "/consumers/"
+	pathQuotas              = "/quotas/"
+	errConsumerNameRequired = "consumer name is required"
+	errQuotaNameRequired    = "quota profile name is required"
+)
+
 // ConsumerItem represents a consumer declaration and Vault status.
 type ConsumerItem struct {
 	Name         string `json:"name"`
@@ -93,7 +105,7 @@ type ConsumerItem struct {
 }
 
 func (h *Handler) fetchConsumers(ctx context.Context) ([]ConsumerItem, error) {
-	prefix := h.opts.ConsulPrefix + "/consumers/"
+	prefix := h.opts.ConsulPrefix + pathConsumers
 	pairs, _, err := h.consul.List(ctx, prefix, 0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list consul consumers: %w", err)
@@ -101,7 +113,7 @@ func (h *Handler) fetchConsumers(ctx context.Context) ([]ConsumerItem, error) {
 
 	vaultKeys := make(map[string]bool)
 	if h.vault != nil {
-		keys, err := h.vault.List(ctx, h.opts.VaultMount, h.opts.VaultPrefix+"/consumers")
+		keys, err := h.vault.List(ctx, h.opts.VaultMount, strings.TrimSuffix(h.opts.VaultPrefix+pathConsumers, "/"))
 		if err == nil {
 			for _, k := range keys {
 				vaultKeys[strings.TrimSuffix(k, "/")] = true
@@ -193,7 +205,7 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "consumer name is required")
+		writeError(w, http.StatusBadRequest, errConsumerNameRequired)
 		return
 	}
 	if name == metrics.ConsumerUnknown || strings.ContainsAny(name, " /\\?#") {
@@ -219,7 +231,7 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "encode declaration: "+err.Error())
 		return
 	}
-	consulKey := h.opts.ConsulPrefix + "/consumers/" + name
+	consulKey := h.opts.ConsulPrefix + pathConsumers + name
 	if err := h.consul.Put(ctx, consulKey, declBytes); err != nil {
 		h.log.Error("consul put consumer failed", "consumer", name, "error", err)
 		writeError(w, http.StatusInternalServerError, "consul put: "+err.Error())
@@ -242,7 +254,7 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 
 	hasKey := false
 	if keyHash != "" && h.vault != nil {
-		vaultPath := h.opts.VaultPrefix + "/consumers/" + name
+		vaultPath := h.opts.VaultPrefix + pathConsumers + name
 		err := h.vault.Write(ctx, h.opts.VaultMount, vaultPath, map[string]any{"key_sha256": keyHash})
 		if err != nil {
 			h.log.Error("vault write consumer key failed", "consumer", name, "error", err)
@@ -273,12 +285,12 @@ func (h *Handler) deleteConsumer(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name := strings.TrimSpace(r.PathValue("name"))
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "consumer name is required")
+		writeError(w, http.StatusBadRequest, errConsumerNameRequired)
 		return
 	}
 
 	// Delete from Consul
-	consulKey := h.opts.ConsulPrefix + "/consumers/" + name
+	consulKey := h.opts.ConsulPrefix + pathConsumers + name
 	if err := h.consul.Delete(ctx, consulKey, false); err != nil {
 		h.log.Error("consul delete consumer failed", "consumer", name, "error", err)
 		writeError(w, http.StatusInternalServerError, "consul delete: "+err.Error())
@@ -287,7 +299,7 @@ func (h *Handler) deleteConsumer(w http.ResponseWriter, r *http.Request) {
 
 	// Delete from Vault
 	if h.vault != nil {
-		vaultPath := h.opts.VaultPrefix + "/consumers/" + name
+		vaultPath := h.opts.VaultPrefix + pathConsumers + name
 		if err := h.vault.Delete(ctx, h.opts.VaultMount, vaultPath); err != nil {
 			h.log.Error("vault delete consumer key failed", "consumer", name, "error", err)
 		}
@@ -300,7 +312,7 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name := strings.TrimSpace(r.PathValue("name"))
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "consumer name is required")
+		writeError(w, http.StatusBadRequest, errConsumerNameRequired)
 		return
 	}
 	if h.vault == nil {
@@ -314,7 +326,7 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vaultPath := h.opts.VaultPrefix + "/consumers/" + name
+	vaultPath := h.opts.VaultPrefix + pathConsumers + name
 	if err := h.vault.Write(ctx, h.opts.VaultMount, vaultPath, map[string]any{"key_sha256": keyHash}); err != nil {
 		h.log.Error("vault rotate key failed", "consumer", name, "error", err)
 		writeError(w, http.StatusInternalServerError, "vault rotate key: "+err.Error())
@@ -335,7 +347,7 @@ type QuotaItem struct {
 }
 
 func (h *Handler) fetchQuotas(ctx context.Context) ([]QuotaItem, error) {
-	prefix := h.opts.ConsulPrefix + "/quotas/"
+	prefix := h.opts.ConsulPrefix + pathQuotas
 	pairs, _, err := h.consul.List(ctx, prefix, 0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list quotas: %w", err)
@@ -376,7 +388,7 @@ func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "quota profile name is required")
+		writeError(w, http.StatusBadRequest, errQuotaNameRequired)
 		return
 	}
 	if req.TokensPerHour <= 0 {
@@ -385,7 +397,7 @@ func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload, _ := json.Marshal(map[string]int64{"tokens_per_hour": req.TokensPerHour})
-	key := h.opts.ConsulPrefix + "/quotas/" + name
+	key := h.opts.ConsulPrefix + pathQuotas + name
 	if err := h.consul.Put(ctx, key, payload); err != nil {
 		h.log.Error("consul put quota failed", "profile", name, "error", err)
 		writeError(w, http.StatusInternalServerError, "consul put: "+err.Error())
@@ -399,10 +411,10 @@ func (h *Handler) deleteQuota(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name := strings.TrimSpace(r.PathValue("name"))
 	if name == "" {
-		writeError(w, http.StatusBadRequest, "quota profile name is required")
+		writeError(w, http.StatusBadRequest, errQuotaNameRequired)
 		return
 	}
-	key := h.opts.ConsulPrefix + "/quotas/" + name
+	key := h.opts.ConsulPrefix + pathQuotas + name
 	if err := h.consul.Delete(ctx, key, false); err != nil {
 		h.log.Error("consul delete quota failed", "profile", name, "error", err)
 		writeError(w, http.StatusInternalServerError, "consul delete: "+err.Error())

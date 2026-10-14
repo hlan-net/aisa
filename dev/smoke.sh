@@ -15,6 +15,7 @@ AISA="${AISA:-http://127.0.0.1:8084}"
 COMPOSE=(docker compose -f "$(dirname "$0")/compose.yaml")
 JSON='Content-Type: application/json'
 QWEN='{"model":"qwen3"}'
+HTTP_CODE='%{http_code}'
 
 pass=0
 body_file=$(mktemp)
@@ -39,7 +40,7 @@ chat() {
 
 # Wait until the gateway answers; the healthcheck can pass before the route is loaded.
 for _ in $(seq 1 30); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/v1/chat/completions" || true)
+    code=$(curl -s -o /dev/null -w "$HTTP_CODE" -X POST "$GATEWAY/v1/chat/completions" || true)
     [[ "$code" != "000" ]] && [[ "$code" != "404" ]] && break
     sleep 1
 done
@@ -65,10 +66,10 @@ expect "redis: ping" "PONG" "$("${COMPOSE[@]}" exec -T redis redis-cli ping | tr
 
 echo "== aisa: /v1/decide with the consumers declared in Consul and their keys in Vault"
 for _ in $(seq 1 30); do
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")" == 200 ]] && break
+    [[ "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")" == 200 ]] && break
     sleep 1
 done
-expect "aisa: ready (consumers, declarations and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
+expect "aisa: ready (consumers, declarations and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")"
 # decide <key> <json body> [extra curl args...]: prints "<status> <X-Aisa-Consumer> <X-Aisa-Model>"
 decide() {
     local key=$1 body=$2
@@ -165,7 +166,7 @@ fi
 
 echo "== aisa: admin UI and management API"
 expect "admin: /admin redirects to /admin/" "301" \
-    "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/admin")"
+    "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/admin")"
 if curl -fsS "$AISA/admin/" | grep -q "aisa // Administration"; then
     ok "admin: /admin/ serves the administration dashboard HTML"
 else
