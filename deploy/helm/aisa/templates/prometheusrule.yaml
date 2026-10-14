@@ -1,0 +1,220 @@
+{{- if .Values.prometheusRule.enabled }}
+# The alerts of docs/features/usage-metrics.md, on aisa's own aisa_* metrics: the same for every
+# proxy. The two that need another source are not here: AisaUsageEventsLost compares aisa's tokens
+# with the gateway's, so it belongs to the proxy's chart, and AisaBackendDown reads Consul's health
+# checks. AisaDown and the alerts named "critical" mean that aisa's rules are not in effect.
+{{- $job := printf "%s-metrics" (include "aisa.fullname" .) }}
+{{- $up := printf "up{job=%q,namespace=%q}" $job .Release.Namespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "aisa.fullname" . }}
+  labels:
+    {{- include "aisa.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: aisa.availability
+      rules:
+        # The scrape target is the ServiceMonitor's: the Service <release>-metrics. absent() fires
+        # when Prometheus has no such target at all, so an unselected ServiceMonitor shows too.
+        - alert: AisaDown
+          expr: {{ $up }} == 0 or absent({{ $up }})
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "aisa is down; the proxy's fail policies are in effect"
+            description: >-
+              Prometheus has not scraped aisa for 2 minutes. The gateway answers 503 for the models
+              whose backends are fail_policy closed, and serves the others to any credential
+              without a decision, a quota or a budget.
+        - alert: AisaConsumersStale
+          expr: time() - aisa_consumers_loaded_timestamp_seconds > 300
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "aisa has not loaded its consumers from Vault for 5 minutes"
+            description: >-
+              The consumers' key hashes were last loaded {{ `{{ $value | humanizeDuration }}` }} ago.
+              aisa keeps deciding from the ones in memory, and fails closed once they are 15 minutes
+              old. See aisa_consumer_loads_total{result!="ok"} and aisa's log for Vault's error.
+        - alert: AisaConsumersUnreadable
+          expr: aisa_consumers_unreadable > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $value }}` }} consumer(s) in Vault cannot be read"
+            description: >-
+              Vault lists consumers that aisa could not read at the last load. Their keys keep
+              working from memory and stop after 15 minutes.
+        - alert: AisaConsumerDeclarationInvalid
+          expr: aisa_consumer_declarations_invalid > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $value }}` }} consumer declaration(s) in Consul cannot be read"
+            description: >-
+              A consumer whose declaration under aisa/consumers/ in Consul KV cannot be read, null
+              included, is answered 503. aisa's log names the consumer.
+{{- if .Values.quotas.enabled }}
+        - alert: AisaQuotaProfileInvalid
+          expr: aisa_quota_profiles_invalid > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $value }}` }} quota profile(s) in Consul cannot be parsed"
+            description: >-
+              The consumers of a broken profile under aisa/quotas/ in Consul KV are answered 503.
+              aisa's log names the profile.
+        - alert: AisaQuotaCountersFailing
+          expr: sum by (op) (rate(aisa_quota_errors_total[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "aisa cannot {{ `{{ $labels.op }}` }} its quota counters in Redis"
+            description: >-
+              Reads or writes of the quota counters have failed for 5 minutes. Token quotas are not
+              enforced while this lasts; consumers with a quota are answered 503.
+{{- end }}
+    - name: aisa.config
+      rules:
+        - alert: AisaConfigRenderRejected
+          expr: increase(aisa_config_renders_total{result="rejected"}[15m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "the proxy rejected a rendered gateway config"
+            description: >-
+              A value in Consul or Vault renders a config the gateway cannot load in full. The
+              gateway keeps the previous config until it is fixed; the proxy's log has the reason.
+        - alert: AisaConfigHeld
+          expr: increase(aisa_config_renders_total{result="held"}[15m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "the proxy held a rendered gateway config without a model"
+            description: >-
+              The catalog offered no backend the proxy can render, and the gateway serves its last
+              config instead. Check the aisa-backend services and their health in Consul.
+        - alert: AisaConfigEmpty
+          expr: aisa_config_models == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "the gateway config has no model"
+            description: >-
+              The config the proxy last promoted has no model route, so every model gets 503. The
+              gauge is absent until the first promoted report after an aisa restart, so this is a
+              promoted empty config, not a restart.
+    - name: aisa.usage
+      rules:
+        - alert: AisaUsageMissing
+          expr: sum by (backend) (rate(aisa_usage_missing_total[5m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "the backend {{ `{{ $labels.backend }}` }} reports no token counts"
+            description: >-
+              Successful requests of this backend arrive without usage, so they are charged by
+              estimate (aisa_tokens_estimated_total) and not counted in aisa_tokens_total. The
+              gateway's own token metrics miss the same usage.
+        - alert: AisaUsageEventsRejected
+          expr: rate(aisa_usage_events_total{result="rejected"}[5m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "the proxy sends usage events aisa cannot use"
+            description: >-
+              Rejected events are answered 200, so the log sink does not retry them: their usage is
+              lost. aisa's log has the reason for each.
+        - alert: AisaUsageRequestsRejected
+          expr: sum by (reason) (increase(aisa_usage_requests_rejected_total[15m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "the proxy sends usage aisa cannot read ({{ `{{ $labels.reason }}` }})"
+            description: >-
+              Whole usage requests are rejected with none of their events read; the log sink drops
+              them after its retries. The proxy's log format and aisa's version may not match.
+        - alert: AisaSlowFirstToken
+          expr: histogram_quantile(0.95, sum by (le, model, backend) (rate(aisa_ttft_seconds_bucket[15m]))) > 20
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $labels.model }}` }} on {{ `{{ $labels.backend }}` }} takes over 20 s to its first token"
+            description: >-
+              The p95 time to first token is {{ `{{ $value | humanizeDuration }}` }}. The model may be
+              too large for the backend, or the backend is swapping.
+        - alert: AisaBudgetSoftLimit
+          expr: aisa_budget_spent / aisa_budget_limit > 0.8
+          labels:
+            severity: info
+          annotations:
+            summary: "{{ `{{ $labels.consumer }}` }} has used {{ `{{ $value | humanizePercentage }}` }} of its budget"
+            description: "The consumer's budget for the {{ `{{ $labels.period }}` }} is over 80 % spent."
+        - alert: AisaBudgetExhausted
+          expr: sum by (consumer) (rate(aisa_decisions_total{result=~"deny_budget|downgrade"}[5m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $labels.consumer }}` }} is denied or downgraded, its budget is used up"
+            description: "The consumer's requests are answered 429 or routed to a cheaper model."
+{{- if .Values.kubernetes.enabled }}
+    - name: aisa.kubernetes
+      rules:
+        - alert: AisaConsumerSecretFailing
+          expr: sum by (state) (aisa_consumer_secrets{state!="ok"}) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $value }}` }} consumer Secret(s) in the state {{ `{{ $labels.state }}` }}"
+            description: >-
+              A consumer's Secret is not written: not_owned, a Secret of that name is not the
+              consumer's; duplicate_target, another consumer names it too; error, the write failed.
+              aisa's log names the consumer.
+        - alert: AisaKubeWritesFailing
+          expr: sum by (kind) (rate(aisa_kube_passes_total{result="error"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "aisa's passes over the {{ `{{ $labels.kind }}` }} fail"
+            description: >-
+              The Kubernetes objects aisa writes are not kept up to date. aisa's log has the
+              error of each pass.
+        - alert: AisaKubeNoLeader
+          expr: sum(aisa_kube_leader) == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "no aisa replica holds the leader's Lease"
+            description: >-
+              No replica writes the consumers' Secrets or the Model objects. Check the Lease
+              <release>-leader and aisa's log.
+        - alert: AisaModelUnavailable
+          expr: aisa_models - aisa_models_available > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $value }}` }} Model object(s) have no healthy backend"
+            description: >-
+              A model on offer has no backend whose Consul health check passes, so its requests
+              fail. The Model's status names the backends; a check that nothing runs stays as it
+              was registered.
+{{- end }}
+{{- end }}
