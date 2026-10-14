@@ -124,7 +124,7 @@ What a template does, as found in spike S9:
 
 - **Only healthy backends are rendered**, grouped by the models in their service meta. A model without a healthy backend gets an answer from the gateway itself: 503 with an error body, not a missing route.
 - **The gateway serves the model list itself.** `GET /v1/models` answers with the rendered models in the OpenAI shape, so SDKs and chat UIs that list models before they call one work. It asks for no decision and needs no credential: the list holds nothing secret, and it reports no usage. It lists the models that can be called now, those with a healthy backend: the `Model` objects ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)) are the whole catalog and keep a model without a backend as `available: false`, which the OpenAI shape has no field for, so the list is their available subset. It is static per render: a model whose last healthy backend goes disappears with the next render. A model name is rendered as a JSON string and cannot change the body's shape; a gateway that resolves variables in a static body (APISIX's `$name`) gets such characters escaped.
-- **A backend names its provider key** with the service meta `key`: the name of the secret under `secret/aisa/providers/`. A backend without it gets no key, and **no backend gets the client's `Authorization`**: APISIX's `ai-proxy-multi` forwards the client's headers, so the internal route removes it.
+- **A backend names its provider key** with the service meta `key`: the name of the secret under `secret/aisa/providers/`. A backend without it gets no key, and **no backend gets the client's `Authorization`**, nor any other header of the client's ([account isolation](#account-isolation)).
 - **A second hop keeps the request's id.** The internal route of APISIX is a new request with an id of its own, so the client-facing route passes the id it sent to the decision along, and the usage event carries that one.
 - **A request aisa denied is reported by the client-facing route**, because it never reaches the internal one. Its logger runs only for requests without `X-Aisa-Consumer`, so an allowed request still has one event.
 - **A backend is named by its Consul service ID**, which must be unique in the catalog, and **reached over `https` when it has a key**, unless its meta `scheme` says `http` ([`CONSUL.md`](./CONSUL.md#backends-consul-catalog)).
@@ -133,6 +133,27 @@ What a template does, as found in spike S9:
 - **The rendered file is shared as a directory.** consul-template replaces the file by renaming a new one over it, which a mount of the single file does not show.
 - **The template sets how often secrets are read again** (`default_lease_duration`); it is the time a rotated key takes to reach the gateway.
 - **The upstream timeout is always set explicitly**, never left to the gateway's default: APISIX's `ai-proxy-multi` cuts off after 30 s, before a slow local model has finished a non-streamed answer (spike S2, [#14](https://github.com/hlan-net/aisa/issues/14)). It comes from the backend's meta `timeout` in seconds, 300 when absent, and is capped at the largest value the gateway accepts; the proxy's README states that cap (600 s for APISIX). An internal hop between routes gets a read timeout at least as long. Clients of backends that can take longer than the cap must stream: the timeout limits the wait for the next byte, not the whole response.
+
+### Account isolation
+
+The provider accounts are the holder's. Nothing about them reaches an application, and an application cannot steer how they are used (US-2, [#35](https://github.com/hlan-net/aisa/issues/35)). A provider sees the gateway and the request body, nothing of the application's or of aisa's:
+
+1. **Request headers to a provider: an allowlist.** Only `Content-Type` and `Accept` of the client's request go on, with what the gateway itself sets to reach the provider (its key, `Host`, the framing). Everything else is dropped before the provider: the client's `Authorization`, `OpenAI-Organization` and `OpenAI-Project`, with which a client could choose the organisation or project billed under the holder's key, cookies, `User-Agent`, and aisa's own `X-Aisa-*`, which name the consumer. Every header counts: a gateway that reads only some of them (APISIX and its plugins read 100) refuses a request with more, 431, so that none can hide behind the others; that also holds for [proxy rule 1](#proxy-rules-for-the-decision).
+2. **Response headers from a provider: an allowlist.** A client gets `Content-Type`, `Cache-Control`, `Retry-After` and the framing of the provider's answer, no other header of the provider's: `openai-organization`, `openai-processing-ms`, `x-request-id` and `x-ratelimit-*` name the account or show its limits. aisa's own headers (`Retry-After` on a decision) are not the provider's and pass ([proxy rule 4](#proxy-rules-for-the-decision)). A gateway that does not get a provider's `Retry-After` itself passes none: APISIX 3.19's `ai-proxy-multi` keeps only the provider's `Content-Type`, so a provider's 429 reaches the client without one.
+3. **A provider's error body is replaced** by an OpenAI-style error of the gateway's own, so no text of the provider's, which can name the account or a key (`Incorrect API key provided: sk-…`), reaches a client. The status is kept, except that a provider's 401 and 403 become 502: the gateway's credentials failed, not the client's.
+
+   | Provider | Client | `error.type` |
+   |---|---|---|
+   | 401, 403 | 502 | `provider_error` |
+   | 429 | 429 | `provider_rate_limited` |
+   | other 4xx | the same | `invalid_request_error` |
+   | 5xx | the same | `provider_error` |
+   | none: the gateway could not reach one (5xx of its own) | the same | `gateway_error` |
+
+   A provider's answer is told from the gateway's own by where it came from (APISIX: the response source `upstream`). The gateway's 5xx are replaced too, because their text can name a backend or an address; its 4xx are about the client's request and pass. The gateway's log gets the provider's status, the client's and the gateway's classification for the holder, nothing of the provider's text or codes, which can carry a key (US-2, criterion 5). The usage event reports the status the client got.
+4. **A backend with a key is reached only through a model route**: the internal listener is on `127.0.0.1`, and only the client-facing route, after the decision, sends requests to it. `fail_policy = "open"` on a backend with a key is the holder's explicit choice: requests without a decision then reach the paid account.
+
+The gateway's own answers (no backend, aisa unreachable) and aisa's are not a provider's, and are passed as they are. In APISIX the model route removes the request headers before `ai-proxy-multi`, which forwards every header of the request it gets, and a global rule filters the response of a model route. `runtime_test.sh` checks each rule against APISIX with a mock backend that names its account in headers and error bodies.
 
 Rendering replaces gateway-specific discovery and secret integrations. APISIX's Vault limitations (KV v1 only, static token) and the question of Consul discovery in `ai-proxy-multi` stop mattering, because the gateway never talks to Vault or Consul itself.
 
@@ -198,6 +219,7 @@ A proxy is complete when it provides:
 3. a consul-template template for the gateway config, with an explicit upstream timeout, the [check](#checking-the-rendered-config) before the gateway loads it, and the [report](#reporting-a-render) of each render
 4. an example deployment and an integration test against a mock backend
 5. the client-facing paths of the OpenAI-compatible API: `POST /v1/chat/completions` through the decision, and `GET /v1/models` from the rendered models
+6. [account isolation](#account-isolation): an allowlist of the request headers a provider gets and of the response headers a client gets, and a provider's error bodies replaced by the gateway's, covered by the integration test
 
 ## Versioning
 
