@@ -26,7 +26,8 @@
 //	CONSUL_CACERT               CA certificate of Consul, PEM                     system CAs
 //	CONSUL_HTTP_TOKEN           a fixed Consul ACL token, for development
 //	CONSUL_HTTP_TOKEN_FILE      file with the Consul ACL token, read for each request
-//	AISA_ADMIN_ENABLED          enable admin interface and web UI at /admin       true
+//	AISA_CONSUL_PREFIX          prefix of aisa's keys in Consul KV                aisa
+//	AISA_ADMIN_ENABLED          enable admin interface and web UI at /admin       false
 //	AISA_REDIS_ADDR             Redis host:port for the quota counters; turns token quotas on
 //	AISA_REDIS_USERNAME         Redis ACL user
 //	AISA_REDIS_PASSWORD         Redis password

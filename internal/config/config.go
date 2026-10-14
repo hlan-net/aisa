@@ -33,7 +33,7 @@ type Config struct {
 	// configured too.
 	Consul Consul
 	Redis  Redis
-	Admin Admin
+	Admin  Admin
 	// Kubernetes is off outside a cluster.
 	Kubernetes Kubernetes
 }
@@ -41,7 +41,7 @@ type Config struct {
 // Admin configures the admin interface and Web UI at /admin.
 type Admin struct {
 	// Enabled reports whether the admin interface is served at /admin (AISA_ADMIN_ENABLED).
-	// Default true.
+	// Default false.
 	Enabled bool
 }
 
@@ -182,7 +182,7 @@ func Defaults() Config {
 			EmptyGrace: 5 * time.Minute,
 		},
 		Consul: Consul{Prefix: "aisa"},
-		Admin:  Admin{Enabled: true},
+		Admin:  Admin{Enabled: false},
 	}
 }
 

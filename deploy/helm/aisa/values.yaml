@@ -60,12 +60,17 @@ consul:
 quotas:
   enabled: true
 
-# Admin interface and embedded web UI (/admin). Off: /admin endpoints return 404.
+# Admin interface and embedded web UI (/admin). Off by default.
+# WARNING: /admin/api has no internal authentication. When enabled, anyone who can reach
+# the API port can create consumers, mint keys, and manage quotas. If exposed via Ingress,
+# always protect it with authentication annotations (e.g. forward-auth, OIDC, oauth2-proxy).
 admin:
-  enabled: true
+  enabled: false
   ingress:
     enabled: false
     className: ""
+    # WARNING: Empty annotations publish unauthenticated key minting to whoever reaches
+    # the Ingress. Always configure an authentication proxy or forward-auth middleware here:
     annotations: {}
       # For authentication in front of the admin UI (e.g. Traefik middleware or oauth2-proxy):
       # traefik.ingress.kubernetes.io/router.middlewares: default-oauth2-proxy@kubernetescrd

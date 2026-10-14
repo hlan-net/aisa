@@ -21,11 +21,14 @@ spec:
             matchLabels:
               app.kubernetes.io/instance: {{ .Release.Name }}
               app.kubernetes.io/component: proxy
-        {{- if and .Values.admin.enabled .Values.admin.ingress.enabled }}
-        {{- with .Values.admin.ingress.extraFrom }}
+    {{- if and .Values.admin.enabled .Values.admin.ingress.enabled }}
+    {{- with .Values.admin.ingress.extraFrom }}
+    - ports:
+        - {port: http, protocol: TCP}
+      from:
         {{- toYaml . | nindent 8 }}
-        {{- end }}
-        {{- end }}
+    {{- end }}
+    {{- end }}
     {{- with .Values.networkPolicy.extraFrom }}
     - ports:
         - {port: metrics, protocol: TCP}

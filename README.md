@@ -72,7 +72,7 @@ curl localhost:8080/healthz
 | Variable | Meaning | Default |
 |---|---|---|
 | `AISA_ADDR` | Address to listen on | `:8080` |
-| `AISA_ADMIN_ENABLED` | Enable administration Web UI and API at `/admin` | `true` |
+| `AISA_ADMIN_ENABLED` | Enable administration Web UI and API at `/admin` | `false` |
 | `AISA_LOG_LEVEL` | `debug`, `info`, `warn` or `error`; logs are JSON lines on stdout | `info` |
 | `AISA_SHUTDOWN_TIMEOUT` | Time that requests in flight get to finish after SIGTERM | `10s` |
 

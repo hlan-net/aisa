@@ -240,3 +240,38 @@ func TestFromEnvKubernetes(t *testing.T) {
 		t.Errorf("defaults = %+v, %v", cfg.Kubernetes, err)
 	}
 }
+
+func TestFromEnvAdmin(t *testing.T) {
+	// Defaults to false
+	cfg, err := FromEnv(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Admin.Enabled {
+		t.Errorf("Admin.Enabled defaults to %v, want false", cfg.Admin.Enabled)
+	}
+
+	// Enabled via env var
+	cfg, err = FromEnv(env(map[string]string{"AISA_ADMIN_ENABLED": "true"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Admin.Enabled {
+		t.Errorf("Admin.Enabled = false, want true")
+	}
+
+	// Disabled via env var
+	cfg, err = FromEnv(env(map[string]string{"AISA_ADMIN_ENABLED": "false"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Admin.Enabled {
+		t.Errorf("Admin.Enabled = true, want false")
+	}
+
+	// Invalid value
+	_, err = FromEnv(env(map[string]string{"AISA_ADMIN_ENABLED": "not-a-bool"}))
+	if err == nil {
+		t.Error("expected error for invalid AISA_ADMIN_ENABLED, got nil")
+	}
+}

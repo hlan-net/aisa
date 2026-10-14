@@ -188,7 +188,7 @@ create_resp=$(curl -fsS -X POST -H "$JSON" \
     -d "{\"name\":\"$admin_consumer\",\"quota_profile\":\"interactive\",\"generate_key\":true}" \
     "$AISA/admin/api/consumers")
 admin_key=$(jq -r .plaintext_key <<<"$create_resp")
-if [[ "$admin_key" =~ ^aisa_sec_[0-9a-f]{64}$ ]]; then
+if [[ "$admin_key" =~ ^aisa-[0-9a-f]{64}$ ]]; then
     ok "admin: created consumer key format valid"
 else
     fail "admin: created consumer key invalid: '$admin_key'"
@@ -200,9 +200,9 @@ for _ in $(seq 1 15); do
 done
 expect "admin: newly created consumer allowed in decide" "200 $admin_consumer qwen3" "$(decide "$admin_key" "$QWEN")"
 
-rotate_resp=$(curl -fsS -X POST "$AISA/admin/api/consumers/$admin_consumer/rotate-key")
+rotate_resp=$(curl -fsS -X POST -H "$JSON" "$AISA/admin/api/consumers/$admin_consumer/rotate-key")
 rotated_key=$(jq -r .plaintext_key <<<"$rotate_resp")
-if [[ "$rotated_key" =~ ^aisa_sec_[0-9a-f]{64}$ ]]; then
+if [[ "$rotated_key" =~ ^aisa-[0-9a-f]{64}$ ]]; then
     ok "admin: rotated consumer key format valid"
 else
     fail "admin: rotated consumer key invalid: '$rotated_key'"

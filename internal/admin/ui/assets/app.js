@@ -1,8 +1,21 @@
 // aisa admin dashboard client script
 document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
+  setupActionDelegation();
   void loadOverview();
 });
+
+function setupActionDelegation() {
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const name = btn.dataset.name;
+    if (action === 'rotate-key') void rotateKey(name);
+    else if (action === 'delete-consumer') void deleteConsumer(name);
+    else if (action === 'delete-quota') void deleteQuota(name);
+  });
+}
 
 // Navigation tabs
 function setupTabs() {
@@ -129,8 +142,8 @@ async function loadConsumers() {
         <td>${c.has_key ? '<span class="badge badge-ready">Key Present</span>' : '<span class="badge badge-warning">Missing Hash</span>'}</td>
         <td>${renderStatusBadge(c.status)}</td>
         <td class="text-right">
-          <button class="btn btn-outline" style="padding:3px 8px; font-size:11px;" onclick="rotateKey('${escapeHTML(c.name)}')">Rotate Key</button>
-          <button class="btn btn-danger" onclick="deleteConsumer('${escapeHTML(c.name)}')">Delete</button>
+          ${!c.namespace ? `<button class="btn btn-outline" style="padding:3px 8px; font-size:11px;" data-action="rotate-key" data-name="${escapeHTML(c.name)}">Rotate Key</button>` : ''}
+          <button class="btn btn-danger" data-action="delete-consumer" data-name="${escapeHTML(c.name)}">Delete</button>
         </td>
       </tr>
     `).join('');
@@ -247,7 +260,7 @@ async function loadQuotas() {
         <td><strong>${escapeHTML(q.name)}</strong></td>
         <td><code>${formatTokens(q.tokens_per_hour)} tokens / hour</code></td>
         <td class="text-right">
-          <button class="btn btn-danger" onclick="deleteQuota('${escapeHTML(q.name)}')">Delete</button>
+          <button class="btn btn-danger" data-action="delete-quota" data-name="${escapeHTML(q.name)}">Delete</button>
         </td>
       </tr>
     `).join('');

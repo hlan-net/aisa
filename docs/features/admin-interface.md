@@ -7,13 +7,13 @@ aisa provides an embedded Web UI and REST Administration API at `/admin` to insp
 The administration interface follows aisa's core design principles:
 - **Consul and Vault remain the sources of truth**: the admin interface reads from and writes to Consul KV and Vault KV v2. It stores nothing in local process memory or separate databases.
 - **Zero external dependencies**: the Web UI is self-contained and compiled directly into the single Go binary using `embed.FS`. It requires no external Node/npm build steps, no external CDN assets, and runs airgapped on both `linux/amd64` and `linux/arm64`.
-- **Secrets never leak**: consumer API keys are generated as cryptographically secure random tokens (`aisa_sec_<hex>`). Vault stores only the SHA-256 hash. The plaintext key is displayed exactly once upon creation or rotation and cannot be retrieved afterwards.
+- **Secrets never leak**: consumer API keys are generated as cryptographically secure random tokens (`aisa-<hex>`). Vault stores only the SHA-256 hash. The plaintext key is displayed exactly once upon creation or rotation and cannot be retrieved afterwards.
 
 ---
 
 ## Architecture and Endpoints
 
-When enabled (via `AISA_ADMIN_ENABLED=true`, enabled by default), aisa serves the Web UI and JSON API on the primary listener address (`AISA_ADDR`):
+When enabled (via `AISA_ADMIN_ENABLED=true`, disabled by default), aisa serves the Web UI and JSON API on the primary listener address (`AISA_ADDR`):
 
 ```
 Browser / Client ──▶ GET /admin ────────▶ 301 Redirect to /admin/
@@ -26,7 +26,7 @@ API Client       ──▶ /admin/api/* ──────▶ REST Administratio
 
 | Environment Variable | Description | Default |
 |----------------------|-------------|---------|
-| `AISA_ADMIN_ENABLED` | Enable the admin dashboard and API under `/admin` | `true` |
+| `AISA_ADMIN_ENABLED` | Enable the admin dashboard and API under `/admin` | `false` |
 | `AISA_ADDR` | Primary listening address | `:8080` |
 | `AISA_VAULT_KV_MOUNT` | KV v2 mount in Vault for consumer key hashes | `secret` |
 | `AISA_VAULT_PREFIX` | Secret path prefix in Vault | `aisa` |
@@ -42,18 +42,18 @@ Displays real-time system readiness checks (Vault connectivity, Consul declarati
 
 ### 2. Consumer Management
 - **List consumers**: Displays declared consumers in Consul KV (`aisa/consumers/<name>`), their assigned quota profile, Kubernetes namespace and Secret binding, Vault key hash status, and synchronization state (`ready`, `missing_key`, `undeclared`, `invalid`).
-- **Create consumer**: Allows declaring a consumer in Consul with optional quota profile, Kubernetes target Secret, and either automated key generation or custom key specification.
-- **Rotate key**: Generates a new API key, updates the SHA-256 hash in Vault KV v2 (`secret/data/aisa/consumers/<name>`), and returns the new plaintext key for one-time copying.
-- **Delete consumer**: Removes the declaration from Consul KV and deletes the corresponding key hash from Vault KV v2.
+- **Create consumer**: Declares a consumer in Consul KV with optional quota profile, Kubernetes target Secret, and either automated key generation or custom key specification (minimum 16 characters). Key issuance is supported for standalone consumers; consumers bound to a Kubernetes Secret have their keys managed by Kubernetes reconciliation. Checks existence with check-and-set (CAS) and returns 409 Conflict if the consumer already exists.
+- **Rotate key**: Generates a new API key for standalone consumers, preserves superseded keys in Vault during the grace period, and writes the new key with check-and-set concurrency protection. Refuses rotation for Kubernetes-managed consumers (handled via Secret reconciliation).
+- **Delete consumer**: Removes the declaration from Consul KV and permanently deletes the key metadata and versions from Vault KV v2.
 
 ### 3. Quota Profiles
 - **List quota profiles**: Inspects rate-limiting profiles configured in Consul KV (`aisa/quotas/<name>`).
-- **Create quota profile**: Configures hourly token limits (`tokens_per_hour`) with convenient preset buttons (100k, 500k, 1M, 5M).
+- **Create quota profile**: Creates hourly token limits (`tokens_per_hour`) using check-and-set (returns 409 Conflict if already exists), with preset buttons (100k, 500k, 1M, 5M).
 - **Delete quota profile**: Deletes profiles no longer in use.
 
 ### 4. Backends & Models Catalog
-- **Backends**: Discovers healthy instances of `aisa-backend` registered in the Consul service catalog, listing their IP/port, priority, fail policy, and supported models.
-- **Models**: Summarizes available models mapped across discovered backends and indicates overall model health.
+- **Backends**: Discovers instances of `aisa-backend` registered in the Consul service catalog, listing their IP/port, priority, fail policy, check status, and supported models.
+- **Models**: Summarizes available models mapped across discovered backends and indicates overall model health (healthy if at least one backend providing the model passes checks).
 
 ---
 
@@ -150,6 +150,8 @@ admin:
 
 ## Security Considerations
 
-- **Vault and Consul ACLs**: aisa interacts with Consul and Vault using its configured service tokens. In production Kubernetes clusters, aisa authenticates via Kubernetes ServiceAccount auth to Vault and obtains Consul ACL tokens via Vault Agent.
-- **Key Safety**: Plaintext keys are generated in-memory using crypto-secure randomness (`crypto/rand`) and hashed with SHA-256 before writing to Vault. Plaintext keys are never logged and never stored in Consul or Vault.
-- **Network Isolation**: When deployed in Kubernetes using the Helm chart (`deploy/helm/aisa`), aisa's API port is accessible within the cluster via ClusterIP. If desired, access to `/admin` can be restricted using Kubernetes NetworkPolicies, Ingress authentication proxies, or by disabling the admin interface via `admin.enabled: false` (or `AISA_ADMIN_ENABLED=false`).
+- **No Built-in Authentication**: The `/admin` Web UI and `/admin/api` management endpoints perform no internal authentication. In-cluster, the API port is reachable by the proxy and by any pod if NetworkPolicies are disabled. Ingress authentication annotations protect only the Ingress path, not internal ClusterIP calls. When exposing `/admin` externally, always configure authentication annotations on the Ingress (such as Traefik forward-auth, OIDC, or oauth2-proxy). For this reason, the admin interface is disabled by default (`AISA_ADMIN_ENABLED=false` and `admin.enabled=false`).
+- **CSRF & Request Validation**: Mutating API endpoints (`POST`, `PUT`, `DELETE`) require `Content-Type: application/json` and reject cross-site browser requests (`Sec-Fetch-Site: cross-site`), preventing CSRF attacks when deployed behind cookie-authenticated forward-auth proxies.
+- **Name Restrictions**: Declared consumer names and quota profile names are strictly limited to `[A-Za-z0-9._-]+` (1 to 253 characters) and cannot be `unknown`.
+- **Vault and Consul ACLs**: aisa interacts with Consul and Vault using its configured service tokens. In production Kubernetes clusters, aisa authenticates via Kubernetes ServiceAccount auth to Vault and obtains Consul ACL tokens via Vault Agent. Consumer key deletion permanently purges metadata and versions via `DELETE secret/metadata/aisa/consumers/<name>`, requiring the `delete` capability on metadata.
+- **Key Safety**: Plaintext keys are generated in-memory using crypto-secure randomness (`crypto/rand`) and hashed with SHA-256 before writing to Vault. Plaintext keys are never logged and never stored in Consul or Vault. Standalone key rotation preserves superseded hashes during the grace period using check-and-set concurrency protection.

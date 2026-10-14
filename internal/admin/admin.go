@@ -4,11 +4,7 @@ package admin
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -24,14 +20,16 @@ import (
 type ConsulClient interface {
 	List(ctx context.Context, prefix string, index uint64, wait time.Duration) ([]consul.Pair, uint64, error)
 	Put(ctx context.Context, key string, value []byte) error
+	PutCAS(ctx context.Context, key string, value []byte, cas uint64) error
 	Delete(ctx context.Context, key string, recurse bool) error
-	HealthService(ctx context.Context, service string, passingOnly bool) ([]consul.ServiceHealth, error)
+	Health(ctx context.Context, service string) ([]consul.Instance, error)
 }
 
 // VaultClient is the subset of Vault operations needed by the admin interface.
 type VaultClient interface {
 	List(ctx context.Context, mount, path string) ([]string, error)
 	Read(ctx context.Context, mount, path string) (map[string]any, error)
+	ReadVersion(ctx context.Context, mount, path string) (map[string]any, int, error)
 	Write(ctx context.Context, mount, path string, data map[string]any, cas int) error
 	Delete(ctx context.Context, mount, path string) error
 	Probe(ctx context.Context) error
@@ -91,12 +89,12 @@ func (h *Handler) routes() {
 	// API routes
 	h.mux.HandleFunc("GET /admin/api/overview", h.overview)
 	h.mux.HandleFunc("GET /admin/api/consumers", h.listConsumers)
-	h.mux.HandleFunc("POST /admin/api/consumers", h.createConsumer)
-	h.mux.HandleFunc("DELETE /admin/api/consumers/{name}", h.deleteConsumer)
-	h.mux.HandleFunc("POST /admin/api/consumers/{name}/rotate-key", h.rotateConsumerKey)
+	h.mux.HandleFunc("POST /admin/api/consumers", protectJSON(h.createConsumer))
+	h.mux.HandleFunc("DELETE /admin/api/consumers/{name}", protectJSON(h.deleteConsumer))
+	h.mux.HandleFunc("POST /admin/api/consumers/{name}/rotate-key", protectJSON(h.rotateConsumerKey))
 	h.mux.HandleFunc("GET /admin/api/quotas", h.listQuotas)
-	h.mux.HandleFunc("POST /admin/api/quotas", h.createQuota)
-	h.mux.HandleFunc("DELETE /admin/api/quotas/{name}", h.deleteQuota)
+	h.mux.HandleFunc("POST /admin/api/quotas", protectJSON(h.createQuota))
+	h.mux.HandleFunc("DELETE /admin/api/quotas/{name}", protectJSON(h.deleteQuota))
 	h.mux.HandleFunc("GET /admin/api/backends", h.listBackends)
 	h.mux.HandleFunc("GET /admin/api/models", h.listModels)
 
@@ -108,21 +106,22 @@ func (h *Handler) routes() {
 	h.mux.Handle("GET /admin/", http.StripPrefix("/admin", fileServer))
 }
 
-// generateAPIKey generates a cryptographically secure random API key and its sha256 hex digest.
-func generateAPIKey() (plaintext, hash string, err error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", "", fmt.Errorf("read random bytes: %w", err)
+// protectJSON checks Content-Type and rejects cross-site requests on mutating endpoints.
+func protectJSON(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			writeError(w, http.StatusForbidden, "cross-site requests are forbidden")
+			return
+		}
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			ct := r.Header.Get("Content-Type")
+			if !strings.HasPrefix(strings.ToLower(ct), "application/json") {
+				writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+				return
+			}
+		}
+		next(w, r)
 	}
-	plaintext = "aisa_sec_" + hex.EncodeToString(b)
-	sum := sha256.Sum256([]byte(plaintext))
-	hash = hex.EncodeToString(sum[:])
-	return plaintext, hash, nil
-}
-
-func hashKey(plaintext string) string {
-	sum := sha256.Sum256([]byte(plaintext))
-	return hex.EncodeToString(sum[:])
 }
 
 // writeJSON writes status and encodes v as JSON to w.

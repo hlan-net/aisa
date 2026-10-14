@@ -235,11 +235,11 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-func TestHealthService(t *testing.T) {
-	var gotPath, gotQuery string
+func TestHealthExtended(t *testing.T) {
+	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.EscapedPath()
-		gotQuery = r.URL.RawQuery
+		w.Header().Set("X-Consul-Index", "1")
 		_, _ = w.Write([]byte(`[
 			{
 				"Service": {
@@ -264,17 +264,17 @@ func TestHealthService(t *testing.T) {
 	defer srv.Close()
 
 	c, _ := New(Options{Addr: srv.URL})
-	list, err := c.HealthService(context.Background(), "aisa-backend", true)
+	list, err := c.Health(context.Background(), "aisa-backend")
 	if err != nil {
-		t.Fatalf("HealthService failed: %v", err)
+		t.Fatalf("Health failed: %v", err)
 	}
-	if gotPath != "/v1/health/service/aisa-backend" || gotQuery != "passing=true" {
-		t.Errorf("request: path %q, query %q", gotPath, gotQuery)
+	if gotPath != "/v1/health/service/aisa-backend" {
+		t.Errorf("request: path %q", gotPath)
 	}
-	if len(list) != 1 || list[0].Service.ID != "backend-1" || list[0].Service.Meta["models"] != "qwen3" {
+	if len(list) != 1 || list[0].ID != "backend-1" || list[0].Meta["models"] != "qwen3" || list[0].Address != "127.0.0.1" || list[0].Port != 8080 || !list[0].Passing {
 		t.Errorf("unexpected list: %+v", list)
 	}
-	if len(list[0].Checks) != 1 || list[0].Checks[0].Status != "passing" {
+	if len(list[0].Checks) != 1 || list[0].Checks[0].Status != "passing" || list[0].Checks[0].Output != "HTTP 200" {
 		t.Errorf("unexpected checks: %+v", list[0].Checks)
 	}
 }
@@ -304,34 +304,40 @@ func TestDeleteErrorsAndToken(t *testing.T) {
 	}
 }
 
-func TestHealthServiceErrorsAndToken(t *testing.T) {
-	var gotToken string
+func TestPutCAS(t *testing.T) {
+	var gotQuery, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotToken = r.Header.Get("X-Consul-Token")
-		if r.URL.Path == "/v1/health/service/fail" {
-			http.Error(w, "server error", http.StatusInternalServerError)
+		gotQuery = r.URL.RawQuery
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		if r.URL.Path == "/v1/kv/conflict" {
+			_, _ = w.Write([]byte("false"))
 			return
 		}
-		if r.URL.Path == "/v1/health/service/bad-json" {
-			_, _ = w.Write([]byte("not json"))
+		if r.URL.Path == "/v1/kv/error" {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		_, _ = w.Write([]byte("[]"))
+		_, _ = w.Write([]byte("true"))
 	}))
 	defer srv.Close()
 
-	c, _ := New(Options{Addr: srv.URL, Token: "test-token"})
-	if _, err := c.HealthService(context.Background(), "fail", false); err == nil {
+	c, _ := New(Options{Addr: srv.URL})
+	if err := c.PutCAS(context.Background(), "test-key", []byte("val"), 0); err != nil {
+		t.Fatalf("expected PutCAS success, got: %v", err)
+	}
+	if gotQuery != "cas=0" || gotBody != "val" {
+		t.Errorf("expected query cas=0 and body val, got query %q and body %q", gotQuery, gotBody)
+	}
+
+	err := c.PutCAS(context.Background(), "conflict", []byte("val"), 0)
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("expected ErrConflict, got: %v", err)
+	}
+
+	err = c.PutCAS(context.Background(), "error", []byte("val"), 0)
+	if err == nil {
 		t.Error("expected error on 500, got nil")
-	}
-	if _, err := c.HealthService(context.Background(), "bad-json", false); err == nil {
-		t.Error("expected error on bad json, got nil")
-	}
-	if _, err := c.HealthService(context.Background(), "ok", false); err != nil {
-		t.Fatalf("healthservice ok failed: %v", err)
-	}
-	if gotToken != "test-token" {
-		t.Errorf("got token %q, want test-token", gotToken)
 	}
 }
 
