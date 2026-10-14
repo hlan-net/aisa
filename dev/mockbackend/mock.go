@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hlan-net/aisa/dev/internal/devutil"
@@ -44,6 +45,23 @@ type Config struct {
 type server struct {
 	cfg Config
 	log *slog.Logger
+
+	mu sync.Mutex
+	// last holds the headers of the last chat request, for tests of what a gateway forwards.
+	last http.Header
+}
+
+// errorTrigger, as the whole content of a message, makes the backend answer with that status
+// and an error body that names the account and the key, as a provider's can: "mock:error:401".
+const errorTrigger = "mock:error:"
+
+// accountHeaders are what a provider says about the account in its response headers, as
+// OpenAI does; a gateway must not pass them on.
+var accountHeaders = map[string]string{
+	"Openai-Organization":            "org-mock",
+	"Openai-Processing-Ms":           "1",
+	"X-Ratelimit-Remaining-Requests": "99",
+	"X-Request-Id":                   "req-mock",
 }
 
 func newServer(cfg Config, log *slog.Logger) http.Handler {
@@ -66,6 +84,17 @@ func newServer(cfg Config, log *slog.Logger) http.Handler {
 		devutil.WriteJSON(w, http.StatusOK, map[string]string{"version": "mock"})
 	})
 	mux.HandleFunc("POST /api/chat", s.ollamaChat)
+	mux.HandleFunc("GET /debug/last-request", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		devutil.WriteJSON(w, http.StatusOK, map[string]any{"headers": s.last})
+	})
+	mux.HandleFunc("DELETE /debug/last-request", func(w http.ResponseWriter, _ *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.last = nil
+		w.WriteHeader(http.StatusNoContent)
+	})
 	return mux
 }
 
@@ -105,12 +134,23 @@ func (s *server) models(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.last = r.Header.Clone()
+	s.mu.Unlock()
 	w.Header().Set("X-Mock-Backend", s.cfg.Name)
+	for k, v := range accountHeaders {
+		w.Header().Set(k, v)
+	}
 
 	var req chatRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
 		devutil.WriteOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json",
 			fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+	if status, ok := triggeredError(req.Messages); ok {
+		devutil.WriteOpenAIError(w, status, "invalid_request_error", "mock_error",
+			fmt.Sprintf("Incorrect API key provided: sk-mock-1234************abcd for organization org-mock (%d).", status))
 		return
 	}
 	if req.Model == "" {
@@ -259,6 +299,24 @@ func (s *server) completionTokens(r *http.Request, req chatRequest) (int, bool, 
 		return limit, true, nil
 	}
 	return min(s.cfg.DefaultCompletionTokens, maxCompletionTokens), false, nil
+}
+
+// triggeredError reports the status that a message asks for with errorTrigger, 400 to 599.
+func triggeredError(msgs []chatMessage) (int, bool) {
+	for _, m := range msgs {
+		var text string
+		if json.Unmarshal(m.Content, &text) != nil {
+			continue
+		}
+		code, found := strings.CutPrefix(text, errorTrigger)
+		if !found {
+			continue
+		}
+		if status, err := strconv.Atoi(code); err == nil && status >= 400 && status <= 599 {
+			return status, true
+		}
+	}
+	return 0, false
 }
 
 // promptTokens counts whitespace-separated words in all message contents, so the count is

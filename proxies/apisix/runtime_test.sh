@@ -17,6 +17,11 @@ NETWORK="${NETWORK:-aisa-dev_default}"
 CT_IMAGE="${CONSUL_TEMPLATE_IMAGE:-hashicorp/consul-template:0.43.0}"
 APISIX_IMAGE="${APISIX_IMAGE:-apache/apisix:3.19.0-debian}"
 STUB="${STUB:-http://127.0.0.1:8081}"
+# The mock backend that serves qwen3: what it received is how a provider sees the gateway.
+MOCK_LOCAL="${MOCK_LOCAL:-http://127.0.0.1:8082}"
+JSON='Content-Type: application/json'
+CHAT_UI='Authorization: Bearer dev-key-chat-ui'
+STATUS='%{http_code}'
 PORT="${PROXY_PORT:-19080}"
 PROXY="http://127.0.0.1:$PORT"
 CONTAINER=aisa-proxy-runtime-test
@@ -29,6 +34,7 @@ DOLLAR_MODEL='vendor/$model'
 OUT=$(mktemp -d)
 cleanup() {
     curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test" || true
+    curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test-down" || true
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     rm -rf "$OUT"
 }
@@ -82,7 +88,7 @@ proxy() {
         -v "$dir":/rendered:ro \
         "$APISIX_IMAGE" sh -c 'ln -sf /rendered/apisix.yaml /usr/local/apisix/conf/apisix.yaml && exec /docker-entrypoint.sh docker-start' >/dev/null
     for _ in $(seq 1 30); do
-        code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PROXY/v1/chat/completions" || true)
+        code=$(curl -s -o /dev/null -w "$STATUS" -X POST "$PROXY/v1/chat/completions" || true)
         if [[ "$code" != "000" && "$code" != "404" ]]; then
             sleep 2 # the usage event of this probe arrives before the checks clear the stub
             return 0
@@ -95,7 +101,7 @@ proxy() {
 # chat <key> <model>: sends one request and prints its status.
 chat() {
     local key=$1 model=$2
-    curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+    curl -sS -o /dev/null -w "$STATUS" -H "Authorization: Bearer $key" -H "$JSON" \
         -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hello there\"}]}" \
         "$PROXY/v1/chat/completions"
 }
@@ -118,6 +124,12 @@ events() {
     curl -fsS "$STUB/debug/requests?kind=usage" | jq -c '.[].body | if type == "array" then .[] else . end'
 }
 
+# outcomes: the status and consumer of each usage event since the last clear, one per line.
+OUTCOME='"\(.status) \(.consumer // "")"'
+outcomes() {
+    events | jq -r "$OUTCOME"
+}
+
 # one <description> <key> <model> <status> <consumer>: sends one request and checks its status
 # and that exactly one usage event reports it, with that status and consumer.
 one() {
@@ -128,31 +140,116 @@ one() {
     local got
     got=$(events)
     expect "$what: one usage event" "1" "$(grep -c . <<<"$got" || true)"
-    expect "$what: event status and consumer" "$status $consumer" "$(jq -r '"\(.status) \(.consumer // "")"' <<<"$got")"
+    expect "$what: event status and consumer" "$status $consumer" "$(jq -r "$OUTCOME" <<<"$got")"
     if [[ "$status" == 200 ]]; then
         # Served: the event is the internal hop's, with the backend's token counts.
         expect "$what: event has the token counts" "true" "$(jq -r '(.prompt_tokens | tonumber) > 0' <<<"$got")"
     fi
 }
 
+# isolated <description> <message> <status> <type>: sends a request that carries what a client
+# could use to reach into the provider's account, with <message> as its content, and checks
+# that the client gets <status> and an error of <type> (none: a completion), no account header
+# and no text of the provider's, and that the provider got none of the client's headers
+# (PROXY_CONTRACT.md, Account isolation).
+isolated() {
+    local what=$1 message=$2 status=$3 type=$4
+    curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
+    local got
+    got=$(curl -sS -D "$OUT/headers" -o "$OUT/body" -w "$STATUS" \
+        -H "$CHAT_UI" -H "$JSON" \
+        -H 'OpenAI-Organization: org-client' -H 'OpenAI-Project: proj-client' \
+        -H 'X-Custom: from-the-client' -H 'Cookie: session=client' -H 'User-Agent: client-sdk/1.0' \
+        -d "{\"model\":\"qwen3\",\"messages\":[{\"role\":\"user\",\"content\":\"$message\"}]}" \
+        "$PROXY/v1/chat/completions")
+    expect "$what: status" "$status" "$got"
+    expect "$what: error type" "$type" "$(jq -r '.error.type // "none"' "$OUT/body")"
+    expect "$what: no account header to the client" "" \
+        "$(grep -i -E '^(openai-|x-ratelimit-|x-request-id|x-mock-)' "$OUT/headers" | tr -d '\r' || true)"
+    expect "$what: no text of the provider's to the client" "0" "$(grep -c -E 'sk-mock|org-mock' "$OUT/body" || true)"
+    local sent
+    sent=$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase')
+    expect "$what: none of the client's headers to the provider" "" \
+        "$(grep -E '^(openai-|x-custom$|cookie$|authorization$|x-aisa-)' <<<"$sent" || true)"
+    expect "$what: not the client's User-Agent" "0" \
+        "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers["User-Agent"][0] // ""' | grep -c client-sdk || true)"
+    sleep 2
+    expect "$what: one usage event, with the client's status and consumer" "$status chat-ui" \
+        "$(outcomes | tr '\n' ' ' | sed 's/ $//')"
+}
+
 curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
 {"ID": "runtime-test", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
  "Meta": {"provider": "openai-compatible", "models": "$DOLLAR_MODEL", "fail_policy": "open"}}
+EOF
+# A backend that nothing answers on: the gateway's own error, not a provider's.
+curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "runtime-test-down", "Name": "aisa-backend", "Address": "mock-local", "Port": 1,
+ "Meta": {"provider": "openai-compatible", "models": "down-model"}}
 EOF
 
 echo "== aisa reachable"
 curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
 render "$OUT/reachable" http://stub-aisa:8080/v1/decide
 # The first render is promoted unchecked, and reported: the dev backends and the test's.
-expect "the first render is reported as promoted" "promoted 3 4" "$(renders)"
+expect "the first render is reported as promoted" "promoted 4 5" "$(renders)"
 proxy "$OUT/reachable"
 one "allowed" dev-key-chat-ui qwen3 200 chat-ui
 one "denied by a quota" dev-key-blocked qwen3 429 ""
 one "unknown key" wrong-key qwen3 401 ""
-models "the model list, a dollar in a name included" "cloud-large llama3.2 qwen3 $DOLLAR_MODEL"
+models "the model list, a dollar in a name included" "cloud-large down-model llama3.2 qwen3 $DOLLAR_MODEL"
+
+echo "== account isolation"
+isolated "a completion" "hello there" 200 none
+isolated "the provider refuses the key" "mock:error:401" 502 provider_error
+isolated "the provider limits the account" "mock:error:429" 429 provider_rate_limited
+isolated "the provider rejects the request" "mock:error:400" 400 invalid_request_error
+isolated "the provider fails" "mock:error:500" 500 provider_error
+# APISIX reads at most 100 request headers, its own included: a request with more is refused,
+# so none can hide behind the others; one with nearly that many passes, and the hop's headers
+# on top of them, which take it past 100, do not hide one of the client's from the model route.
+many=()
+for i in $(seq 1 110); do many+=(-H "X-Filler-$i: $i"); done
+curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
+expect "more than 100 request headers: refused" "431" "$(curl -sS -o /dev/null -w "$STATUS" \
+    -H "$CHAT_UI" -H "$JSON" -H 'X-Aisa-Consumer: smuggled' "${many[@]}" \
+    -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
+sleep 2
+expect "more than 100 request headers: reported, with no consumer of the client's" "431 " \
+    "$(outcomes)"
+many=()
+for i in $(seq 1 85); do many+=(-H "X-Filler-$i: $i"); done
+curl -fsS -o /dev/null -X DELETE "$MOCK_LOCAL/debug/last-request"
+expect "nearly 100 request headers: status" "200" "$(curl -sS -o /dev/null -w "$STATUS" \
+    -H "$CHAT_UI" -H "$JSON" "${many[@]}" \
+    -H 'OpenAI-Organization: org-client' -H 'X-Aisa-Consumer: smuggled' \
+    -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")"
+expect "nearly 100 request headers: none of them reaches the provider" "" \
+    "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase | select(test("^(openai-|x-filler-|x-aisa-)"))')"
+sleep 2
+expect "nearly 100 request headers: reported under the consumer aisa named" "200 chat-ui" \
+    "$(outcomes | tail -n1)"
+
+# A stream passes the response filters whole: every model route's response goes through them.
+curl -sS -D "$OUT/headers" -o "$OUT/body" -H "$CHAT_UI" -H "$JSON" \
+    -d '{"model":"qwen3","stream":true,"messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions"
+expect "a stream: event stream" "text/event-stream" "$(grep -i '^content-type:' "$OUT/headers" | tr -d '\r' | awk '{print $2}' | cut -d';' -f1)"
+expect "a stream: ends with [DONE]" "data: [DONE]" "$(grep -v '^$' "$OUT/body" | tail -n1)"
+# The gateway cannot reach a provider: its own error, its status kept, and no text of its, which
+# can name a backend or an address.
+code=$(curl -sS -o "$OUT/body" -w "$STATUS" -H "$CHAT_UI" -H "$JSON" \
+    -d '{"model":"down-model","messages":[{"role":"user","content":"hello there"}]}' "$PROXY/v1/chat/completions")
+expect "no provider answers: the gateway's error" "500 gateway_error" "$code $(jq -r '.error.type' "$OUT/body")"
+expect "no provider answers: no backend or address named" "0" "$(grep -c -E 'mock-local|refused' "$OUT/body" || true)"
+logs=$(docker logs "$CONTAINER" 2>&1)
+grep -q 'provider error 401, answered as 502 provider_error' <<<"$logs" ||
+    fail "the provider's error is not in the gateway's log"
+ok "account isolation: what the provider's error was is in the gateway's log, for the holder"
+expect "account isolation: no text of the provider's in the gateway's log" "0" "$(grep -c -E 'sk-mock|org-mock' <<<"$logs" || true)"
 
 echo "== a model loses its last backend"
 curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test"
+curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test-down"
 render "$OUT/reachable-again" http://stub-aisa:8080/v1/decide
 proxy "$OUT/reachable-again"
 models "the model list after the next render" "cloud-large llama3.2 qwen3"
