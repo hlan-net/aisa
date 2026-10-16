@@ -66,24 +66,25 @@ To be shipped as JSON in `dashboards/` (`ROADMAP.md`, v0.2.0 PR 7):
 
 ## Alerts
 
-To be shipped as a `PrometheusRule` with the dashboard (`ROADMAP.md`, v0.2.0 PR 7); none exists in the repository yet. The conditions:
+aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `prometheusRule.labels` for the Prometheus that selects it), on aisa's own metrics only, so they are the same for every proxy. `AisaDown` watches `up{}` of the ServiceMonitor's job, the Service `<release>-metrics`. The alerts of a feature that is off (`kubernetes.enabled`, `quotas.enabled`) are left out. The conditions:
 
 | Alert | Condition |
 |---|---|
 | `AisaBudgetSoftLimit` | `aisa_budget_spent / aisa_budget_limit > 0.8` |
 | `AisaBudgetExhausted` | a consumer is being denied or downgraded because its budget is used up |
-| `AisaBackendDown` | Consul health check for an `aisa-backend` is critical for more than 10 min |
+| `AisaBackendDown` | Consul health check for an `aisa-backend` is critical for more than 10 min. Not in the chart: it reads Consul's health, not aisa's metrics; `AisaModelUnavailable` is aisa's view of the same |
+| `AisaModelUnavailable` | `aisa_models - aisa_models_available > 0` for 10 min: a model on offer has no backend whose health check passes (with `kubernetes.enabled`) |
 | `AisaConfigRenderRejected` | `aisa_config_renders_total{result="rejected"}` increases: a value in Consul or Vault renders a config the gateway cannot load in full; the gateway keeps the previous one until it is fixed |
-| `AisaConfigEmpty` | `aisa_config_models == 0` for 5 min, or `aisa_config_renders_total{result="held"}` increases: the catalog has no backend the proxy can render; held, the gateway serves the last config, promoted, every model gets 503. The gauge is absent until the proxy's first promoted report after an aisa restart, so the alert does not fire on a restart |
-| `AisaDown` | aisa's scrape target is down for 2 min (fail policies are now in effect) |
+| `AisaConfigEmpty`, `AisaConfigHeld` | `aisa_config_models == 0` for 5 min, or `aisa_config_renders_total{result="held"}` increases: the catalog has no backend the proxy can render; held, the gateway serves the last config, promoted, every model gets 503. The gauge is absent until the proxy's first promoted report after an aisa restart, so the alert does not fire on a restart |
+| `AisaDown` | aisa's scrape target is down for 2 min, or Prometheus has no such target (fail policies are now in effect: an `open` backend serves any credential) |
 | `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |
 | `AisaQuotaProfileInvalid` | `aisa_quota_profiles_invalid > 0`: the consumers of a broken profile get 503 |
 | `AisaConsumerDeclarationInvalid` | `aisa_consumer_declarations_invalid > 0`: a consumer with a broken declaration in Consul gets 503 |
 | `AisaConsumerSecretFailing` | `aisa_consumer_secrets{state!="ok"} > 0` for 10 min: a consumer's Secret is not written, because of its name, another consumer, or an error |
-| `AisaKubeWritesFailing` | `aisa_kube_passes_total{result="error"}` increases for 10 min, or `sum(aisa_kube_leader) == 0` for 5 min: the Kubernetes objects are not kept up to date |
+| `AisaKubeWritesFailing`, `AisaKubeNoLeader` | `aisa_kube_passes_total{result="error"}` increases for 10 min, or `sum(aisa_kube_leader) == 0` for 5 min: the Kubernetes objects are not kept up to date |
 | `AisaQuotaCountersFailing` | `aisa_quota_errors_total` increases for 5 min: Redis is unreachable and token quotas are not enforced |
-| `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h |
+| `AisaUsageEventsLost` | the aisa/gateway token ratio < 0.95 over 1 h. Not in aisa's chart: the gateway's token metric is the proxy's, so the rule belongs to the proxy's chart |
 | `AisaUsageMissing` | `aisa_usage_missing_total` increases for 15 min on a backend: its requests are charged by estimate, not counted. The gateway's own token metrics miss the same usage, so `AisaUsageEventsLost` cannot see it |
 | `AisaUsageEventsRejected` | `aisa_usage_events_total{result="rejected"}` increases for 15 min: the proxy sends events aisa cannot use. They are answered 200, so the log sink does not retry them and they are lost |
 | `AisaUsageRequestsRejected` | `aisa_usage_requests_rejected_total` increases: the proxy sends usage aisa cannot read, and the log sink drops it after its retries |

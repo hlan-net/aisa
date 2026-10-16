@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **The alerts as a `PrometheusRule`** in aisa's chart (`prometheusRule.enabled`, `prometheusRule.labels`; `ROADMAP.md` v0.2.0 PR 7): the conditions of [`usage-metrics.md`](docs/features/usage-metrics.md#alerts) on aisa's own metrics, so they are the same for every proxy. `AisaDown` fires when the ServiceMonitor's target is down or missing, which is when the proxy's fail policies are in effect; `AisaModelUnavailable` is new, a model on offer without a healthy backend. `AisaUsageEventsLost` and `AisaBackendDown` need the gateway's or Consul's metrics and are not included.
+
 ## [0.2.0] - 2026-10-14
 
 The first version that installs into a cluster: aisa, its Redis and the APISIX proxy from one Helm chart, consumers declared in Consul with their keys issued by aisa into their applications' Secrets, the models as `Model` objects, token quotas, and a proxy that keeps the provider accounts with their holder. Budgets follow in v0.3.0.
