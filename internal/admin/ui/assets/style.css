@@ -395,10 +395,10 @@ form { padding: 20px; }
 /* Key reveal */
 .key-warning {
   padding: 12px 16px;
-  background-color: rgba(210, 153, 34, 0.15);
-  border: 1px solid rgba(210, 153, 34, 0.3);
+  background-color: #272115;
+  border: 1px solid #5a4316;
   border-radius: var(--radius);
-  color: #ffd15c;
+  color: var(--text-heading);
   font-size: 12px;
   margin: 16px 20px;
 }

@@ -24,6 +24,7 @@ RELEASE=aisa
 # Where the consumer batch-jobs runs: aisa writes its Secret there.
 APP_NS="${APP_NAMESPACE:-aisa-app}"
 K=(kubectl -n "$NS")
+JSON_TYPE="Content-Type: application/json"
 
 pass=0
 ok() { pass=$((pass + 1)); echo "ok   $*"; }
@@ -182,7 +183,7 @@ port_forward "$RELEASE-apisix" 19080 80
 chat() {
     local key=$1 model=$2
     curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" \
-        -H 'Content-Type: application/json' -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+        -H "$JSON_TYPE" -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
         http://127.0.0.1:19080/v1/chat/completions
 }
 # The proxy loads its routes a moment after it is ready; wait for the first answer from aisa.
@@ -271,9 +272,9 @@ overview=$(curl -fsS http://127.0.0.1:18080/admin/api/overview)
 expect "admin: overview status" ok "$(jq -r .status <<<"$overview")"
 # Refuse rotation for a consumer whose Secret is managed by Kubernetes
 expect "admin: rotate refused for consumer with Secret" 400 \
-    "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' http://127.0.0.1:18080/admin/api/consumers/batch-jobs/rotate-key)"
+    "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$JSON_TYPE" http://127.0.0.1:18080/admin/api/consumers/batch-jobs/rotate-key)"
 # Create a standalone consumer with an issued key
-admin_created=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+admin_created=$(curl -fsS -X POST -H "$JSON_TYPE" \
     -d '{"name":"admin-user","quota_profile":"interactive","generate_key":true}' \
     http://127.0.0.1:18080/admin/api/consumers)
 admin_key=$(jq -r .plaintext_key <<<"$admin_created")
@@ -283,7 +284,7 @@ else
     fail "admin: created standalone key invalid: '$admin_key'"
 fi
 # Rotate the standalone consumer's key (CAS update with grace period preservation)
-rotated=$(curl -fsS -X POST -H 'Content-Type: application/json' \
+rotated=$(curl -fsS -X POST -H "$JSON_TYPE" \
     http://127.0.0.1:18080/admin/api/consumers/admin-user/rotate-key)
 rot_key=$(jq -r .plaintext_key <<<"$rotated")
 if [[ "$rot_key" =~ ^aisa-[0-9a-f]{64}$ ]]; then

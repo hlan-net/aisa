@@ -624,3 +624,373 @@ func TestOverviewDegraded(t *testing.T) {
 		t.Errorf("status = %s, want degraded", resp.Status)
 	}
 }
+
+func TestListEndpointsConsulErrors(t *testing.T) {
+	h, mc, _ := setupTestHandler()
+	mc.listErr = errors.New("consul unreachable")
+
+	// consumers list failure
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/consumers", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("consumers: status = %d, want 500", w.Code)
+	}
+
+	// quotas list failure
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/quotas", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("quotas: status = %d, want 500", w.Code)
+	}
+
+	// backends & models failure
+	mc.listErr = nil
+	mc.healthErr = errors.New("consul health error")
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/backends", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("backends: status = %d, want 500", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/models", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("models: status = %d, want 500", w.Code)
+	}
+}
+
+func TestBackendStatusAndUnhealthyChecks(t *testing.T) {
+	h, mc, _ := setupTestHandler()
+	mc.instances = []consul.Instance{
+		{
+			ID:      "mock-backend-1",
+			Service: "aisa-backend",
+			Address: "127.0.0.1",
+			Port:    8080,
+			Passing: false,
+			Checks: []consul.Check{
+				{Status: "warning", Output: "high latency"},
+			},
+			Meta: map[string]string{
+				"provider": "openai-compatible",
+				"models":   "qwen3, llama3",
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/backends", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("backends: status = %d, want 200", w.Code)
+	}
+	var backends []BackendItem
+	_ = json.Unmarshal(w.Body.Bytes(), &backends)
+	if len(backends) != 1 || backends[0].Status != "warning" || backends[0].Output != "high latency" {
+		t.Errorf("unexpected backend item: %+v", backends)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/api/models", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("models: status = %d, want 200", w.Code)
+	}
+	var models []ModelItem
+	_ = json.Unmarshal(w.Body.Bytes(), &models)
+	if len(models) != 2 {
+		t.Errorf("got %d models, want 2", len(models))
+	}
+}
+
+func TestCreateConsumerValidationAndErrors(t *testing.T) {
+	h, mc, mv := setupTestHandler()
+
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{"invalid json", "{bad", http.StatusBadRequest},
+		{"empty name", `{"name":""}`, http.StatusBadRequest},
+		{"invalid name chars", `{"name":"bad name!"}`, http.StatusBadRequest},
+		{"name ConsumerUnknown", `{"name":"unknown"}`, http.StatusBadRequest},
+		{"namespace without secret", `{"name":"app1","namespace":"ns1"}`, http.StatusBadRequest},
+		{"secret without namespace", `{"name":"app1","secret":"sec1"}`, http.StatusBadRequest},
+		{"k8s managed with generate_key", `{"name":"app1","namespace":"ns1","secret":"sec1","generate_key":true}`, http.StatusBadRequest},
+		{"custom key too short", `{"name":"app1","custom_key":"short"}`, http.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := newJSONRequest(http.MethodPost, "/admin/api/consumers", tt.body)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != tt.wantStatus {
+				t.Errorf("%s: status = %d, want %d", tt.name, w.Code, tt.wantStatus)
+			}
+		})
+	}
+
+	// Consul put error
+	mc.putErr = errors.New("consul put failed")
+	req := newJSONRequest(http.MethodPost, "/admin/api/consumers", `{"name":"app-err"}`)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("consul put error: status = %d, want 500", w.Code)
+	}
+	mc.putErr = nil
+
+	// Vault ReadVersion error
+	mv.readErr = errors.New("vault read error")
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers", `{"name":"app-vault-err","generate_key":true}`)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("vault read error: status = %d, want 500", w.Code)
+	}
+	mv.readErr = nil
+
+	// Vault Write conflict
+	mv.writeErr = errors.New("write error")
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers", `{"name":"app-vault-werr","generate_key":true}`)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("vault write error: status = %d, want 500", w.Code)
+	}
+	mv.writeErr = nil
+}
+
+func TestDeleteConsumerErrors(t *testing.T) {
+	h, mc, _ := setupTestHandler()
+
+	// Invalid name
+	req := newJSONRequest(http.MethodDelete, "/admin/api/consumers/bad%20name", "")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("invalid name: status = %d, want 400", w.Code)
+	}
+
+	// Consul list error
+	mc.listErr = errors.New("consul list error")
+	req = newJSONRequest(http.MethodDelete, "/admin/api/consumers/some-app", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("consul list error: status = %d, want 500", w.Code)
+	}
+	mc.listErr = nil
+
+	// Consumer not found
+	req = newJSONRequest(http.MethodDelete, "/admin/api/consumers/nonexistent", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("not found: status = %d, want 404", w.Code)
+	}
+
+	// Consul delete error
+	_ = mc.Put(context.Background(), "aisa/consumers/exists", []byte(`{}`))
+	mc.delErr = errors.New("consul delete error")
+	req = newJSONRequest(http.MethodDelete, "/admin/api/consumers/exists", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("consul delete error: status = %d, want 500", w.Code)
+	}
+	mc.delErr = nil
+}
+
+func TestRotateKeyErrors(t *testing.T) {
+	h, mc, mv := setupTestHandler()
+
+	// Invalid name
+	req := newJSONRequest(http.MethodPost, "/admin/api/consumers/bad%20name/rotate-key", "")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("invalid name: status = %d, want 400", w.Code)
+	}
+
+	// Vault nil
+	hNoVault := New(mc, nil, metrics.New("v0.2.0"), slog.Default(), Options{})
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers/app1/rotate-key", "")
+	w = httptest.NewRecorder()
+	hNoVault.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("vault nil: status = %d, want 500", w.Code)
+	}
+
+	// Consul list error
+	mc.listErr = errors.New("consul error")
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers/app1/rotate-key", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("consul list error: status = %d, want 500", w.Code)
+	}
+	mc.listErr = nil
+
+	// Not found
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers/nonexistent/rotate-key", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("not found: status = %d, want 404", w.Code)
+	}
+
+	// Kubernetes managed refused
+	_ = mc.Put(context.Background(), "aisa/consumers/k8s-app", []byte(`{"namespace":"prod","secret":"aisa"}`))
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers/k8s-app/rotate-key", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("k8s managed: status = %d, want 400", w.Code)
+	}
+
+	// Vault read error on rotate
+	_ = mc.Put(context.Background(), "aisa/consumers/sa-app", []byte(`{}`))
+	mv.readErr = errors.New("vault read error")
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers/sa-app/rotate-key", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("vault read error: status = %d, want 500", w.Code)
+	}
+	mv.readErr = nil
+
+	// Vault write error on rotate
+	mv.writeErr = errors.New("vault write error")
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers/sa-app/rotate-key", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("vault write error: status = %d, want 500", w.Code)
+	}
+	mv.writeErr = nil
+}
+
+func TestQuotaErrors(t *testing.T) {
+	h, mc, _ := setupTestHandler()
+
+	// Invalid body
+	req := newJSONRequest(http.MethodPost, "/admin/api/quotas", "{invalid")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("invalid body: status = %d, want 400", w.Code)
+	}
+
+	// Empty name
+	req = newJSONRequest(http.MethodPost, "/admin/api/quotas", `{"name":"","tokens_per_hour":100}`)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("empty name: status = %d, want 400", w.Code)
+	}
+
+	// Invalid name
+	req = newJSONRequest(http.MethodPost, "/admin/api/quotas", `{"name":"bad name!","tokens_per_hour":100}`)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("invalid name: status = %d, want 400", w.Code)
+	}
+
+	// Invalid tokens_per_hour
+	req = newJSONRequest(http.MethodPost, "/admin/api/quotas", `{"name":"batch","tokens_per_hour":0}`)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("zero tokens: status = %d, want 400", w.Code)
+	}
+
+	// Conflict (already exists)
+	_ = mc.Put(context.Background(), "aisa/quotas/batch", []byte(`{"tokens_per_hour":100}`))
+	req = newJSONRequest(http.MethodPost, "/admin/api/quotas", `{"name":"batch","tokens_per_hour":200}`)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Errorf("conflict: status = %d, want 409", w.Code)
+	}
+
+	// Consul put error
+	mc.putErr = errors.New("put failed")
+	req = newJSONRequest(http.MethodPost, "/admin/api/quotas", `{"name":"new-batch","tokens_per_hour":200}`)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("put error: status = %d, want 500", w.Code)
+	}
+	mc.putErr = nil
+
+	// Delete quota: invalid name
+	req = newJSONRequest(http.MethodDelete, "/admin/api/quotas/bad%20name", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("delete invalid name: status = %d, want 400", w.Code)
+	}
+
+	// Delete quota: consul list error
+	mc.listErr = errors.New("consul list error")
+	req = newJSONRequest(http.MethodDelete, "/admin/api/quotas/batch", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("delete list error: status = %d, want 500", w.Code)
+	}
+	mc.listErr = nil
+
+	// Delete quota: not found
+	req = newJSONRequest(http.MethodDelete, "/admin/api/quotas/nonexistent", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("delete not found: status = %d, want 404", w.Code)
+	}
+
+	// Delete quota: consul delete error
+	mc.delErr = errors.New("consul delete error")
+	req = newJSONRequest(http.MethodDelete, "/admin/api/quotas/batch", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("delete error: status = %d, want 500", w.Code)
+	}
+	mc.delErr = nil
+}
+
+func TestStaticFilesAndRedirect(t *testing.T) {
+	h, _, _ := setupTestHandler()
+
+	// Redirect /admin to /admin/
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusMovedPermanently {
+		t.Errorf("/admin: status = %d, want 301", w.Code)
+	}
+
+	// Web UI index
+	req = httptest.NewRequest(http.MethodGet, "/admin/", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("/admin/: status = %d, want 200", w.Code)
+	}
+
+	// Assets
+	req = httptest.NewRequest(http.MethodGet, "/admin/assets/app.js", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("/admin/assets/app.js: status = %d, want 200", w.Code)
+	}
+}

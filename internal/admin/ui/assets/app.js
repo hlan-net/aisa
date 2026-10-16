@@ -40,7 +40,7 @@ function setupTabs() {
 // API helper
 async function api(path, options = {}) {
   try {
-    const headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers);
+    const headers = { 'Content-Type': 'application/json', ...options.headers };
     const res = await fetch('/admin/api' + path, {
       ...options,
       headers
@@ -108,8 +108,8 @@ async function loadOverview() {
         <span class="badge ${status === 'ok' ? 'badge-ready' : 'badge-danger'}">${escapeHTML(status)}</span>
       </div>
     `).join('') || '<div style="color:var(--text-muted)">No checks reported</div>';
-  } catch (_err) {
-    // API request failed; show disconnected status indicator
+  } catch (err) {
+    console.error('Failed to load overview:', err);
     document.getElementById('system-status-indicator').className = 'status-dot dot-red';
     document.getElementById('system-status-text').textContent = 'Disconnected';
   }

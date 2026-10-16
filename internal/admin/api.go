@@ -121,7 +121,9 @@ const (
 	pathConsumers           = "/consumers/"
 	pathQuotas              = "/quotas/"
 	errConsumerNameRequired = "consumer name is required"
+	errInvalidConsumerName  = "invalid consumer name"
 	errQuotaNameRequired    = "quota profile name is required"
+	errConsulListPrefix     = "consul list: "
 )
 
 // ConsumerItem represents a consumer declaration and Vault status.
@@ -132,6 +134,51 @@ type ConsumerItem struct {
 	Secret       string `json:"secret,omitempty"`
 	HasKey       bool   `json:"has_key"`
 	Status       string `json:"status"` // ready, undeclared, missing_key, invalid
+}
+
+func parseConsumerItem(p consul.Pair, prefix string, vaultKeys map[string]bool) (ConsumerItem, bool) {
+	name := strings.TrimPrefix(p.Key, prefix)
+	if name == "" || strings.HasSuffix(name, "/") {
+		return ConsumerItem{}, false
+	}
+	var decl struct {
+		QuotaProfile string `json:"quota_profile"`
+		Namespace    string `json:"namespace"`
+		Secret       string `json:"secret"`
+	}
+	status := "ready"
+	if err := json.Unmarshal(p.Value, &decl); err != nil {
+		status = "invalid"
+	}
+	hasKey := vaultKeys[name]
+	if !hasKey && status == "ready" {
+		status = "missing_key"
+	}
+	return ConsumerItem{
+		Name:         name,
+		QuotaProfile: decl.QuotaProfile,
+		Namespace:    decl.Namespace,
+		Secret:       decl.Secret,
+		HasKey:       hasKey,
+		Status:       status,
+	}, true
+}
+
+func appendUndeclaredVaultKeys(items []ConsumerItem, vaultKeys map[string]bool) []ConsumerItem {
+	consulNames := make(map[string]bool, len(items))
+	for _, it := range items {
+		consulNames[it.Name] = true
+	}
+	for vk := range vaultKeys {
+		if !consulNames[vk] {
+			items = append(items, ConsumerItem{
+				Name:   vk,
+				HasKey: true,
+				Status: "undeclared",
+			})
+		}
+	}
+	return items
 }
 
 func (h *Handler) fetchConsumers(ctx context.Context) ([]ConsumerItem, error) {
@@ -154,48 +201,12 @@ func (h *Handler) fetchConsumers(ctx context.Context) ([]ConsumerItem, error) {
 
 	items := make([]ConsumerItem, 0, len(pairs))
 	for _, p := range pairs {
-		name := strings.TrimPrefix(p.Key, prefix)
-		if name == "" || strings.HasSuffix(name, "/") {
-			continue
-		}
-		var decl struct {
-			QuotaProfile string `json:"quota_profile"`
-			Namespace    string `json:"namespace"`
-			Secret       string `json:"secret"`
-		}
-		status := "ready"
-		if err := json.Unmarshal(p.Value, &decl); err != nil {
-			status = "invalid"
-		}
-		hasKey := vaultKeys[name]
-		if !hasKey && status == "ready" {
-			status = "missing_key"
-		}
-		items = append(items, ConsumerItem{
-			Name:         name,
-			QuotaProfile: decl.QuotaProfile,
-			Namespace:    decl.Namespace,
-			Secret:       decl.Secret,
-			HasKey:       hasKey,
-			Status:       status,
-		})
-	}
-
-	// Also check for undeclared keys in Vault
-	consulNames := make(map[string]bool)
-	for _, it := range items {
-		consulNames[it.Name] = true
-	}
-	for vk := range vaultKeys {
-		if !consulNames[vk] {
-			items = append(items, ConsumerItem{
-				Name:   vk,
-				HasKey: true,
-				Status: "undeclared",
-			})
+		if item, ok := parseConsumerItem(p, prefix, vaultKeys); ok {
+			items = append(items, item)
 		}
 	}
 
+	items = appendUndeclaredVaultKeys(items, vaultKeys)
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items, nil
 }
@@ -227,36 +238,27 @@ type CreateConsumerResponse struct {
 	Message      string `json:"message,omitempty"`
 }
 
-func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	var req CreateConsumerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
+func validateCreateConsumer(req CreateConsumerRequest) error {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		writeError(w, http.StatusBadRequest, errConsumerNameRequired)
-		return
+		return errors.New(errConsumerNameRequired)
 	}
 	if !isValidName(name) {
-		writeError(w, http.StatusBadRequest, "invalid consumer name")
-		return
+		return errors.New(errInvalidConsumerName)
 	}
 	if (req.Namespace == "") != (req.Secret == "") {
-		writeError(w, http.StatusBadRequest, "namespace and secret must be specified together")
-		return
+		return errors.New("namespace and secret must be specified together")
 	}
 	if req.Namespace != "" && (req.GenerateKey || req.CustomKey != "") {
-		writeError(w, http.StatusBadRequest, "keys for Kubernetes-managed consumers (with namespace/secret) are managed by Kubernetes Secrets; manual key issuance is not permitted")
-		return
+		return errors.New("keys for Kubernetes-managed consumers (with namespace/secret) are managed by Kubernetes Secrets; manual key issuance is not permitted")
 	}
 	if req.CustomKey != "" && len(strings.TrimSpace(req.CustomKey)) < apikey.MinCustomKeyLength {
-		writeError(w, http.StatusBadRequest, apikey.ErrKeyTooShort.Error())
-		return
+		return apikey.ErrKeyTooShort
 	}
+	return nil
+}
 
-	// 1. Write declaration to Consul with CAS=0 (only create if not exists)
+func encodeConsumerDeclaration(req CreateConsumerRequest) ([]byte, error) {
 	decl := map[string]string{}
 	if req.QuotaProfile != "" {
 		decl["quota_profile"] = strings.TrimSpace(req.QuotaProfile)
@@ -265,7 +267,54 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 		decl["namespace"] = strings.TrimSpace(req.Namespace)
 		decl["secret"] = strings.TrimSpace(req.Secret)
 	}
-	declBytes, err := json.Marshal(decl)
+	return json.Marshal(decl)
+}
+
+func resolveConsumerKey(req CreateConsumerRequest) (plaintext, keyHash string, err error) {
+	if req.GenerateKey {
+		plaintext, err = apikey.New(nil)
+		if err != nil {
+			return "", "", fmt.Errorf("generate key: %w", err)
+		}
+		return plaintext, apikey.Hash(plaintext), nil
+	}
+	if req.CustomKey != "" {
+		plaintext = strings.TrimSpace(req.CustomKey)
+		return plaintext, apikey.Hash(plaintext), nil
+	}
+	return "", "", nil
+}
+
+func (h *Handler) writeConsumerKey(ctx context.Context, name, keyHash string) error {
+	if keyHash == "" || h.vault == nil {
+		return nil
+	}
+	vaultPath := h.opts.VaultPrefix + pathConsumers + name
+	_, version, err := h.vault.ReadVersion(ctx, h.opts.VaultMount, vaultPath)
+	if err != nil && !errors.Is(err, vault.ErrNotFound) {
+		return fmt.Errorf("vault read version: %w", err)
+	}
+	data := map[string]any{
+		"key_sha256": keyHash,
+		"issued_at":  time.Now().UTC().Format(time.RFC3339),
+	}
+	return h.vault.Write(ctx, h.opts.VaultMount, vaultPath, data, version)
+}
+
+func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req CreateConsumerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if err := validateCreateConsumer(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+
+	declBytes, err := encodeConsumerDeclaration(req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode declaration: "+err.Error())
 		return
@@ -281,35 +330,15 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Handle API key if requested for standalone consumer
-	var plaintext, keyHash string
-	if req.GenerateKey {
-		var err error
-		plaintext, err = apikey.New(nil)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "generate key: "+err.Error())
-			return
-		}
-		keyHash = apikey.Hash(plaintext)
-	} else if req.CustomKey != "" {
-		plaintext = strings.TrimSpace(req.CustomKey)
-		keyHash = apikey.Hash(plaintext)
+	plaintext, keyHash, err := resolveConsumerKey(req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	hasKey := false
 	if keyHash != "" && h.vault != nil {
-		vaultPath := h.opts.VaultPrefix + pathConsumers + name
-		_, version, err := h.vault.ReadVersion(ctx, h.opts.VaultMount, vaultPath)
-		if err != nil && !errors.Is(err, vault.ErrNotFound) {
-			h.log.Error("vault read version failed", "consumer", name, "error", err)
-			writeError(w, http.StatusInternalServerError, "vault read version: "+err.Error())
-			return
-		}
-		data := map[string]any{
-			"key_sha256": keyHash,
-			"issued_at":  time.Now().UTC().Format(time.RFC3339),
-		}
-		if err := h.vault.Write(ctx, h.opts.VaultMount, vaultPath, data, version); err != nil {
+		if err := h.writeConsumerKey(ctx, name, keyHash); err != nil {
 			if errors.Is(err, vault.ErrConflict) {
 				writeError(w, http.StatusConflict, "vault check-and-set conflict")
 				return
@@ -346,7 +375,7 @@ func (h *Handler) deleteConsumer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isValidName(name) {
-		writeError(w, http.StatusBadRequest, "invalid consumer name")
+		writeError(w, http.StatusBadRequest, errInvalidConsumerName)
 		return
 	}
 
@@ -355,7 +384,7 @@ func (h *Handler) deleteConsumer(w http.ResponseWriter, r *http.Request) {
 	pairs, _, err := h.consul.List(ctx, consulKey, 0, 0)
 	if err != nil {
 		h.log.Error("consul list consumer failed", "consumer", name, "error", err)
-		writeError(w, http.StatusInternalServerError, "consul list: "+err.Error())
+		writeError(w, http.StatusInternalServerError, errConsulListPrefix+err.Error())
 		return
 	}
 	if len(pairs) == 0 {
@@ -391,7 +420,7 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isValidName(name) {
-		writeError(w, http.StatusBadRequest, "invalid consumer name")
+		writeError(w, http.StatusBadRequest, errInvalidConsumerName)
 		return
 	}
 	if h.vault == nil {
@@ -404,7 +433,7 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 	pairs, _, err := h.consul.List(ctx, consulKey, 0, 0)
 	if err != nil {
 		h.log.Error("consul list consumer failed", "consumer", name, "error", err)
-		writeError(w, http.StatusInternalServerError, "consul list: "+err.Error())
+		writeError(w, http.StatusInternalServerError, errConsulListPrefix+err.Error())
 		return
 	}
 	if len(pairs) == 0 {
@@ -567,7 +596,7 @@ func (h *Handler) deleteQuota(w http.ResponseWriter, r *http.Request) {
 	pairs, _, err := h.consul.List(ctx, key, 0, 0)
 	if err != nil {
 		h.log.Error("consul list quota failed", "profile", name, "error", err)
-		writeError(w, http.StatusInternalServerError, "consul list: "+err.Error())
+		writeError(w, http.StatusInternalServerError, errConsulListPrefix+err.Error())
 		return
 	}
 	if len(pairs) == 0 {
@@ -598,6 +627,36 @@ type BackendItem struct {
 	Output     string   `json:"output,omitempty"`
 }
 
+func backendStatus(inst consul.Instance) (string, string) {
+	if inst.Passing {
+		return "passing", ""
+	}
+	status := "critical"
+	output := ""
+	for _, chk := range inst.Checks {
+		if chk.Status != "passing" {
+			status = chk.Status
+			output = chk.Output
+			break
+		}
+	}
+	return status, output
+}
+
+func parseBackendModels(meta map[string]string) []string {
+	rawModels := meta["models"]
+	if rawModels == "" {
+		return []string{}
+	}
+	models := []string{}
+	for _, m := range strings.Split(rawModels, ",") {
+		if trimmed := strings.TrimSpace(m); trimmed != "" {
+			models = append(models, trimmed)
+		}
+	}
+	return models
+}
+
 func (h *Handler) fetchBackends(ctx context.Context) ([]BackendItem, error) {
 	instances, err := h.consul.Health(ctx, "aisa-backend")
 	if err != nil {
@@ -605,28 +664,7 @@ func (h *Handler) fetchBackends(ctx context.Context) ([]BackendItem, error) {
 	}
 	backends := make([]BackendItem, 0, len(instances))
 	for _, inst := range instances {
-		status := "passing"
-		output := ""
-		if !inst.Passing {
-			status = "critical"
-			for _, chk := range inst.Checks {
-				if chk.Status != "passing" {
-					status = chk.Status
-					output = chk.Output
-					break
-				}
-			}
-		}
-
-		models := []string{}
-		if rawModels := inst.Meta["models"]; rawModels != "" {
-			for _, m := range strings.Split(rawModels, ",") {
-				if trimmed := strings.TrimSpace(m); trimmed != "" {
-					models = append(models, trimmed)
-				}
-			}
-		}
-
+		status, output := backendStatus(inst)
 		backends = append(backends, BackendItem{
 			ID:         inst.ID,
 			Service:    inst.Service,
@@ -634,7 +672,7 @@ func (h *Handler) fetchBackends(ctx context.Context) ([]BackendItem, error) {
 			Port:       inst.Port,
 			Tags:       inst.Tags,
 			Provider:   inst.Meta["provider"],
-			Models:     models,
+			Models:     parseBackendModels(inst.Meta),
 			Priority:   inst.Meta["priority"],
 			FailPolicy: inst.Meta["fail_policy"],
 			Timeout:    inst.Meta["timeout"],
