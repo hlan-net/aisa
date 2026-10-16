@@ -125,6 +125,7 @@ services:
       CONSUL_HTTP_ADDR: consul:8500
       AISA_REDIS_ADDR: redis:6379
       AISA_LOG_LEVEL: debug
+      AISA_ADMIN_ENABLED: "true"
     ports: ["127.0.0.1:8084:8080"]
     depends_on:
       seed-vault: {condition: service_healthy}

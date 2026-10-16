@@ -24,6 +24,7 @@ RELEASE=aisa
 # Where the consumer batch-jobs runs: aisa writes its Secret there.
 APP_NS="${APP_NAMESPACE:-aisa-app}"
 K=(kubectl -n "$NS")
+JSON_TYPE="Content-Type: application/json"
 
 pass=0
 ok() { pass=$((pass + 1)); echo "ok   $*"; }
@@ -110,7 +111,7 @@ vault write auth/kubernetes/config kubernetes_host=https://kubernetes.default.sv
 vault policy write aisa - >/dev/null <<'HCL'
 path "secret/data/aisa/consumers/*" { capabilities = ["create", "read", "update"] }
 path "secret/metadata/aisa/consumers" { capabilities = ["list"] }
-path "secret/metadata/aisa/consumers/*" { capabilities = ["list"] }
+path "secret/metadata/aisa/consumers/*" { capabilities = ["list", "delete"] }
 path "consul/creds/aisa" { capabilities = ["read"] }
 HCL
 vault policy write aisa-render - >/dev/null <<'HCL'
@@ -182,7 +183,7 @@ port_forward "$RELEASE-apisix" 19080 80
 chat() {
     local key=$1 model=$2
     curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $key" \
-        -H 'Content-Type: application/json' -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+        -H "$JSON_TYPE" -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
         http://127.0.0.1:19080/v1/chat/completions
 }
 # The proxy loads its routes a moment after it is ready; wait for the first answer from aisa.
@@ -264,6 +265,36 @@ if kubectl -n "$APP_NS" get secret aisa >/dev/null 2>&1; then
 fi
 ok "the Secret of a removed consumer is deleted"
 expect "the key of a removed consumer" 401 "$(chat "$key" qwen3)"
+
+echo "== admin interface"
+port_forward "$RELEASE" 18080 8080
+overview=$(curl -fsS http://127.0.0.1:18080/admin/api/overview)
+expect "admin: overview status" ok "$(jq -r .status <<<"$overview")"
+# Refuse rotation for a consumer whose Secret is managed by Kubernetes
+expect "admin: rotate refused for consumer with Secret" 400 \
+    "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$JSON_TYPE" http://127.0.0.1:18080/admin/api/consumers/batch-jobs/rotate-key)"
+# Create a standalone consumer with an issued key
+admin_created=$(curl -fsS -X POST -H "$JSON_TYPE" \
+    -d '{"name":"admin-user","quota_profile":"interactive","generate_key":true}' \
+    http://127.0.0.1:18080/admin/api/consumers)
+admin_key=$(jq -r .plaintext_key <<<"$admin_created")
+if [[ "$admin_key" =~ ^aisa-[0-9a-f]{64}$ ]]; then
+    ok "admin: created standalone key format valid"
+else
+    fail "admin: created standalone key invalid: '$admin_key'"
+fi
+# Rotate the standalone consumer's key (CAS update with grace period preservation)
+rotated=$(curl -fsS -X POST -H "$JSON_TYPE" \
+    http://127.0.0.1:18080/admin/api/consumers/admin-user/rotate-key)
+rot_key=$(jq -r .plaintext_key <<<"$rotated")
+if [[ "$rot_key" =~ ^aisa-[0-9a-f]{64}$ ]]; then
+    ok "admin: rotated standalone key format valid"
+else
+    fail "admin: rotated standalone key invalid: '$rot_key'"
+fi
+# Delete the consumer (metadata and data purged from Vault with delete capability, deleted from Consul)
+del_code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE http://127.0.0.1:18080/admin/api/consumers/admin-user)
+expect "admin: deleted consumer status" 200 "$del_code"
 
 echo "== NetworkPolicy"
 # probe_aisa <name> <url> [labels]: asks url from a new pod with these labels. /healthz answers on

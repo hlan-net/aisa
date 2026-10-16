@@ -224,10 +224,19 @@ func (c *Client) ReadVersion(ctx context.Context, mount, path string) (map[strin
 }
 
 // Write replaces a KV v2 secret's data with a new version, only if the current version is cas:
-// 0 for a secret that does not exist yet. Otherwise it returns ErrConflict and writes nothing,
-// so a write never undoes one it did not read. One write is atomic.
+// 0 for a secret that does not exist yet, or negative to write without check-and-set.
+// Otherwise it returns ErrConflict and writes nothing, so a write never undoes one it did not read.
+// One write is atomic.
 func (c *Client) Write(ctx context.Context, mount, path string, data map[string]any, cas int) error {
-	body, err := json.Marshal(map[string]any{"options": map[string]int{"cas": cas}, "data": data})
+	var (
+		body []byte
+		err  error
+	)
+	if cas >= 0 {
+		body, err = json.Marshal(map[string]any{"options": map[string]int{"cas": cas}, "data": data})
+	} else {
+		body, err = json.Marshal(map[string]any{"data": data})
+	}
 	if err != nil {
 		return fmt.Errorf("encode %s/data/%s: %w", mount, path, err)
 	}
@@ -237,6 +246,15 @@ func (c *Client) Write(ctx context.Context, mount, path string, data map[string]
 		return strings.Contains(e, "check-and-set")
 	}) {
 		return fmt.Errorf("vault POST %s/data/%s: %w", mount, path, ErrConflict)
+	}
+	return err
+}
+
+// Delete permanently removes a KV v2 secret and its metadata: <mount>/metadata/<path>.
+func (c *Client) Delete(ctx context.Context, mount, path string) error {
+	err := c.authed(ctx, http.MethodDelete, mount+"/metadata/"+path, nil, nil)
+	if errors.Is(err, ErrNotFound) {
+		return nil
 	}
 	return err
 }

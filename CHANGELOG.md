@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **Admin Interface & Management API** (`/admin`, US-3): an embedded, responsive administration Web UI and REST API (`/admin/api/...`) to inspect and manage consumers, quota profiles, backends, and models in Consul and Vault. Built with zero external dependencies (compiled directly into the binary with `embed.FS`), it supports automated cryptographically secure key generation and rotation (`aisa-<hex>`), storing only the SHA-256 hash in Vault KV v2 while revealing the plaintext key once to the holder. Configurable via `AISA_ADMIN_ENABLED` (`false` by default) and supported in the Helm chart (`admin.enabled`, with optional `admin.ingress.enabled` for external authentication proxies). To delete consumers via the admin API, aisa's Vault policy requires the `delete` capability on `secret/metadata/aisa/consumers/*`. Documented in `docs/features/admin-interface.md`.
+
 ## [0.2.0] - 2026-10-14
 
 The first version that installs into a cluster: aisa, its Redis and the APISIX proxy from one Helm chart, consumers declared in Consul with their keys issued by aisa into their applications' Secrets, the models as `Model` objects, token quotas, and a proxy that keeps the provider accounts with their holder. Budgets follow in v0.3.0.

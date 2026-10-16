@@ -24,7 +24,7 @@ Each role can only reach its own paths. aisa's policy:
 ```hcl
 path "secret/data/aisa/consumers/*"     { capabilities = ["create", "read", "update"] }
 path "secret/metadata/aisa/consumers"   { capabilities = ["list"] }
-path "secret/metadata/aisa/consumers/*" { capabilities = ["list"] }
+path "secret/metadata/aisa/consumers/*" { capabilities = ["list", "delete"] }
 path "consul/creds/aisa"                { capabilities = ["read"] }
 ```
 

@@ -290,6 +290,7 @@ func TestServeSplit(t *testing.T) {
 		t.Errorf("usage on the operations address: %d, want 404", got)
 	}
 
+	http.DefaultClient.CloseIdleConnections()
 	cancel()
 	select {
 	case err := <-done:

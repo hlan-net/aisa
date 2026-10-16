@@ -3,8 +3,6 @@ package kube
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/hlan-net/aisa/internal/apikey"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/vault"
 )
@@ -612,30 +610,6 @@ func setMarks(data map[string]any, field string, marks map[string]time.Time) {
 	data[field] = m
 }
 
-// splitHashes reads key_sha256 as the decision API does: hashes separated by commas or white
-// space, in lower case. Values that are not SHA-256 hex digests are dropped.
-func splitHashes(v string) []string {
-	var hashes []string
-	for f := range strings.FieldsFuncSeq(v, func(r rune) bool { return r == ',' || unicode.IsSpace(r) }) {
-		f = strings.ToLower(f)
-		if b, err := hex.DecodeString(f); err == nil && len(b) == sha256.Size && !slices.Contains(hashes, f) {
-			hashes = append(hashes, f)
-		}
-	}
-	return hashes
-}
-
-func hashKey(key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(sum[:])
-}
-
-// newKey returns a key of 32 random bytes, hex-encoded, with a prefix that tells it from a
-// provider's key.
-func newKey(r io.Reader) (string, error) {
-	b := make([]byte, 32)
-	if _, err := io.ReadFull(r, b); err != nil {
-		return "", fmt.Errorf("generate a key: %w", err)
-	}
-	return "aisa-" + hex.EncodeToString(b), nil
-}
+func splitHashes(v string) []string      { return apikey.SplitHashes(v) }
+func hashKey(key string) string          { return apikey.Hash(key) }
+func newKey(r io.Reader) (string, error) { return apikey.New(r) }

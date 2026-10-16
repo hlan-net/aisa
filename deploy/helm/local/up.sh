@@ -175,7 +175,7 @@ vault write auth/kubernetes/config kubernetes_host=https://kubernetes.default.sv
 vault policy write aisa - >/dev/null <<'HCL'
 path "secret/data/aisa/consumers/*" { capabilities = ["create", "read", "update"] }
 path "secret/metadata/aisa/consumers" { capabilities = ["list"] }
-path "secret/metadata/aisa/consumers/*" { capabilities = ["list"] }
+path "secret/metadata/aisa/consumers/*" { capabilities = ["list", "delete"] }
 path "consul/creds/aisa" { capabilities = ["read"] }
 HCL
 vault policy write aisa-render - >/dev/null <<'HCL'

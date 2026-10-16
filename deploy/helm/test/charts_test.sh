@@ -50,6 +50,7 @@ validate "consul-without-acls" "$AISA" --set consul.token.fromVault=false --set 
 validate "external-redis" "$AISA" --set redis.enabled=false --set redis.addr=redis.example.svc:6379
 validate "no-quotas-no-proxy" "$AISA" --set quotas.enabled=false --set apisix.enabled=false \
     --set kubernetes.proxyURL=https://llm.example.internal/v1
+validate "admin-ingress" "$AISA" --set admin.ingress.enabled=true
 validate "proxy-alone" "$PROXY" --set aisa.url=https://aisa.aisa.svc:8080
 
 # The values that must be given are asked for.
@@ -177,6 +178,11 @@ awk '/^kind:/{c = ($2 == "CustomResourceDefinition")} c && /helm.sh\/resource-po
     fail "the Model CRD is not in the chart's templates, or not kept"
 helm template aisa "$AISA" "${REQUIRED[@]}" --set crds.install=false >"$OUT/no-crds.yaml" 2>/dev/null
 ! grep -q '^kind: CustomResourceDefinition$' "$OUT/no-crds.yaml" || fail "crds.install=false still renders the CRD"
-echo "ok: the Model CRD is in the chart's templates and kept; crds.install=false leaves it out"
+# Admin interface is off by default, and turned on with admin.enabled=true.
+! grep -q 'name: AISA_ADMIN_ENABLED' "$OUT/defaults.yaml" || fail "AISA_ADMIN_ENABLED is set by default"
+helm template aisa "$AISA" "${REQUIRED[@]}" --set admin.enabled=true >"$OUT/admin.yaml" 2>/dev/null
+admin_env=$(awk '/name: AISA_ADMIN_ENABLED/{getline; print $2; exit}' "$OUT/admin.yaml" | tr -d '"')
+[[ "$admin_env" == "true" ]] || fail "admin.enabled=true did not set AISA_ADMIN_ENABLED=true: got '$admin_env'"
+echo "ok: admin.enabled=true sets AISA_ADMIN_ENABLED=true in deployment"
 
 echo "ok: all chart tests passed"

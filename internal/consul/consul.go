@@ -6,6 +6,7 @@
 package consul
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -26,6 +27,11 @@ type Pair struct {
 	Key   string
 	Value []byte
 }
+
+const (
+	headerConsulToken = "X-Consul-Token"
+	kvPrefix          = "/v1/kv/"
+)
 
 // Options configure a Client.
 type Options struct {
@@ -102,6 +108,9 @@ func (e *StatusError) Error() string {
 // come from a proxy in front of Consul and cannot pass for an empty prefix.
 var errNotConsul = errors.New("answer has no X-Consul-Index, so it is not from Consul")
 
+// ErrConflict is returned when a check-and-set condition is not met.
+var ErrConflict = errors.New("consul check-and-set conflict")
+
 // List returns the keys under prefix and their values, and the prefix's index. With index 0 it
 // answers at once. With the index of an earlier answer it is a blocking query: Consul answers
 // when something under the prefix changes, or after wait. A prefix without keys is an empty
@@ -115,7 +124,7 @@ func (c *Client) List(ctx context.Context, prefix string, index uint64, wait tim
 	// Consul adds up to wait/16 to spread the answers of many watchers.
 	ctx, cancel := context.WithTimeout(ctx, wait+wait/16+10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.addr+"/v1/kv/"+escapePath(prefix)+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.addr+kvPrefix+escapePath(prefix)+"?"+q.Encode(), nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("consul request %s: %w", prefix, err)
 	}
@@ -124,7 +133,7 @@ func (c *Client) List(ctx context.Context, prefix string, index uint64, wait tim
 		return nil, 0, err
 	}
 	if token != "" {
-		req.Header.Set("X-Consul-Token", token)
+		req.Header.Set(headerConsulToken, token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -166,10 +175,23 @@ func (c *Client) List(ctx context.Context, prefix string, index uint64, wait tim
 
 // Instance is one registration of a service in the catalog, with the state of its checks.
 type Instance struct {
-	ID   string
-	Meta map[string]string
+	ID      string            `json:"ID"`
+	Service string            `json:"Service"`
+	Tags    []string          `json:"Tags"`
+	Address string            `json:"Address"`
+	Port    int               `json:"Port"`
+	Meta    map[string]string `json:"Meta"`
 	// Passing is true when every check of the instance and of its node passes.
-	Passing bool
+	Passing bool    `json:"Passing"`
+	Checks  []Check `json:"Checks"`
+}
+
+// Check is a check of a service instance in Consul.
+type Check struct {
+	CheckID string `json:"CheckID"`
+	Name    string `json:"Name"`
+	Status  string `json:"Status"`
+	Output  string `json:"Output"`
 }
 
 // Health returns the instances of a service, healthy or not, from /v1/health/service. The ACL
@@ -207,10 +229,19 @@ func (c *Client) Health(ctx context.Context, service string) ([]Instance, error)
 	}
 	var entries []struct {
 		Service struct {
-			ID   string
-			Meta map[string]string
-		}
-		Checks []struct{ Status string }
+			ID      string            `json:"ID"`
+			Service string            `json:"Service"`
+			Tags    []string          `json:"Tags"`
+			Address string            `json:"Address"`
+			Port    int               `json:"Port"`
+			Meta    map[string]string `json:"Meta"`
+		} `json:"Service"`
+		Checks []struct {
+			CheckID string `json:"CheckID"`
+			Name    string `json:"Name"`
+			Status  string `json:"Status"`
+			Output  string `json:"Output"`
+		} `json:"Checks"`
 	}
 	if err := json.Unmarshal(data, &entries); err != nil {
 		return nil, fmt.Errorf("consul GET health/service/%s: decode answer: %w", service, err)
@@ -218,12 +249,28 @@ func (c *Client) Health(ctx context.Context, service string) ([]Instance, error)
 	out := make([]Instance, 0, len(entries))
 	for _, e := range entries {
 		passing := true
+		checks := make([]Check, 0, len(e.Checks))
 		for _, ch := range e.Checks {
 			if ch.Status != "passing" {
 				passing = false
 			}
+			checks = append(checks, Check{
+				CheckID: ch.CheckID,
+				Name:    ch.Name,
+				Status:  ch.Status,
+				Output:  ch.Output,
+			})
 		}
-		out = append(out, Instance{ID: e.Service.ID, Meta: e.Service.Meta, Passing: passing})
+		out = append(out, Instance{
+			ID:      e.Service.ID,
+			Service: e.Service.Service,
+			Tags:    e.Service.Tags,
+			Address: e.Service.Address,
+			Port:    e.Service.Port,
+			Meta:    e.Service.Meta,
+			Passing: passing,
+			Checks:  checks,
+		})
 	}
 	return out, nil
 }
@@ -247,4 +294,94 @@ func escapePath(path string) string {
 		parts[i] = url.PathEscape(p)
 	}
 	return strings.Join(parts, "/")
+}
+
+// Put writes a key and its value in Consul KV.
+func (c *Client) Put(ctx context.Context, key string, value []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.addr+kvPrefix+escapePath(key), bytes.NewReader(value))
+	if err != nil {
+		return fmt.Errorf("consul request %s: %w", key, err)
+	}
+	token, err := c.currentToken()
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set(headerConsulToken, token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("consul PUT kv/%s: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("consul PUT kv/%s: %w", key, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(data))})
+	}
+	return nil
+}
+
+// Delete removes a key or prefix from Consul KV.
+func (c *Client) Delete(ctx context.Context, key string, recurse bool) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	u := c.addr + kvPrefix + escapePath(key)
+	if recurse {
+		u += "?recurse=true"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return fmt.Errorf("consul request %s: %w", key, err)
+	}
+	token, err := c.currentToken()
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set(headerConsulToken, token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("consul DELETE kv/%s: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("consul DELETE kv/%s: %w", key, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(data))})
+	}
+	return nil
+}
+
+// PutCAS writes a key and its value in Consul KV if the current ModifyIndex matches cas.
+// With cas = 0, it creates the key only if it does not already exist.
+func (c *Client) PutCAS(ctx context.Context, key string, value []byte, cas uint64) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	u := c.addr + kvPrefix + escapePath(key) + "?cas=" + strconv.FormatUint(cas, 10)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u, bytes.NewReader(value))
+	if err != nil {
+		return fmt.Errorf("consul request %s: %w", key, err)
+	}
+	token, err := c.currentToken()
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set(headerConsulToken, token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("consul PUT kv/%s: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("consul PUT kv/%s: %w", key, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(data))})
+	}
+	if strings.TrimSpace(string(data)) != "true" {
+		return fmt.Errorf("consul PUT kv/%s: %w", key, ErrConflict)
+	}
+	return nil
 }

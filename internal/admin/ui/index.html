@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>aisa // Administration</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="navbar">
+    <div class="brand">
+      <span class="logo">aisa</span>
+      <span class="badge badge-accent">Admin</span>
+    </div>
+    <div class="system-status">
+      <span id="system-status-indicator" class="status-dot dot-gray"></span>
+      <span id="system-status-text" class="status-text">Connecting...</span>
+      <span id="version-tag" class="version-tag"></span>
+    </div>
+  </header>
+
+  <nav class="subnav">
+    <button class="nav-tab active" data-tab="overview">Overview</button>
+    <button class="nav-tab" data-tab="consumers">Consumers</button>
+    <button class="nav-tab" data-tab="quotas">Quota Profiles</button>
+    <button class="nav-tab" data-tab="backends">Backends & Models</button>
+  </nav>
+
+  <main class="container">
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- Overview Tab -->
+    <section id="tab-overview" class="tab-content active">
+      <div class="stats-grid">
+        <div class="card stat-card">
+          <div class="stat-label">Consumers</div>
+          <div id="stat-consumers" class="stat-value">-</div>
+          <div class="stat-sub">Declared in Consul</div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-label">Vault Key Hashes</div>
+          <div id="stat-keys" class="stat-value">-</div>
+          <div class="stat-sub">Available credentials</div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-label">Quota Profiles</div>
+          <div id="stat-quotas" class="stat-value">-</div>
+          <div class="stat-sub">Active limit profiles</div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-label">Backends</div>
+          <div id="stat-backends" class="stat-value">-</div>
+          <div class="stat-sub">Healthy inference targets</div>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-label">Models</div>
+          <div id="stat-models" class="stat-value">-</div>
+          <div class="stat-sub">Available for inference</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>Readiness Checks (/readyz)</h3>
+          <div id="readiness-list" class="checks-list">Loading checks...</div>
+        </div>
+        <div class="card">
+          <h3>Quick Actions</h3>
+          <div class="action-buttons">
+            <button class="btn btn-primary" onclick="openModal('modal-add-consumer')">+ Declare Consumer</button>
+            <button class="btn btn-secondary" onclick="openModal('modal-add-quota')">+ Add Quota Profile</button>
+            <a href="/metrics" target="_blank" class="btn btn-outline">View Prometheus Metrics ↗</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Consumers Tab -->
+    <section id="tab-consumers" class="tab-content">
+      <div class="section-header">
+        <div>
+          <h2>Consumers</h2>
+          <p class="section-desc">Declared in Consul KV (<code>aisa/consumers/&lt;name&gt;</code>) with key hashes in Vault.</p>
+        </div>
+        <button class="btn btn-primary" onclick="openModal('modal-add-consumer')">+ New Consumer</button>
+      </div>
+
+      <div class="card table-card">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Consumer Name</th>
+              <th>Quota Profile</th>
+              <th>Kubernetes Target</th>
+              <th>Vault Hash</th>
+              <th>Status</th>
+              <th class="text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="consumers-table-body">
+            <tr><td colspan="6" class="text-center">Loading consumers...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Quota Profiles Tab -->
+    <section id="tab-quotas" class="tab-content">
+      <div class="section-header">
+        <div>
+          <h2>Quota Profiles</h2>
+          <p class="section-desc">Sliding-window token limits in Consul KV (<code>aisa/quotas/&lt;profile&gt;</code>) tracked in Redis.</p>
+        </div>
+        <button class="btn btn-primary" onclick="openModal('modal-add-quota')">+ Add Profile</button>
+      </div>
+
+      <div class="card table-card">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Profile Name</th>
+              <th>Tokens Per Hour</th>
+              <th class="text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="quotas-table-body">
+            <tr><td colspan="3" class="text-center">Loading quotas...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Backends & Models Tab -->
+    <section id="tab-backends" class="tab-content">
+      <div class="section-header">
+        <div>
+          <h2>Inference Backends</h2>
+          <p class="section-desc">Discovered from Consul Catalog (<code>aisa-backend</code>) with health check status.</p>
+        </div>
+        <button class="btn btn-outline" onclick="loadBackends()">Refresh</button>
+      </div>
+
+      <div class="card table-card mb-4">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Service ID</th>
+              <th>Address : Port</th>
+              <th>Provider</th>
+              <th>Models</th>
+              <th>Priority / Fail Policy</th>
+              <th>Health Check</th>
+            </tr>
+          </thead>
+          <tbody id="backends-table-body">
+            <tr><td colspan="6" class="text-center">Loading backends...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section-header">
+        <div>
+          <h2>Available Models</h2>
+          <p class="section-desc">Aggregate catalog of models served by healthy backends.</p>
+        </div>
+      </div>
+
+      <div id="models-list" class="models-grid">
+        Loading models...
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal: Add Consumer -->
+  <div id="modal-add-consumer" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Declare New Consumer</h3>
+        <button class="btn-close" onclick="closeModal('modal-add-consumer')">&times;</button>
+      </div>
+      <form id="form-add-consumer" onsubmit="handleCreateConsumer(event)">
+        <div class="form-group">
+          <label for="consumer-name">Consumer Name *</label>
+          <input type="text" id="consumer-name" required placeholder="e.g. chat-ui" pattern="^[a-zA-Z0-9_-]+$">
+          <small>Identifier for the consuming application (no spaces or special characters).</small>
+        </div>
+        <div class="form-group">
+          <label for="consumer-quota">Quota Profile</label>
+          <select id="consumer-quota">
+            <option value="">-- No Quota Limit --</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="consumer-namespace">Kubernetes Namespace (optional)</label>
+            <input type="text" id="consumer-namespace" placeholder="e.g. default">
+          </div>
+          <div class="form-group">
+            <label for="consumer-secret">Secret Name (optional)</label>
+            <input type="text" id="consumer-secret" placeholder="e.g. aisa-credential">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="consumer-gen-key" checked onchange="toggleCustomKeyInput()">
+            Generate secure API key automatically
+          </label>
+        </div>
+        <div id="custom-key-container" class="form-group hidden">
+          <label for="consumer-custom-key">Custom API Key</label>
+          <input type="text" id="consumer-custom-key" placeholder="Enter custom secret key">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-add-consumer')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Consumer</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Add Quota Profile -->
+  <div id="modal-add-quota" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Add Quota Profile</h3>
+        <button class="btn-close" onclick="closeModal('modal-add-quota')">&times;</button>
+      </div>
+      <form id="form-add-quota" onsubmit="handleCreateQuota(event)">
+        <div class="form-group">
+          <label for="quota-name">Profile Name *</label>
+          <input type="text" id="quota-name" required placeholder="e.g. interactive" pattern="^[a-zA-Z0-9_-]+$">
+        </div>
+        <div class="form-group">
+          <label for="quota-tokens">Tokens Per Hour *</label>
+          <input type="number" id="quota-tokens" required min="1" placeholder="e.g. 1000000">
+          <div class="preset-buttons">
+            <button type="button" class="btn-chip" onclick="setQuotaPreset(100000)">100k</button>
+            <button type="button" class="btn-chip" onclick="setQuotaPreset(500000)">500k</button>
+            <button type="button" class="btn-chip" onclick="setQuotaPreset(1000000)">1M</button>
+            <button type="button" class="btn-chip" onclick="setQuotaPreset(5000000)">5M</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-add-quota')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Profile</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Show Generated Key -->
+  <div id="modal-key-reveal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>API Key Generated</h3>
+        <button class="btn-close" onclick="closeModal('modal-key-reveal')">&times;</button>
+      </div>
+      <div class="key-warning">
+        ⚠️ <strong>Save this key now!</strong> For security, Vault stores only the SHA-256 hash. This key cannot be retrieved or viewed again.
+      </div>
+      <div class="key-box">
+        <code id="revealed-key-text"></code>
+        <button class="btn btn-copy" onclick="copyRevealedKey()">Copy</button>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" onclick="closeModal('modal-key-reveal')">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>
