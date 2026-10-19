@@ -58,6 +58,7 @@ Three contracts connect aisa to its proxy: a **decision API** (forward-auth patt
 | [quotas-and-budgets.md](docs/features/quotas-and-budgets.md) | Token quotas and monthly budgets, both in tokens |
 | [usage-metrics.md](docs/features/usage-metrics.md) | Metrics, dashboard and alerts |
 | [admin-interface.md](docs/features/admin-interface.md) | Administration Web UI and REST management API |
+| [client-integration.md](docs/features/client-integration.md) | Client application integration guide for Kubernetes without breaking direct provider access |
 | **Process** | |
 | [SPIKES.md](docs/process/SPIKES.md) | Unknowns to verify before implementation |
 | [USER_STORIES.md](docs/process/USER_STORIES.md) | Who aisa is built for (US-1 to US-3), with acceptance criteria and gaps |
