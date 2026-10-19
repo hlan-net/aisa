@@ -385,7 +385,9 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 	hasKey := false
 	if keyHash != "" && h.vault != nil {
 		if err := h.writeConsumerKey(ctx, name, keyHash); err != nil {
-			_ = h.consul.Delete(ctx, consulKey, false)
+			if delErr := h.consul.Delete(ctx, consulKey, false); delErr != nil {
+				h.log.Warn("failed to rollback consul declaration after vault error", "consumer", name, "error", delErr)
+			}
 			if errors.Is(err, vault.ErrConflict) {
 				writeError(w, http.StatusConflict, "vault check-and-set conflict")
 				return
