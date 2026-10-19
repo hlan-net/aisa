@@ -173,6 +173,15 @@ serviceMonitor:
   interval: 30s
   labels: {}
 
+# For clusters with the Prometheus Operator: the alerts of docs/features/usage-metrics.md as a
+# PrometheusRule, on aisa's own metrics. Needs the ServiceMonitor, or another scrape of the
+# Service <release>-metrics under the job <release>-metrics: AisaDown reads up{} of that job.
+prometheusRule:
+  enabled: false
+  # So that Prometheus selects the rule, e.g. kube-prometheus-stack's default ruleSelector:
+  # labels: {release: kube-prometheus-stack}
+  labels: {}
+
 # Added to aisa's container, e.g. VAULT_CACERT with a CA mounted through extraVolumes, or
 # AISA_CONSUMER_REFRESH.
 extraEnv: []

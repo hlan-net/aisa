@@ -45,7 +45,8 @@ validate() {
 
 validate "defaults" "$AISA"
 validate "no-kubernetes" "$AISA" --set kubernetes.enabled=false
-validate "monitoring" "$AISA" --set serviceMonitor.enabled=true --set apisix.serviceMonitor.enabled=true
+validate "monitoring" "$AISA" --set serviceMonitor.enabled=true --set apisix.serviceMonitor.enabled=true \
+    --set prometheusRule.enabled=true
 validate "consul-without-acls" "$AISA" --set consul.token.fromVault=false --set apisix.vaultAgent.consulToken.enabled=false
 validate "external-redis" "$AISA" --set redis.enabled=false --set redis.addr=redis.example.svc:6379
 validate "no-quotas-no-proxy" "$AISA" --set quotas.enabled=false --set apisix.enabled=false \
@@ -184,5 +185,20 @@ helm template aisa "$AISA" "${REQUIRED[@]}" --set admin.enabled=true >"$OUT/admi
 admin_env=$(awk '/name: AISA_ADMIN_ENABLED/{getline; print $2; exit}' "$OUT/admin.yaml" | tr -d '"')
 [[ "$admin_env" == "true" ]] || fail "admin.enabled=true did not set AISA_ADMIN_ENABLED=true: got '$admin_env'"
 echo "ok: admin.enabled=true sets AISA_ADMIN_ENABLED=true in deployment"
+
+# The alerts of docs/features/usage-metrics.md ship as a PrometheusRule, on aisa's metrics only;
+# AisaDown watches the job of the metrics Service. The groups of a feature that is off are left out.
+alerts() { awk '/^kind:/{r = ($2 == "PrometheusRule")} r && /- alert: /{print $3}' "$1" | LC_ALL=C sort | tr '\n' ' '; }
+want="AisaBudgetExhausted AisaBudgetSoftLimit AisaConfigEmpty AisaConfigHeld AisaConfigRenderRejected AisaConsumerDeclarationInvalid AisaConsumerSecretFailing AisaConsumersStale AisaConsumersUnreadable AisaDown AisaKubeNoLeader AisaKubeWritesFailing AisaModelUnavailable AisaQuotaCountersFailing AisaQuotaProfileInvalid AisaSlowFirstToken AisaUsageEventsRejected AisaUsageMissing AisaUsageRequestsRejected "
+[[ "$(alerts "$OUT/monitoring.yaml")" == "$want" ]] || fail "alerts in the PrometheusRule: $(alerts "$OUT/monitoring.yaml")"
+grep -q 'up{job="aisa-metrics",namespace="aisa"}' "$OUT/monitoring.yaml" || fail "AisaDown does not watch the job aisa-metrics"
+grep -qE '^ +expr: .*(apisix|consul_)' "$OUT/monitoring.yaml" && fail "an alert depends on a gateway or Consul metric"
+! grep -q '^kind: PrometheusRule$' "$OUT/defaults.yaml" || fail "the PrometheusRule renders by default"
+helm template aisa "$AISA" "${REQUIRED[@]}" --set prometheusRule.enabled=true --set kubernetes.enabled=false --set quotas.enabled=false \
+    >"$OUT/rule-min.yaml" 2>/dev/null
+case "$(alerts "$OUT/rule-min.yaml")" in
+    *AisaKube*|*AisaConsumerSecret*|*AisaModel*|*AisaQuota*) fail "alerts of features that are off: $(alerts "$OUT/rule-min.yaml")" ;;
+esac
+echo "ok: the PrometheusRule has the documented alerts, on aisa's metrics only"
 
 echo "ok: all chart tests passed"

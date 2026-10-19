@@ -20,6 +20,7 @@ Applications call the proxy's Service, `aisa-apisix` for a release named `aisa`,
 | Deployment, Service `<release>-redis` | Redis for the quota counters, nothing on disk (`redis.enabled`) |
 | NetworkPolicies | Only the proxy reaches aisa's API; the peers in `networkPolicy.extraFrom` (none by default) reach its metrics port only; only aisa reaches Redis |
 | ServiceMonitor | Optional (`serviceMonitor.enabled`) |
+| PrometheusRule | Optional (`prometheusRule.enabled`): the alerts of [`usage-metrics.md`](../../../docs/features/usage-metrics.md#alerts), on aisa's metrics; `AisaDown` watches the ServiceMonitor's job |
 | CRD `models.aisa.hlan.net` | The `Model` objects (`crds.install`): installed and upgraded with the chart, kept when it is uninstalled. One install in a cluster owns it; set `crds.install=false` in any other |
 | ClusterRole and binding `<namespace>-<release>` | aisa writes each consumer's Secret and the `Model` objects (`kubernetes.enabled`): Secrets in every namespace, changing only those with its own labels, and the Models |
 | Role and binding `<release>-leader` | The Lease that elects the replica that writes the objects |
@@ -50,6 +51,7 @@ The full list with comments is in [`values.yaml`](./values.yaml). The ones an in
 | `kubernetes.enabled` | `true` | aisa issues the keys of the consumers whose declaration names a namespace and a Secret, writes them into those Secrets, and writes a `Model` per model ([`KUBERNETES_OBJECTS.md`](../../../docs/concepts/KUBERNETES_OBJECTS.md)) |
 | `kubernetes.proxyURL` | the proxy's Service | The base URL in the Secrets and the Models |
 | `kubernetes.keys.rotationInterval`, `kubernetes.keys.rotationGrace` | `720h`, `168h` | When a key is replaced, and how long the old one stays valid; restart the pods that read it into their environment within the grace |
+| `serviceMonitor.enabled`, `prometheusRule.enabled` | `false`, `false` | With the Prometheus Operator: scrape aisa's metrics, and alert on them; `prometheusRule.labels` so that the Prometheus selects the rule, e.g. `release: kube-prometheus-stack` |
 | `networkPolicy.extraFrom` | none | Who may reach aisa's metrics port 9090, e.g. Prometheus. Not the API: a peer here cannot send usage events or ask for decisions (#46) |
 | `global.aisa.fullnameOverride` | none | The name of aisa's objects; global, so the proxy finds aisa's Service by it |
 | `extraEnv`, `extraVolumes`, `extraVolumeMounts` | none | e.g. `VAULT_CACERT` with a CA from a ConfigMap |

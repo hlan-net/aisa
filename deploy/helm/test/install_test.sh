@@ -271,8 +271,10 @@ port_forward "$RELEASE" 18080 8080
 overview=$(curl -fsS http://127.0.0.1:18080/admin/api/overview)
 expect "admin: overview status" ok "$(jq -r .status <<<"$overview")"
 # Refuse rotation for a consumer whose Secret is managed by Kubernetes
+consul kv put aisa/consumers/k8s-managed "{\"quota_profile\":\"interactive\",\"namespace\":\"$APP_NS\",\"secret\":\"test\"}" >/dev/null
 expect "admin: rotate refused for consumer with Secret" 400 \
-    "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$JSON_TYPE" http://127.0.0.1:18080/admin/api/consumers/batch-jobs/rotate-key)"
+    "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$JSON_TYPE" http://127.0.0.1:18080/admin/api/consumers/k8s-managed/rotate-key)"
+consul kv delete aisa/consumers/k8s-managed >/dev/null
 # Create a standalone consumer with an issued key
 admin_created=$(curl -fsS -X POST -H "$JSON_TYPE" \
     -d '{"name":"admin-user","quota_profile":"interactive","generate_key":true}' \
