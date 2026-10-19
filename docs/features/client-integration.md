@@ -29,40 +29,42 @@ To ensure forward compatibility, client applications should treat the Secret con
 |---|---|---|---|
 | `OPENAI_BASE_URL` | **Mandatory** | The HTTP endpoint of the in-cluster AISA proxy | `http://aisa-apisix.aisa.svc.cluster.local/v1` |
 | `OPENAI_API_KEY` | **Mandatory** | Plaintext API key issued and rotated by AISA | `aisa-1a2b3c...` |
-| `OPENAI_MODEL` / `LLM_MODEL` | *Optional (Reserved)* | Default model assigned to this consumer or quota profile | `qwen3:8b` |
+| `AISA_BASE_URL` | *Recommended Alias* | Namespaced alias to prevent collision with direct OpenAI | `http://aisa-apisix.aisa.svc.cluster.local/v1` |
+| `AISA_API_KEY` | *Recommended Alias* | Namespaced alias to prevent collision with direct OpenAI | `aisa-1a2b3c...` |
+| `OPENAI_MODEL` / `AISA_MODEL` / `LLM_MODEL` | *Optional (Reserved)* | Default model assigned to this consumer or quota profile | `qwen3:8b` |
 
 > [!NOTE]
-> Client applications must ignore unknown keys in the Secret so future AISA additions (such as default model or telemetry tags) do not break existing deployments.
+> Client applications must ignore unknown keys in the Secret so future AISA additions (such as telemetry tags or key rotation metadata) do not break existing deployments.
 
-### Configuration Precedence & Kubernetes Overrides
+### Application Integration Patterns
 
-In Kubernetes, standard environment variables defined in `env` **override** values of the same name imported via `envFrom`:
+Applications integrating with AISA typically follow one of two patterns:
 
-```yaml
-# env takes precedence over envFrom of the same name
-envFrom:
-  - secretRef:
-      name: my-app-aisa-key
-env:
-  - name: OPENAI_BASE_URL
-    value: "https://api.openai.com/v1" # Overrides AISA proxy endpoint
-```
+#### Pattern A: Implicit Fallback Hierarchy (e.g. JFYI)
 
-Inside the application's configuration loader, the recommended order of precedence is:
+When the application has a single global inference engine, use a strict configuration precedence:
 
 ```text
-1. Explicit Direct Provider Keys (e.g. ANTHROPIC_API_KEY, direct vendor credentials)
+1. Explicit Direct Provider Keys (e.g. JFYI_ANTHROPIC_API_KEY, direct vendor credentials)
 2. In-cluster AISA Environment (OPENAI_BASE_URL + OPENAI_API_KEY from Secret)
-3. Local Default Fallback (e.g. http://localhost:11434/v1)
+3. Local Default Fallback (e.g. http://localhost:11434/v1 for local Ollama)
 ```
 
-When `OPENAI_BASE_URL` and `OPENAI_API_KEY` are populated (via AISA's Secret), standard OpenAI SDKs (Python `openai`, Go `go-openai`, LangChain, etc.) automatically route requests through `aisa` without requiring custom networking or authorization code.
+#### Pattern B: Multi-Provider / Explicit Provider Selection (e.g. Moirai)
+
+When the application lets users or tenants select between different providers (e.g. `ollama`, `openai`, `gemini`, `aisa`):
+
+- Treat `aisa` as a distinct, first-class provider next to the others.
+- Do not let AISA's environment variables silently redirect direct `openai` or `ollama` traffic.
+- Resolve AISA credentials only when the user or task selects `provider: "aisa"`.
 
 ---
 
 ## 3. Kubernetes Deployment Patterns
 
-### A. Deployment Manifest (`envFrom`)
+Depending on whether your application uses global env vars (Pattern A) or multi-provider settings (Pattern B), choose either `envFrom` or `secretKeyRef`:
+
+### Pattern 1: Simple Single-Provider (`envFrom`)
 
 Bind the container to AISA's managed Secret using `optional: true` so the pod can deploy even before AISA completes its initial reconciliation pass:
 
@@ -82,12 +84,11 @@ spec:
       containers:
         - name: app
           image: my-app:latest
-          # 1. Ingest AISA credentials when available
+          # Ingest AISA credentials when available
           envFrom:
             - secretRef:
                 name: my-app-aisa-key
                 optional: true
-          # 2. Application-specific configuration
           env:
             - name: DEFAULT_MODEL
               value: "qwen3:8b"
@@ -95,15 +96,57 @@ spec:
 
 > [!IMPORTANT]
 > **First-start behavior with `optional: true`:**
-> `envFrom` is evaluated only once when the container processes are created. If the pod starts before AISA has created the Secret, the pod starts without the environment variables and will **not** receive them until the pod is restarted! Once AISA creates the Secret, restart the deployment or ensure AISA consumer setup precedes application startup.
+> `envFrom` is evaluated only once when container processes are created. If the pod starts before AISA creates the Secret, the pod starts without the environment variables and will **not** receive them until the pod is restarted! Once AISA creates the Secret, restart the deployment (`kubectl rollout restart`).
 
-### B. Key Rotation & Grace Period
+### Pattern 2: Multi-Provider / No-Collision Mapping (`secretKeyRef`)
+
+If your application also supports direct OpenAI credentials, using `envFrom` can be hazardous:
+1. Kubernetes `env` variables **always override** `envFrom` variables of the same name (even if the `env` variable is empty `""`).
+2. Standard OpenAI SDKs automatically pick up `OPENAI_BASE_URL` from `envFrom`, which might accidentally redirect direct OpenAI calls to the AISA proxy with the wrong key.
+
+To prevent collisions, map the Secret keys explicitly to `AISA_*` variables using `secretKeyRef` (as demonstrated in Moirai):
+
+```yaml
+containers:
+  - name: app
+    env:
+      # Direct OpenAI credentials remain unpolluted:
+      - name: OPENAI_API_KEY
+        value: "sk-proj-direct..."
+      # AISA credentials cleanly mapped with optional: true
+      - name: AISA_BASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: my-app-aisa-key
+            key: OPENAI_BASE_URL
+            optional: true
+      - name: AISA_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: my-app-aisa-key
+            key: OPENAI_API_KEY
+            optional: true
+      - name: AISA_MODEL
+        valueFrom:
+          secretKeyRef:
+            name: my-app-aisa-key
+            key: OPENAI_MODEL
+            optional: true
+```
+
+### Key Rotation, Grace Period & Volume Mounts
 
 AISA automatically rotates consumer API keys on a configured schedule (default: 30 days).
 
 1. **Grace Period:** When a new key is issued, the old key remains valid in Vault for a grace window (`AISA_KEY_ROTATION_GRACE`, 7 days by default). During this window, requests signed with either the old or new key are accepted.
-2. **Pod Restarts (`envFrom`):** Because `envFrom` variables are only loaded at pod creation, running pods must restart within the 7-day grace window to pick up the rotated key from the Secret. Using an automatic Secret-watching controller such as [Stakater Reloader](https://github.com/stakater/Reloader) is recommended for production deployments.
-3. **Alternative — Volume Mount (Zero-Restart):** If the application supports reading keys from a file (e.g. `OPENAI_API_KEY_FILE`), mount the Secret as a volume:
+2. **Pod Restarts (`envFrom` / `secretKeyRef`):** Because environment variables are only loaded at pod creation, running pods must restart within the 7-day grace window. Using an automatic Secret-watching controller such as [Stakater Reloader](https://github.com/stakater/Reloader) is recommended for production deployments:
+   ```yaml
+   metadata:
+     annotations:
+       secret.reloader.stakater.com/reload: "my-app-aisa-key"
+   ```
+3. **Zero-Restart Alternative — Volume Mount (`OPENAI_API_KEY_FILE`):**
+   Mount the Secret as a volume. Kubelet automatically updates mounted files within minutes of rotation:
    ```yaml
    volumeMounts:
      - name: aisa-secret-vol
@@ -114,9 +157,24 @@ AISA automatically rotates consumer API keys on a configured schedule (default: 
        secret:
          secretName: my-app-aisa-key
    ```
-   Kubelet automatically updates the mounted files in `/etc/aisa/OPENAI_API_KEY` within minutes of rotation, allowing apps that dynamically read the file to rotate credentials without any pod restarts.
+   Because the official `openai` Python SDK does not re-read files automatically, read the file dynamically on client instantiation or before requests:
+   ```python
+   import os
+   from openai import OpenAI
 
-### C. Helm Chart Values (`values.yaml`)
+   def get_aisa_client() -> OpenAI:
+       key_file = os.getenv("AISA_API_KEY_FILE", "/etc/aisa/OPENAI_API_KEY")
+       if os.path.exists(key_file):
+           with open(key_file, "r", encoding="utf-8") as f:
+               api_key = f.read().strip()
+       else:
+           api_key = os.getenv("AISA_API_KEY") or os.getenv("OPENAI_API_KEY")
+       
+       base_url = os.getenv("AISA_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+       return OpenAI(api_key=api_key, base_url=base_url)
+   ```
+
+### Helm Chart Values (`values.yaml`)
 
 Allow operators to toggle between in-cluster AISA and direct provider configuration:
 
@@ -126,6 +184,7 @@ inference:
   aisa:
     enabled: true
     secretName: "my-app-aisa-key"
+    reloader: true  # Enables stakater/reloader annotation
 
   # Direct provider fallback (used when aisa.enabled is false)
   direct:
@@ -138,10 +197,19 @@ In the Helm deployment template:
 
 ```yaml
 {{- if .Values.inference.aisa.enabled }}
-envFrom:
-  - secretRef:
-      name: {{ .Values.inference.aisa.secretName }}
-      optional: true
+env:
+  - name: AISA_BASE_URL
+    valueFrom:
+      secretKeyRef:
+        name: {{ .Values.inference.aisa.secretName }}
+        key: OPENAI_BASE_URL
+        optional: true
+  - name: AISA_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: {{ .Values.inference.aisa.secretName }}
+        key: OPENAI_API_KEY
+        optional: true
 {{- end }}
 ```
 
@@ -271,36 +339,54 @@ status:
 
 ---
 
-## 6. Error & Quota Semantics
+## 6. Error, Timeout & Quota Semantics
 
 When designing error handling in client applications:
 
-1. **HTTP 429 Too Many Requests:**
-   - Returned when the consumer exceeds its token quota within the sliding 1-hour window.
-   - The response includes a standard `Retry-After: <seconds>` header indicating when sufficient tokens will leave the window.
-   - Response body follows the standard OpenAI error format:
-     ```json
-     {
-       "error": {
-         "message": "Token quota exceeded; retry after 142s",
-         "type": "aisa_quota_exceeded",
-         "code": 429
-       }
-     }
-     ```
-2. **HTTP 503 Service Unavailable:**
-   - Returned when no backend serving the requested model is currently healthy, or when quota profile data is temporarily unavailable.
+### Status Codes and Error Types
+
+| HTTP Status | Error Type / Code | Description | Client Action |
+|---|---|---|---|
+| **401 Unauthorized** | `aisa_unauthorized` | Missing API key, key unknown to Vault, or key superseded and grace period has expired | Restart pod to refresh Secret, or check consumer registration |
+| **429 Too Many Requests** | `aisa_quota_exceeded` | Consumer has exceeded its hourly token quota | Read `Retry-After` header and wait before retrying, or request higher quota profile |
+| **429 Too Many Requests** | `provider_rate_limited` | Upstream provider (e.g. OpenAI/Anthropic) returned 429 | Back off and retry with exponential jitter |
+| **502 Bad Gateway** | `provider_error` | Upstream model server failed or returned invalid response | Retry or failover to secondary provider/model |
+| **503 Service Unavailable** | `aisa_backend_unavailable` | No healthy backend instance is currently serving the requested model | Verify model name via `GET /v1/models` or check backend health |
+
+Sample 429 quota error response:
+
+```json
+{
+  "error": {
+    "message": "Token quota exceeded; retry after 142s",
+    "type": "aisa_quota_exceeded",
+    "code": 429
+  }
+}
+```
+
+### Timeouts & Streaming (`stream: true`)
+
+1. **Upstream Timeouts:**
+   - Model inference requests can be long-running (especially with large local models or complex reasoning). AISA backends are configured with timeouts up to **600 seconds**.
+   - Client HTTP clients (such as `httpx` or `requests`) should set an explicit read timeout of at least 120–600s rather than relying on default short timeouts.
+2. **Streaming Semantics:**
+   - The AISA proxy natively streams Server-Sent Events (SSE) when `stream: true` is passed.
+   - For OpenAI SDKs and compatible servers (such as Ollama), token counts are transmitted in the final chunk (`stream_options: {"include_usage": true}`).
+   - If a client disconnects mid-stream, AISA's usage ledger records an estimated token count based on the consumer's recent average for that model to prevent unmetered quota draining.
 3. **Usage Field Integrity (`usage.total_tokens`):**
    - The AISA proxy (APISIX) **does not strip or alter** the response JSON body from the upstream model provider.
    - The response `usage` object (`prompt_tokens`, `completion_tokens`, `total_tokens`) passes through untouched, allowing client applications to perform local cost and token tracking without discrepancy.
 
 ---
 
-## 7. In-Cluster Verification & Testing
+## 7. Verification & Testing
 
-Before deploying your application, verify that the Secret and proxy connectivity are operational within the cluster.
+### 7.1 In-Cluster Verification
 
-### Step 1: Check Secret Creation
+Verify that the Secret and proxy connectivity are operational within the cluster.
+
+#### Step 1: Check Secret Creation
 
 Verify that AISA has reconciled the Secret in your target namespace:
 
@@ -315,18 +401,39 @@ kubectl get secret my-app-aisa-key -n my-namespace -o jsonpath='{.data.OPENAI_BA
 # Output: http://aisa-apisix.aisa.svc.cluster.local/v1
 ```
 
-### Step 2: Test Inference from an Ephemeral Pod
+#### Step 2: Test Inference from an Ephemeral Pod
 
-Run an ephemeral curl container mounting the Secret to verify connectivity and authentication:
+Run an ephemeral curl container mounting the Secret.
+
+> [!CAUTION]
+> Wrap the command in `sh -c '...'` so that `$OPENAI_API_KEY` and `$OPENAI_BASE_URL` are evaluated **inside the container**, not by your local shell:
 
 ```bash
 kubectl run aisa-test -n my-namespace --rm -it --restart=Never \
   --image=curlimages/curl \
   --env-from=secret/my-app-aisa-key -- \
-  curl -fsS -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models"
+  sh -c 'curl -fsS -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models"'
 ```
 
 If successful, the command prints the JSON list of available models.
+
+### 7.2 Local Development & Outside-Cluster Testing
+
+To test applications running locally (or in Docker Compose) against in-cluster AISA without deploying into Kubernetes:
+
+1. **Port-Forward the AISA Proxy:**
+   ```bash
+   kubectl port-forward -n aisa svc/aisa-apisix 8080:80
+   ```
+2. **Retrieve the Consumer API Key:**
+   ```bash
+   OPENAI_API_KEY=$(kubectl get secret my-app-aisa-key -n my-namespace -o jsonpath='{.data.OPENAI_API_KEY}' | base64 -d)
+   OPENAI_BASE_URL="http://localhost:8080/v1"
+   ```
+3. **Test with Curl or SDK:**
+   ```bash
+   curl -s -H "Authorization: Bearer $OPENAI_API_KEY" "$OPENAI_BASE_URL/models"
+   ```
 
 ---
 
@@ -334,10 +441,13 @@ If successful, the command prints the JSON list of available models.
 
 When updating a client repository (e.g. JFYI or Moirai):
 
-- [ ] **Preserve Direct Keys**: Verify direct provider settings (direct API keys, custom endpoints) remain operational.
-- [ ] **Config Hierarchy**: Ensure the configuration loader checks `OPENAI_BASE_URL` and `OPENAI_API_KEY` before falling back to local defaults or standalone URLs.
-- [ ] **Startup Logging**: Log resolved provider, base URL, and model at startup (**never log secret keys**). This ensures missing or misconfigured credentials are immediately diagnosed.
-- [ ] **Secret Binding in Manifests**: Add `envFrom` with `optional: true` referencing the designated AISA secret name in the Kubernetes Deployment / Helm chart.
+- [ ] **Preserve Direct Keys**: Verify direct provider settings (direct API keys, custom endpoints) remain operational and are not hijacked by AISA variables.
+- [ ] **Select Integration Pattern**:
+  - For single-engine apps: Implement implicit hierarchy (`Direct Keys` → `AISA` → `Local fallback`).
+  - For multi-provider apps: Treat `aisa` as an explicit provider choice and map secrets to `AISA_*` variables using `secretKeyRef`.
+- [ ] **Startup Logging**: Log resolved provider, base URL, and model at startup (**never log secret keys**).
+- [ ] **Secret Binding in Manifests**: Use `optional: true` referencing the designated AISA secret name in the Kubernetes Deployment / Helm chart.
 - [ ] **ServiceAccount Verification**: If `automountServiceAccountToken: false` is enabled, rely strictly on Level 1 HTTP discovery (`GET /v1/models`).
-- [ ] **Model Resolution**: Prefer dynamic model querying (`client.models.list()`) or configurable model names over hardcoded identifiers.
+- [ ] **Model Resolution**: Prefer dynamic model querying (`client.models.list()`) or configurable model names (`OPENAI_MODEL` / `AISA_MODEL`) over hardcoded identifiers.
+- [ ] **Verification**: Test using `sh -c` pod commands or local `kubectl port-forward` to ensure end-to-end connectivity.
 - [ ] **Documentation**: Document in the application's README how to configure the app for standalone/direct inference vs. in-cluster AISA inference.
