@@ -20,9 +20,14 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/hlan-net/aisa/internal/apikey"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/vault"
 )
+
+func splitHashes(v string) []string { return apikey.SplitHashes(v) }
+func hashKey(key string) string     { return apikey.Hash(key) }
+
 
 // memKV is Vault's KV v2 in memory: data goes through JSON, as it does to and from Vault.
 type memKV struct {

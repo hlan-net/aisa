@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -291,10 +292,13 @@ func rotateTestConsumerKey(t *testing.T, h *Handler, oldKey string, mv *mockVaul
 	if rotResp["plaintext_key"] == "" || rotResp["plaintext_key"] == oldKey {
 		t.Fatalf("new key not generated or same: %v", rotResp)
 	}
-	// Verify old key hash is superseded in Vault
+	// Verify new key hash is set in Vault and issued_at is nil for standalone consumers
 	vData := mv.secrets["secret/aisa/consumers/test-app"]
-	if vData["superseded_sha256"] == nil {
-		t.Errorf("expected superseded_sha256 to be present in rotated secret")
+	if vData["key_sha256"] != apikey.Hash(rotResp["plaintext_key"]) {
+		t.Errorf("expected key_sha256 to be updated to new key hash, got %v", vData["key_sha256"])
+	}
+	if vData["issued_at"] != nil {
+		t.Errorf("expected issued_at to be nil for standalone consumer, got %v", vData["issued_at"])
 	}
 }
 
@@ -903,12 +907,20 @@ func TestQuotaErrors(t *testing.T) {
 		t.Errorf("invalid name: status = %d, want 400", w.Code)
 	}
 
-	// Invalid tokens_per_hour
-	req = newJSONRequest(http.MethodPost, "/admin/api/quotas", `{"name":"batch","tokens_per_hour":0}`)
+	// Negative tokens_per_hour
+	req = newJSONRequest(http.MethodPost, "/admin/api/quotas", `{"name":"batch","tokens_per_hour":-1}`)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("zero tokens: status = %d, want 400", w.Code)
+		t.Errorf("negative tokens: status = %d, want 400", w.Code)
+	}
+
+	// Zero tokens_per_hour is valid (allows none)
+	req = newJSONRequest(http.MethodPost, "/admin/api/quotas", `{"name":"zero-batch","tokens_per_hour":0}`)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Errorf("zero tokens: status = %d, want 201", w.Code)
 	}
 
 	// Conflict (already exists)
@@ -994,3 +1006,125 @@ func TestStaticFilesAndRedirect(t *testing.T) {
 		t.Errorf("/admin/assets/app.js: status = %d, want 200", w.Code)
 	}
 }
+
+func TestPrefixMatchIsolation(t *testing.T) {
+	h, mc, mv := setupTestHandler()
+
+	// Put "chat-ui" in Consul and Vault
+	_ = mc.Put(context.Background(), "aisa/consumers/chat-ui", []byte(`{"quota_profile":"interactive"}`))
+	_ = mv.Write(context.Background(), "secret", "secret/aisa/consumers/chat-ui", map[string]any{"key_sha256": "abc"}, 0)
+
+	// Attempt to delete "chat" (prefix of "chat-ui"): must return 404
+	req := newJSONRequest(http.MethodDelete, "/admin/api/consumers/chat", "")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("delete prefix match: status = %d, want 404", w.Code)
+	}
+	if mc.pairs["aisa/consumers/chat-ui"] == nil {
+		t.Errorf("expected chat-ui to remain in Consul")
+	}
+
+	// Attempt to rotate key for "chat": must return 404
+	req = newJSONRequest(http.MethodPost, "/admin/api/consumers/chat/rotate-key", "{}")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("rotate prefix match: status = %d, want 404", w.Code)
+	}
+
+	// Quota prefix match: put "interactive-heavy", delete "interactive": must return 404
+	_ = mc.Put(context.Background(), "aisa/quotas/interactive-heavy", []byte(`{"tokens_per_hour":1000}`))
+	req = newJSONRequest(http.MethodDelete, "/admin/api/quotas/interactive", "")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("delete quota prefix match: status = %d, want 404", w.Code)
+	}
+	if mc.pairs["aisa/quotas/interactive-heavy"] == nil {
+		t.Errorf("expected interactive-heavy to remain in Consul")
+	}
+}
+
+func TestKeyHashCollision(t *testing.T) {
+	h, _, _ := setupTestHandler()
+
+	body1 := `{"name":"tool-a","custom_key":"secret-api-key-12345"}`
+	req1 := newJSONRequest(http.MethodPost, "/admin/api/consumers", body1)
+	w1 := httptest.NewRecorder()
+	h.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("create tool-a: status = %d", w1.Code)
+	}
+
+	body2 := `{"name":"tool-b","custom_key":"secret-api-key-12345"}`
+	req2 := newJSONRequest(http.MethodPost, "/admin/api/consumers", body2)
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusConflict {
+		t.Errorf("create tool-b with colliding key: status = %d, want 409", w2.Code)
+	}
+}
+
+func TestCreateConsumerRollback(t *testing.T) {
+	h, mc, mv := setupTestHandler()
+	mv.writeErr = errors.New("vault unavailable")
+
+	body := `{"name":"tool-rollback","generate_key":true}`
+	req := newJSONRequest(http.MethodPost, "/admin/api/consumers", body)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("create status = %d, want 500", w.Code)
+	}
+	if mc.pairs["aisa/consumers/tool-rollback"] != nil {
+		t.Errorf("expected tool-rollback declaration to be rolled back from Consul")
+	}
+}
+
+func TestInvalidNames(t *testing.T) {
+	h, _, _ := setupTestHandler()
+
+	for _, invalidName := range []string{".", "..", "-invalid", "_invalid"} {
+		req := newJSONRequest(http.MethodPost, "/admin/api/consumers", fmt.Sprintf(`{"name":%q,"generate_key":true}`, invalidName))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("consumer name %q: status = %d, want 400", invalidName, w.Code)
+		}
+
+		req = newJSONRequest(http.MethodPost, "/admin/api/quotas", fmt.Sprintf(`{"name":%q,"tokens_per_hour":100}`, invalidName))
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("quota name %q: status = %d, want 400", invalidName, w.Code)
+		}
+	}
+}
+
+func TestCorruptedQuotaProfile(t *testing.T) {
+	h, mc, _ := setupTestHandler()
+	_ = mc.Put(context.Background(), "aisa/quotas/corrupted", []byte(`not-json`))
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/quotas", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	var quotas []QuotaItem
+	_ = json.Unmarshal(w.Body.Bytes(), &quotas)
+	found := false
+	for _, q := range quotas {
+		if q.Name == "corrupted" {
+			found = true
+			if q.Status != "invalid" {
+				t.Errorf("expected corrupted quota status to be 'invalid', got %q", q.Status)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected corrupted quota to be listed")
+	}
+}
+

@@ -267,7 +267,7 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (st
 	current := ""
 	if secret != nil {
 		if key := string(secret.Data[SecretKey]); key != "" {
-			current = hashKey(key)
+			current = apikey.Hash(key)
 		}
 	}
 	changed := rec.clean(now, current, k.opts.Unwritten, k.opts.Grace)
@@ -338,11 +338,11 @@ func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, se
 	if r, ok := k.backoff[name]; ok && k.opts.Now().Before(r.at) {
 		return fmt.Errorf("the last attempt to write the Secret failed; the next one is at %s", r.at.UTC().Format(time.RFC3339))
 	}
-	key, err := newKey(k.opts.Rand)
+	key, err := apikey.New(k.opts.Rand)
 	if err != nil {
 		return err
 	}
-	hash := hashKey(key)
+	hash := apikey.Hash(key)
 	now := k.opts.Now()
 	rec.hashes = append(rec.hashes, hash)
 	rec.unwritten[hash] = now
@@ -517,7 +517,7 @@ func (k *Keys) read(ctx context.Context, name string) (*record, error) {
 	r := &record{
 		data:       data,
 		version:    version,
-		hashes:     splitHashes(s),
+		hashes:     apikey.SplitHashes(s),
 		unwritten:  readMarks(data[fieldUnwritten]),
 		superseded: readMarks(data[fieldSuperseded]),
 	}
@@ -610,6 +610,3 @@ func setMarks(data map[string]any, field string, marks map[string]time.Time) {
 	data[field] = m
 }
 
-func splitHashes(v string) []string      { return apikey.SplitHashes(v) }
-func hashKey(key string) string          { return apikey.Hash(key) }
-func newKey(r io.Reader) (string, error) { return apikey.New(r) }

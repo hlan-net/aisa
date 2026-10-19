@@ -255,15 +255,21 @@ async function loadQuotas() {
       return;
     }
 
-    tbody.innerHTML = quotas.map(q => `
+    tbody.innerHTML = quotas.map(q => {
+      const isInvalid = q.status === 'invalid';
+      const limitDisplay = isInvalid
+        ? '<span class="badge badge-danger">invalid</span>'
+        : `<code>${formatTokens(q.tokens_per_hour)} tokens / hour</code>`;
+      return `
       <tr>
         <td><strong>${escapeHTML(q.name)}</strong></td>
-        <td><code>${formatTokens(q.tokens_per_hour)} tokens / hour</code></td>
+        <td>${limitDisplay}</td>
         <td class="text-right">
           <button class="btn btn-danger" data-action="delete-quota" data-name="${escapeHTML(q.name)}">Delete</button>
         </td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="3" class="text-center" style="color:var(--danger)">Failed to load quotas: ${escapeHTML(err.message)}</td></tr>`;
   }
@@ -277,6 +283,10 @@ async function handleCreateQuota(e) {
   e.preventDefault();
   const name = document.getElementById('quota-name').value.trim();
   const tokens = Number.parseInt(document.getElementById('quota-tokens').value, 10);
+  if (Number.isNaN(tokens) || tokens < 0) {
+    showToast('Tokens per hour must be a non-negative number', 'error');
+    return;
+  }
 
   try {
     await api('/quotas', {

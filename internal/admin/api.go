@@ -20,10 +20,22 @@ import (
 	"github.com/hlan-net/aisa/internal/version"
 )
 
-var validNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+var validNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 func isValidName(name string) bool {
-	return len(name) >= 1 && len(name) <= 253 && validNameRE.MatchString(name) && name != metrics.ConsumerUnknown
+	return len(name) >= 1 && len(name) <= 253 &&
+		name != "." && name != ".." &&
+		validNameRE.MatchString(name) &&
+		name != metrics.ConsumerUnknown
+}
+
+func findExactKVPair(pairs []consul.Pair, exactKey string) *consul.Pair {
+	for i := range pairs {
+		if pairs[i].Key == exactKey {
+			return &pairs[i]
+		}
+	}
+	return nil
 }
 
 // OverviewResponse is the summary information returned by GET /admin/api/overview.
@@ -43,17 +55,6 @@ type OverviewCounts struct {
 	Models    int `json:"models"`
 }
 
-func probeWithin(ctx context.Context, c server.Check) error {
-	done := make(chan error, 1)
-	go func() { done <- c.Probe(ctx) }()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -61,7 +62,7 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 	errs := make([]error, len(h.checks))
 	var wg sync.WaitGroup
 	for i, c := range h.checks {
-		wg.Go(func() { errs[i] = probeWithin(ctx, c) })
+		wg.Go(func() { errs[i] = server.ProbeWithin(ctx, c) })
 	}
 	wg.Wait()
 
@@ -290,15 +291,49 @@ func (h *Handler) writeConsumerKey(ctx context.Context, name, keyHash string) er
 		return nil
 	}
 	vaultPath := h.opts.VaultPrefix + pathConsumers + name
-	_, version, err := h.vault.ReadVersion(ctx, h.opts.VaultMount, vaultPath)
+	existing, version, err := h.vault.ReadVersion(ctx, h.opts.VaultMount, vaultPath)
 	if err != nil && !errors.Is(err, vault.ErrNotFound) {
 		return fmt.Errorf("vault read version: %w", err)
 	}
-	data := map[string]any{
-		"key_sha256": keyHash,
-		"issued_at":  time.Now().UTC().Format(time.RFC3339),
+	data := make(map[string]any)
+	for k, v := range existing {
+		data[k] = v
 	}
+	data["key_sha256"] = keyHash
+	delete(data, "issued_at")
+	delete(data, "superseded_sha256")
+	delete(data, "unwritten_sha256")
 	return h.vault.Write(ctx, h.opts.VaultMount, vaultPath, data, version)
+}
+
+func (h *Handler) checkKeyHashUnique(ctx context.Context, keyHash, excludeConsumer string) (string, error) {
+	if h.vault == nil || keyHash == "" {
+		return "", nil
+	}
+	prefix := strings.TrimSuffix(h.opts.VaultPrefix+pathConsumers, "/")
+	keys, err := h.vault.List(ctx, h.opts.VaultMount, prefix)
+	if err != nil {
+		if errors.Is(err, vault.ErrNotFound) {
+			return "", nil
+		}
+		return "", fmt.Errorf("list vault consumers: %w", err)
+	}
+	for _, k := range keys {
+		otherName := strings.TrimSuffix(k, "/")
+		if otherName == "" || otherName == excludeConsumer {
+			continue
+		}
+		data, err := h.vault.Read(ctx, h.opts.VaultMount, h.opts.VaultPrefix+pathConsumers+otherName)
+		if err != nil {
+			continue
+		}
+		for _, hsh := range apikey.SplitHashes(fmt.Sprint(data["key_sha256"])) {
+			if hsh == keyHash {
+				return otherName, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
@@ -313,6 +348,23 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
+
+	plaintext, keyHash, err := resolveConsumerKey(req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if req.CustomKey != "" && keyHash != "" && h.vault != nil {
+		existingUser, err := h.checkKeyHashUnique(ctx, keyHash, name)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "check key hash: "+err.Error())
+			return
+		}
+		if existingUser != "" {
+			writeError(w, http.StatusConflict, fmt.Sprintf("key hash is already in use by consumer %q", existingUser))
+			return
+		}
+	}
 
 	declBytes, err := encodeConsumerDeclaration(req)
 	if err != nil {
@@ -330,15 +382,10 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plaintext, keyHash, err := resolveConsumerKey(req)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	hasKey := false
 	if keyHash != "" && h.vault != nil {
 		if err := h.writeConsumerKey(ctx, name, keyHash); err != nil {
+			_ = h.consul.Delete(ctx, consulKey, false)
 			if errors.Is(err, vault.ErrConflict) {
 				writeError(w, http.StatusConflict, "vault check-and-set conflict")
 				return
@@ -387,7 +434,7 @@ func (h *Handler) deleteConsumer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errConsulListPrefix+err.Error())
 		return
 	}
-	if len(pairs) == 0 {
+	if findExactKVPair(pairs, consulKey) == nil {
 		writeError(w, http.StatusNotFound, "consumer not found")
 		return
 	}
@@ -436,14 +483,15 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errConsulListPrefix+err.Error())
 		return
 	}
-	if len(pairs) == 0 {
+	pair := findExactKVPair(pairs, consulKey)
+	if pair == nil {
 		writeError(w, http.StatusNotFound, "consumer not found")
 		return
 	}
 	var decl struct {
 		Namespace string `json:"namespace"`
 	}
-	_ = json.Unmarshal(pairs[0].Value, &decl)
+	_ = json.Unmarshal(pair.Value, &decl)
 	if decl.Namespace != "" {
 		writeError(w, http.StatusBadRequest, "cannot rotate key for Kubernetes-managed consumer; key rotation is handled by Kubernetes Secret reconciliation")
 		return
@@ -467,27 +515,17 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	newHash := apikey.Hash(plaintext)
-	now := time.Now().UTC().Format(time.RFC3339)
 
-	// Preserve old hashes in superseded_sha256 during grace period
-	oldHashes := apikey.SplitHashes(fmt.Sprint(data["key_sha256"]))
-	superseded := make(map[string]any)
-	if sm, ok := data["superseded_sha256"].(map[string]any); ok {
-		for k, v := range sm {
-			superseded[k] = v
-		}
+	// Standalone consumers have no Kubernetes Secret reconciler to clean grace periods.
+	// Replace key_sha256 immediately while preserving all unknown fields.
+	newData := make(map[string]any)
+	for k, v := range data {
+		newData[k] = v
 	}
-	for _, oh := range oldHashes {
-		if _, ok := superseded[oh]; !ok {
-			superseded[oh] = now
-		}
-	}
-	allHashes := append(oldHashes, newHash)
-	newData := map[string]any{
-		"key_sha256":        strings.Join(allHashes, ","),
-		"superseded_sha256": superseded,
-		"issued_at":         now,
-	}
+	newData["key_sha256"] = newHash
+	delete(newData, "issued_at")
+	delete(newData, "superseded_sha256")
+	delete(newData, "unwritten_sha256")
 
 	if err := h.vault.Write(ctx, h.opts.VaultMount, vaultPath, newData, version); err != nil {
 		if errors.Is(err, vault.ErrConflict) {
@@ -510,6 +548,7 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 type QuotaItem struct {
 	Name          string `json:"name"`
 	TokensPerHour int64  `json:"tokens_per_hour"`
+	Status        string `json:"status,omitempty"` // ready, invalid
 }
 
 func (h *Handler) fetchQuotas(ctx context.Context) ([]QuotaItem, error) {
@@ -527,9 +566,11 @@ func (h *Handler) fetchQuotas(ctx context.Context) ([]QuotaItem, error) {
 		var q struct {
 			TokensPerHour int64 `json:"tokens_per_hour"`
 		}
-		if err := json.Unmarshal(p.Value, &q); err == nil {
-			items = append(items, QuotaItem{Name: name, TokensPerHour: q.TokensPerHour})
+		if err := json.Unmarshal(p.Value, &q); err != nil {
+			items = append(items, QuotaItem{Name: name, Status: "invalid"})
+			continue
 		}
+		items = append(items, QuotaItem{Name: name, TokensPerHour: q.TokensPerHour, Status: "ready"})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items, nil
@@ -561,8 +602,8 @@ func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid quota profile name")
 		return
 	}
-	if req.TokensPerHour <= 0 {
-		writeError(w, http.StatusBadRequest, "tokens_per_hour must be positive")
+	if req.TokensPerHour < 0 {
+		writeError(w, http.StatusBadRequest, "tokens_per_hour must be non-negative")
 		return
 	}
 
@@ -578,7 +619,7 @@ func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, QuotaItem{Name: name, TokensPerHour: req.TokensPerHour})
+	writeJSON(w, http.StatusCreated, QuotaItem{Name: name, TokensPerHour: req.TokensPerHour, Status: "ready"})
 }
 
 func (h *Handler) deleteQuota(w http.ResponseWriter, r *http.Request) {
@@ -599,7 +640,7 @@ func (h *Handler) deleteQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, errConsulListPrefix+err.Error())
 		return
 	}
-	if len(pairs) == 0 {
+	if findExactKVPair(pairs, key) == nil {
 		writeError(w, http.StatusNotFound, "quota profile not found")
 		return
 	}

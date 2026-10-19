@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hlan-net/aisa/internal/apikey"
 	"github.com/hlan-net/aisa/internal/vault"
 )
 
@@ -614,7 +615,7 @@ func TestParseHashes(t *testing.T) {
 		"too short":              {"abcd", nil, 1},
 		"empty":                  {"", nil, 0},
 	} {
-		got, bad := parseHashes(tc.in)
+		got, bad := apikey.ParseHashes(tc.in)
 		if strings.Join(got, " ") != strings.Join(tc.want, " ") || bad != tc.bad {
 			t.Errorf("%s: %v, %d bad; want %v, %d bad", name, got, bad, tc.want, tc.bad)
 		}

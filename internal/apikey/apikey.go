@@ -44,15 +44,27 @@ func Hash(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// SplitHashes reads key_sha256 as comma- or whitespace-separated hex-encoded SHA-256 digests.
-// Values that are not valid 32-byte hex digests are dropped.
-func SplitHashes(v string) []string {
-	var hashes []string
+// ParseHashes splits a key_sha256 value into lowercase hex-encoded SHA-256 digests.
+// It accepts one hash, or several separated by commas or whitespace (including line ends).
+// It returns the valid unique hashes and the count of values that were not valid 32-byte hex digests.
+func ParseHashes(v string) (hashes []string, bad int) {
 	for f := range strings.FieldsFuncSeq(v, func(r rune) bool { return r == ',' || unicode.IsSpace(r) }) {
 		f = strings.ToLower(f)
-		if b, err := hex.DecodeString(f); err == nil && len(b) == sha256.Size && !slices.Contains(hashes, f) {
+		b, err := hex.DecodeString(f)
+		if err != nil || len(b) != sha256.Size {
+			bad++
+			continue
+		}
+		if !slices.Contains(hashes, f) {
 			hashes = append(hashes, f)
 		}
 	}
+	return hashes, bad
+}
+
+// SplitHashes reads key_sha256 as comma- or whitespace-separated hex-encoded SHA-256 digests.
+// Values that are not valid 32-byte hex digests are dropped.
+func SplitHashes(v string) []string {
+	hashes, _ := ParseHashes(v)
 	return hashes
 }

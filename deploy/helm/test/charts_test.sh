@@ -51,7 +51,8 @@ validate "consul-without-acls" "$AISA" --set consul.token.fromVault=false --set 
 validate "external-redis" "$AISA" --set redis.enabled=false --set redis.addr=redis.example.svc:6379
 validate "no-quotas-no-proxy" "$AISA" --set quotas.enabled=false --set apisix.enabled=false \
     --set kubernetes.proxyURL=https://llm.example.internal/v1
-validate "admin-ingress" "$AISA" --set admin.ingress.enabled=true
+validate "admin-ingress" "$AISA" --set admin.enabled=true --set admin.ingress.enabled=true
+grep -q '^kind: Ingress$' "$OUT/admin-ingress.yaml" || fail "admin-ingress case does not render the Ingress"
 validate "proxy-alone" "$PROXY" --set aisa.url=https://aisa.aisa.svc:8080
 
 # The values that must be given are asked for.

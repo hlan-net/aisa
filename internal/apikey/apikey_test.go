@@ -41,15 +41,19 @@ func TestHash(t *testing.T) {
 	}
 }
 
-func TestSplitHashes(t *testing.T) {
+func TestParseHashes(t *testing.T) {
 	h1 := strings.Repeat("a", 64)
 	h2 := strings.Repeat("b", 64)
 	input := h1 + ", " + h2 + " invalid-hash " + strings.ToUpper(h1)
-	res := SplitHashes(input)
+	res, bad := ParseHashes(input)
 	if len(res) != 2 {
 		t.Fatalf("expected 2 valid unique hashes, got %d: %v", len(res), res)
+	}
+	if bad != 1 {
+		t.Errorf("expected 1 bad hash, got %d", bad)
 	}
 	if res[0] != h1 || res[1] != h2 {
 		t.Errorf("expected [%s %s], got %v", h1, h2, res)
 	}
 }
+

@@ -43,7 +43,7 @@ Displays real-time system readiness checks (Vault connectivity, Consul declarati
 ### 2. Consumer Management
 - **List consumers**: Displays declared consumers in Consul KV (`aisa/consumers/<name>`), their assigned quota profile, Kubernetes namespace and Secret binding, Vault key hash status, and synchronization state (`ready`, `missing_key`, `undeclared`, `invalid`).
 - **Create consumer**: Declares a consumer in Consul KV with optional quota profile, Kubernetes target Secret, and either automated key generation or custom key specification (minimum 16 characters). Key issuance is supported for standalone consumers; consumers bound to a Kubernetes Secret have their keys managed by Kubernetes reconciliation. Checks existence with check-and-set (CAS) and returns 409 Conflict if the consumer already exists.
-- **Rotate key**: Generates a new API key for standalone consumers, preserves superseded keys in Vault during the grace period, and writes the new key with check-and-set concurrency protection. Refuses rotation for Kubernetes-managed consumers (handled via Secret reconciliation).
+- **Rotate key**: Generates a new API key for standalone consumers, replaces the key hash in Vault with check-and-set concurrency protection, and reveals the plaintext key once. Refuses rotation for Kubernetes-managed consumers (handled via Secret reconciliation).
 - **Delete consumer**: Removes the declaration from Consul KV and permanently deletes the key metadata and versions from Vault KV v2.
 
 ### 3. Quota Profiles
@@ -87,12 +87,12 @@ Returns system status, readiness probe states, and entity counts.
     "quota_profile": "interactive",
     "has_key": true,
     "status": "ready",
-    "plaintext_key": "aisa_sec_...",
+    "plaintext_key": "aisa-...",
     "message": "Consumer created. Save this API key now; it cannot be shown again."
   }
   ```
 - `POST /admin/api/consumers/{name}/rotate-key`
-  Rotates the key for the given consumer. Returns the newly generated plaintext key.
+  Rotates the key for the given standalone consumer by replacing the key hash in Vault with check-and-set concurrency protection. Returns the newly generated plaintext key. Refuses rotation for Kubernetes-managed consumers.
 - `DELETE /admin/api/consumers/{name}`
   Deletes the consumer declaration from Consul and removes its key from Vault.
 
@@ -100,7 +100,7 @@ Returns system status, readiness probe states, and entity counts.
 - `GET /admin/api/quotas`
   Lists all quota profiles and their tokens per hour limit.
 - `POST /admin/api/quotas`
-  Creates or updates a quota profile in Consul KV.
+  Creates a quota profile in Consul KV (checks existence with check-and-set and returns 409 Conflict if already declared).
   Payload:
   ```json
   {
@@ -152,6 +152,6 @@ admin:
 
 - **No Built-in Authentication**: The `/admin` Web UI and `/admin/api` management endpoints perform no internal authentication. In-cluster, the API port is reachable by the proxy and by any pod if NetworkPolicies are disabled. Ingress authentication annotations protect only the Ingress path, not internal ClusterIP calls. When exposing `/admin` externally, always configure authentication annotations on the Ingress (such as Traefik forward-auth, OIDC, or oauth2-proxy). For this reason, the admin interface is disabled by default (`AISA_ADMIN_ENABLED=false` and `admin.enabled=false`).
 - **CSRF & Request Validation**: Mutating API endpoints (`POST`, `PUT`, `DELETE`) require `Content-Type: application/json` and reject cross-site browser requests (`Sec-Fetch-Site: cross-site`), preventing CSRF attacks when deployed behind cookie-authenticated forward-auth proxies.
-- **Name Restrictions**: Declared consumer names and quota profile names are strictly limited to `[A-Za-z0-9._-]+` (1 to 253 characters) and cannot be `unknown`.
+- **Name Restrictions**: Declared consumer names and quota profile names must start with an alphanumeric character and are strictly limited to `[A-Za-z0-9][A-Za-z0-9._-]*` (1 to 253 characters, excluding `.` and `..`) and cannot be `unknown`.
 - **Vault and Consul ACLs**: aisa interacts with Consul and Vault using its configured service tokens. In production Kubernetes clusters, aisa authenticates via Kubernetes ServiceAccount auth to Vault and obtains Consul ACL tokens via Vault Agent. Consumer key deletion permanently purges metadata and versions via `DELETE secret/metadata/aisa/consumers/<name>`, requiring the `delete` capability on metadata.
-- **Key Safety**: Plaintext keys are generated in-memory using crypto-secure randomness (`crypto/rand`) and hashed with SHA-256 before writing to Vault. Plaintext keys are never logged and never stored in Consul or Vault. Standalone key rotation preserves superseded hashes during the grace period using check-and-set concurrency protection.
+- **Key Safety**: Plaintext keys are generated in-memory using crypto-secure randomness (`crypto/rand`) and hashed with SHA-256 before writing to Vault. Plaintext keys are never logged and never stored in Consul or Vault. Standalone key rotation updates `key_sha256` using check-and-set concurrency protection.
