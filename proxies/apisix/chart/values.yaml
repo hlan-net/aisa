@@ -48,7 +48,7 @@ consulTemplate:
 vaultAgent:
   image:
     repository: hashicorp/vault
-    tag: 2.1.2
+    tag: 2.2.0
     pullPolicy: IfNotPresent
   # Vault's Kubernetes auth: the mount and the role bound to this chart's service account and
   # namespace. The role reads secret/aisa/providers/* (docs/concepts/VAULT.md).

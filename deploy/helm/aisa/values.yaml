@@ -142,7 +142,7 @@ resources:
 vaultAgent:
   image:
     repository: hashicorp/vault
-    tag: 2.1.2
+    tag: 2.2.0
     pullPolicy: IfNotPresent
   resources:
     requests: {cpu: 10m, memory: 64Mi, ephemeral-storage: 16Mi}

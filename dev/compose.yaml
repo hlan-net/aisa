@@ -16,7 +16,7 @@ x-tools-image: &tools-image
 
 services:
   vault:
-    image: hashicorp/vault:2.1.2
+    image: hashicorp/vault:2.2.0
     command: ["server", "-dev", "-dev-root-token-id=dev-root", "-dev-listen-address=0.0.0.0:8200"]
     environment:
       VAULT_ADDR: http://127.0.0.1:8200
@@ -48,7 +48,7 @@ services:
       retries: 30
 
   seed-vault:
-    image: hashicorp/vault:2.1.2
+    image: hashicorp/vault:2.2.0
     entrypoint: ["/seed/vault.sh"]
     volumes: ["./seed:/seed:ro"]
     depends_on:
