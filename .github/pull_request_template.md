@@ -24,3 +24,4 @@
 - [ ] Gateway-specific code only under `proxies/<name>/`
 - [ ] `CHANGELOG.md` entry under `[Unreleased]` for user-visible changes
 - [ ] Docs updated
+- [ ] Agent attribution included if generated or assisted by an AI agent (e.g. `🤖 Generated with <Agent Name>`)

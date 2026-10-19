@@ -24,7 +24,7 @@ Each role can only reach its own paths. aisa's policy:
 ```hcl
 path "secret/data/aisa/consumers/*"     { capabilities = ["create", "read", "update"] }
 path "secret/metadata/aisa/consumers"   { capabilities = ["list"] }
-path "secret/metadata/aisa/consumers/*" { capabilities = ["list"] }
+path "secret/metadata/aisa/consumers/*" { capabilities = ["list", "delete"] }
 path "consul/creds/aisa"                { capabilities = ["read"] }
 ```
 
@@ -47,7 +47,7 @@ secret/aisa/consumers/batch-jobs  key_sha256=<hash>
 - When Vault cannot be read at all, aisa keeps deciding with the consumers it has. After 15 min without a successful reload (`AISA_CONSUMER_MAX_STALE`) it fails closed: `/v1/decide` answers 503 and `/readyz` reports `consumers` as failed, because a key revoked in that time would otherwise still be accepted.
 - aisa logs in to Vault again when Vault no longer accepts its token, not when a policy denies a path: a denied request would otherwise leave a new token behind every time.
 - **A consumer with a Secret** (its declaration names a namespace and a Secret): aisa issues its keys, writes the hashes here and rotates them, and keeps `unwritten_sha256`, `superseded_sha256` and `issued_at` next to `key_sha256` to finish an issue that a crash interrupted and to end each grace period ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret)). Fields it does not know are kept. A hash written by hand for such a consumer is superseded by the next key aisa issues and removed after the grace period.
-- **A consumer without a Secret**: its hashes are written by hand. Rotation: `key_sha256` holds one hash, or several separated by commas, spaces or line ends. Add the new key's hash next to the old one, move the client to the new key, then remove the old hash. A hash that two consumers share authenticates neither, and is logged as an error.
+- **A consumer without a Secret**: its hashes are written by hand, or through the admin interface ([`admin-interface.md`](../features/admin-interface.md)). Rotation: `key_sha256` holds one hash, or several separated by commas, spaces or line ends. Add the new key's hash next to the old one, move the client to the new key, then remove the old hash (or rotate via the admin interface to replace the hash immediately). A hash that two consumers share authenticates neither, and is logged as an error.
 - aisa logs in with Kubernetes auth (role `aisa`, `AISA_VAULT_K8S_ROLE`) with a service account token of the audience `vault`, which the role binds (`audience=vault`): the Kubernetes API does not accept that token, so the Vault Agent that shares it cannot use the service account's rights there. In development `VAULT_TOKEN` replaces the login. The KV mount and the `aisa/` prefix are `AISA_VAULT_KV_MOUNT` and `AISA_VAULT_PREFIX`.
 
 ### Later: Vault-issued JWTs

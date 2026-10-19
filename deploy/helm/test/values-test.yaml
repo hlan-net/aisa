@@ -23,3 +23,6 @@ networkPolicy:
     - podSelector:
         matchLabels:
           app: np-scraper
+admin:
+  enabled: true
+

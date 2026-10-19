@@ -121,6 +121,10 @@ spec:
             - name: AISA_REDIS_ADDR
               value: {{ include "aisa.redisAddr" . | quote }}
             {{- end }}
+            {{- if and (hasKey .Values "admin") .Values.admin.enabled }}
+            - name: AISA_ADMIN_ENABLED
+              value: "true"
+            {{- end }}
             {{- if .Values.kubernetes.enabled }}
             - name: AISA_KUBERNETES
               value: "true"

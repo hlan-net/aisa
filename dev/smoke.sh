@@ -15,6 +15,7 @@ AISA="${AISA:-http://127.0.0.1:8084}"
 COMPOSE=(docker compose -f "$(dirname "$0")/compose.yaml")
 JSON='Content-Type: application/json'
 QWEN='{"model":"qwen3"}'
+HTTP_CODE='%{http_code}'
 
 pass=0
 body_file=$(mktemp)
@@ -39,7 +40,7 @@ chat() {
 
 # Wait until the gateway answers; the healthcheck can pass before the route is loaded.
 for _ in $(seq 1 30); do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY/v1/chat/completions" || true)
+    code=$(curl -s -o /dev/null -w "$HTTP_CODE" -X POST "$GATEWAY/v1/chat/completions" || true)
     [[ "$code" != "000" ]] && [[ "$code" != "404" ]] && break
     sleep 1
 done
@@ -55,16 +56,20 @@ expect "consul: mock-local fails open" "open" \
     "$(curl -fsS "$CONSUL/v1/catalog/service/aisa-backend" | jq -r '.[] | select(.ServiceID == "mock-local") | .ServiceMeta.fail_policy')"
 expect "consul: pricing for cloud-large" "0.015" \
     "$(curl -fsS "$CONSUL/v1/kv/aisa/pricing/cloud-large?raw" | jq -r .output_per_1k)"
+for _ in $(seq 1 30); do
+    [[ "$(curl -fsS "$CONSUL/v1/health/service/aisa-backend?passing" | jq length)" == "2" ]] && break
+    sleep 1
+done
 expect "consul: two healthy aisa-backend instances" "2" \
     "$(curl -fsS "$CONSUL/v1/health/service/aisa-backend?passing" | jq length)"
 expect "redis: ping" "PONG" "$("${COMPOSE[@]}" exec -T redis redis-cli ping | tr -d '\r')"
 
 echo "== aisa: /v1/decide with the consumers declared in Consul and their keys in Vault"
 for _ in $(seq 1 30); do
-    [[ "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")" == 200 ]] && break
+    [[ "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")" == 200 ]] && break
     sleep 1
 done
-expect "aisa: ready (consumers, declarations and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$AISA/readyz")"
+expect "aisa: ready (consumers, declarations and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")"
 # decide <key> <json body> [extra curl args...]: prints "<status> <X-Aisa-Consumer> <X-Aisa-Model>"
 decide() {
     local key=$1 body=$2
@@ -158,6 +163,71 @@ if [[ "$retry_after" =~ ^[0-9]+$ ]] && ((retry_after >= 1 && retry_after <= 3600
 else
     fail "aisa: quota: Retry-After: want 1 to 3600, got '$retry_after'"
 fi
+
+echo "== aisa: admin UI and management API"
+expect "admin: /admin redirects to /admin/" "301" \
+    "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/admin")"
+if curl -fsS "$AISA/admin/" | grep -q "aisa // Administration"; then
+    ok "admin: /admin/ serves the administration dashboard HTML"
+else
+    fail "admin: /admin/ did not contain dashboard title"
+fi
+expect "admin: overview returns ok status" "ok" \
+    "$(curl -fsS "$AISA/admin/api/overview" | jq -r .status)"
+expect "admin: consumers list contains chat-ui" "chat-ui" \
+    "$(curl -fsS "$AISA/admin/api/consumers" | jq -r '.[] | select(.name == "chat-ui") | .name')"
+expect "admin: quotas list contains interactive" "interactive" \
+    "$(curl -fsS "$AISA/admin/api/quotas" | jq -r '.[] | select(.name == "interactive") | .name')"
+expect "admin: backends list contains mock-local" "mock-local" \
+    "$(curl -fsS "$AISA/admin/api/backends" | jq -r '.[] | select(.id == "mock-local") | .id')"
+expect "admin: models list contains qwen3" "qwen3" \
+    "$(curl -fsS "$AISA/admin/api/models" | jq -r '.[] | select(.name == "qwen3") | .name')"
+
+admin_consumer="admin-user-${smoke_run_id}"
+create_resp=$(curl -fsS -X POST -H "$JSON" \
+    -d "{\"name\":\"$admin_consumer\",\"quota_profile\":\"interactive\",\"generate_key\":true}" \
+    "$AISA/admin/api/consumers")
+admin_key=$(jq -r .plaintext_key <<<"$create_resp")
+if [[ "$admin_key" =~ ^aisa-[0-9a-f]{64}$ ]]; then
+    ok "admin: created consumer key format valid"
+else
+    fail "admin: created consumer key invalid: '$admin_key'"
+fi
+
+for _ in $(seq 1 15); do
+    [[ "$(decide "$admin_key" "$QWEN")" == 401* ]] || break
+    sleep 1
+done
+expect "admin: newly created consumer allowed in decide" "200 $admin_consumer qwen3" "$(decide "$admin_key" "$QWEN")"
+
+rotate_resp=$(curl -fsS -X POST -H "$JSON" "$AISA/admin/api/consumers/$admin_consumer/rotate-key")
+rotated_key=$(jq -r .plaintext_key <<<"$rotate_resp")
+if [[ "$rotated_key" =~ ^aisa-[0-9a-f]{64}$ ]]; then
+    ok "admin: rotated consumer key format valid"
+else
+    fail "admin: rotated consumer key invalid: '$rotated_key'"
+fi
+
+for _ in $(seq 1 15); do
+    [[ "$(decide "$rotated_key" "$QWEN")" == 401* ]] || break
+    sleep 1
+done
+expect "admin: rotated key allowed in decide" "200 $admin_consumer qwen3" "$(decide "$rotated_key" "$QWEN")"
+
+admin_quota="admin-quota-${smoke_run_id}"
+curl -fsS -X POST -H "$JSON" \
+    -d "{\"name\":\"$admin_quota\",\"tokens_per_hour\":75000}" \
+    "$AISA/admin/api/quotas" >/dev/null
+expect "admin: created quota profile listed" "$admin_quota" \
+    "$(curl -fsS "$AISA/admin/api/quotas" | jq -r ".[] | select(.name == \"$admin_quota\") | .name")"
+
+curl -fsS -X DELETE "$AISA/admin/api/consumers/$admin_consumer" >/dev/null
+expect "admin: deleted consumer no longer listed" "" \
+    "$(curl -fsS "$AISA/admin/api/consumers" | jq -r ".[] | select(.name == \"$admin_consumer\") | .name")"
+
+curl -fsS -X DELETE "$AISA/admin/api/quotas/$admin_quota" >/dev/null
+expect "admin: deleted quota no longer listed" "" \
+    "$(curl -fsS "$AISA/admin/api/quotas" | jq -r ".[] | select(.name == \"$admin_quota\") | .name")"
 
 echo "== gateway → decide → backend"
 out=$(chat dev-key-chat-ui '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}')

@@ -33,8 +33,16 @@ type Config struct {
 	// configured too.
 	Consul Consul
 	Redis  Redis
+	Admin  Admin
 	// Kubernetes is off outside a cluster.
 	Kubernetes Kubernetes
+}
+
+// Admin configures the admin interface and Web UI at /admin.
+type Admin struct {
+	// Enabled reports whether the admin interface is served at /admin (AISA_ADMIN_ENABLED).
+	// Default false.
+	Enabled bool
 }
 
 // Kubernetes sets what aisa writes to the Kubernetes API: each consumer's Secret with a key it
@@ -174,6 +182,7 @@ func Defaults() Config {
 			EmptyGrace: 5 * time.Minute,
 		},
 		Consul: Consul{Prefix: "aisa"},
+		Admin:  Admin{Enabled: false},
 	}
 }
 
@@ -266,6 +275,14 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if cfg.Consumers.MaxStale < cfg.Consumers.Refresh {
 		return cfg, fmt.Errorf("AISA_CONSUMER_MAX_STALE (%s) must not be shorter than AISA_CONSUMER_REFRESH (%s)",
 			cfg.Consumers.MaxStale, cfg.Consumers.Refresh)
+	}
+
+	if v := getenv("AISA_ADMIN_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return cfg, fmt.Errorf("AISA_ADMIN_ENABLED: want a boolean, got %q: %w", v, err)
+		}
+		cfg.Admin.Enabled = b
 	}
 
 	if err := vaultFromEnv(getenv, &cfg.Vault); err != nil {

@@ -4,16 +4,14 @@ package consumers
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
+	"github.com/hlan-net/aisa/internal/apikey"
 	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/vault"
 )
@@ -143,8 +141,7 @@ func New(src Source, log *slog.Logger, opts Options) *Store {
 // Lookup finds the consumer of a plaintext key. An unknown key triggers a reload, at most once
 // per MissRefresh, so a key created in Vault a moment ago is accepted.
 func (s *Store) Lookup(ctx context.Context, key string) (Consumer, Result) {
-	sum := sha256.Sum256([]byte(key))
-	hash := hex.EncodeToString(sum[:])
+	hash := apikey.Hash(key)
 
 	c, res := s.find(hash)
 	if res == undeclared {
@@ -477,7 +474,7 @@ func (s *Store) readConsumer(ctx context.Context, name string, now time.Time) (e
 	if err != nil {
 		return entry{}, fmt.Errorf("read consumer %s: %w", name, err)
 	}
-	hashes, bad := parseHashes(stringField(data, "key_sha256"))
+	hashes, bad := apikey.ParseHashes(stringField(data, "key_sha256"))
 	if bad > 0 {
 		s.log.Warn("consumer has key_sha256 values that are not SHA-256 hex digests; they are ignored",
 			"consumer", name, "ignored", bad)
@@ -497,21 +494,6 @@ func (s *Store) readConsumer(ctx context.Context, name string, now time.Time) (e
 		hashes:   hashes,
 		readAt:   now,
 	}, nil
-}
-
-// parseHashes splits a key_sha256 value into hashes. It holds one hash, or several separated by
-// commas or white space, line ends of any kind included, while a key is rotated. It returns the
-// valid ones in lower case and how many were not SHA-256 hex digests.
-func parseHashes(v string) (hashes []string, bad int) {
-	for f := range strings.FieldsFuncSeq(v, func(r rune) bool { return r == ',' || unicode.IsSpace(r) }) {
-		f = strings.ToLower(f)
-		if b, err := hex.DecodeString(f); err != nil || len(b) != sha256.Size {
-			bad++
-			continue
-		}
-		hashes = append(hashes, f)
-	}
-	return hashes, bad
 }
 
 func stringField(data map[string]any, key string) string {

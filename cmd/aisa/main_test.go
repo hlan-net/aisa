@@ -109,7 +109,7 @@ func TestRoutesUsageWrongMethod(t *testing.T) {
 	m := metrics.New("test")
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := server.New(log, m.Handler(), time.Second)
-	routes(srv, http.NotFoundHandler(), ledger.New(m, ledger.NewDedup(10, time.Minute), nil, log, ledger.Options{}), http.NotFoundHandler())
+	routes(srv, http.NotFoundHandler(), ledger.New(m, ledger.NewDedup(10, time.Minute), nil, log, ledger.Options{}), http.NotFoundHandler(), nil)
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/usage", nil))
@@ -120,6 +120,40 @@ func TestRoutesUsageWrongMethod(t *testing.T) {
 		if got := testutil.ToFloat64(m.UsageRequestsRejected.WithLabelValues(reason)); got != 0 {
 			t.Errorf("aisa_usage_requests_rejected_total{reason=%q} = %v, want 0", reason, got)
 		}
+	}
+}
+
+func TestRoutesAdmin(t *testing.T) {
+	m := metrics.New("test")
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Without admin handler:
+	srvNoAdmin := server.New(log, m.Handler(), time.Second)
+	routes(srvNoAdmin, http.NotFoundHandler(), http.NotFoundHandler(), http.NotFoundHandler(), nil)
+	rec := httptest.NewRecorder()
+	srvNoAdmin.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("GET /admin without admin handler: %d, want 404", rec.Code)
+	}
+
+	// With admin handler:
+	srvWithAdmin := server.New(log, m.Handler(), time.Second)
+	adminStub := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("admin-ok"))
+	})
+	routes(srvWithAdmin, http.NotFoundHandler(), http.NotFoundHandler(), http.NotFoundHandler(), adminStub)
+
+	rec = httptest.NewRecorder()
+	srvWithAdmin.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "admin-ok" {
+		t.Errorf("GET /admin with admin handler: %d %q, want 200 admin-ok", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	srvWithAdmin.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "admin-ok" {
+		t.Errorf("GET /admin/api/overview with admin handler: %d %q, want 200 admin-ok", rec.Code, rec.Body.String())
 	}
 }
 

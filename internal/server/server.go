@@ -83,7 +83,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	errs := make([]error, len(s.checks))
 	var wg sync.WaitGroup
 	for i, c := range s.checks {
-		wg.Go(func() { errs[i] = probeWithin(ctx, c) })
+		wg.Go(func() { errs[i] = ProbeWithin(ctx, c) })
 	}
 	wg.Wait()
 
@@ -105,8 +105,8 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, map[string]any{"status": answer, "checks": checks})
 }
 
-// probeWithin runs a check and gives up when ctx is done, also when the check ignores it.
-func probeWithin(ctx context.Context, c Check) error {
+// ProbeWithin runs a check and gives up when ctx is done, also when the check ignores it.
+func ProbeWithin(ctx context.Context, c Check) error {
 	done := make(chan error, 1)
 	go func() { done <- c.Probe(ctx) }()
 	select {
