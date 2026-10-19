@@ -83,6 +83,7 @@ Read `docs/concepts/ARCHITECTURE.md` and `docs/concepts/PROXY_CONTRACT.md` befor
 - **No environment-specific values** in this public repo: no real hostnames, IP addresses, tenant IDs or paths to other repositories. Examples use neutral names (`gpu-box.internal`, `chat-ui`, `batch-jobs`).
 - **Secrets:** never in Git. Local test credentials go in `.local/` (git-ignored, chmod 600).
 - **Changelog:** every user-visible change adds an entry under `## [Unreleased]` in `CHANGELOG.md`.
+- **Agent attribution:** every commit and PR generated or assisted by an AI agent must identify the tool in the commit message body and PR description (e.g. `🤖 Generated with Claude Code` or `🤖 Generated with Antigravity`).
 
 ## Workflow
 

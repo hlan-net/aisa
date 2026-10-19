@@ -32,6 +32,7 @@ Pre-push hook: `./scripts/install-git-hooks.sh`; bypass with `SKIP_PRE_PUSH_TEST
 - Public repo: no real hostnames, IP addresses, tenant IDs or paths to other repos. No secrets in Git; local test credentials go in `.local/` (git-ignored).
 - Docs in English. `docs/concepts/` UPPER_SNAKE, `docs/features/` lower-kebab.
 - Feature branch + PR into `main`; every user-visible change adds a `CHANGELOG.md` entry under `[Unreleased]`.
+- Agent attribution: commits and PRs generated or assisted by an AI agent must include an attribution note (e.g. `🤖 Generated with <Agent Name>` or `Co-authored-by: <Agent>`) in the commit message body and PR description.
 
 ## Tests
 
