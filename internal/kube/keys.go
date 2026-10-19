@@ -1,6 +1,7 @@
 package kube
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -26,8 +27,10 @@ import (
 
 // The fields of the consumer's Secret (KUBERNETES_OBJECTS.md, The consumer's Secret).
 const (
-	SecretBaseURL = "OPENAI_BASE_URL"
-	SecretKey     = "OPENAI_API_KEY"
+	SecretBaseURL     = "OPENAI_BASE_URL"
+	SecretKey         = "OPENAI_API_KEY"
+	SecretAisaBaseURL = "AISA_BASE_URL"
+	SecretAisaKey     = "AISA_API_KEY"
 )
 
 // The fields of a consumer's secret in Vault that aisa writes besides key_sha256, which the
@@ -268,6 +271,8 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (st
 	if secret != nil {
 		if key := string(secret.Data[SecretKey]); key != "" {
 			current = apikey.Hash(key)
+		} else if key := string(secret.Data[SecretAisaKey]); key != "" {
+			current = apikey.Hash(key)
 		}
 	}
 	changed := rec.clean(now, current, k.opts.Unwritten, k.opts.Grace)
@@ -441,17 +446,31 @@ func (k *Keys) owns(s *corev1.Secret, name string) bool {
 		s.Labels[LabelConsumer] == DerivedName(name, "consumer") && s.Annotations[AnnotationConsumer] == name
 }
 
-// restore puts back what aisa manages in a Secret it owns, other than the key: the base URL. It
+// restore puts back what aisa manages in a Secret it owns: both the OpenAI-compatible names
+// (OPENAI_BASE_URL, OPENAI_API_KEY) and the namespaced names (AISA_BASE_URL, AISA_API_KEY). It
 // returns the Secret as it is now.
 func (k *Keys) restore(ctx context.Context, s *corev1.Secret, name string) (*corev1.Secret, error) {
-	if string(s.Data[SecretBaseURL]) == k.opts.BaseURL {
+	key := s.Data[SecretKey]
+	if len(key) == 0 {
+		key = s.Data[SecretAisaKey]
+	}
+	if string(s.Data[SecretBaseURL]) == k.opts.BaseURL &&
+		string(s.Data[SecretAisaBaseURL]) == k.opts.BaseURL &&
+		bytes.Equal(s.Data[SecretKey], key) &&
+		bytes.Equal(s.Data[SecretAisaKey], key) {
 		return s, nil
 	}
 	next := s.DeepCopy()
+	if next.Data == nil {
+		next.Data = map[string][]byte{}
+	}
 	next.Data[SecretBaseURL] = []byte(k.opts.BaseURL)
+	next.Data[SecretAisaBaseURL] = []byte(k.opts.BaseURL)
+	next.Data[SecretKey] = key
+	next.Data[SecretAisaKey] = key
 	updated, err := k.k8s.CoreV1().Secrets(s.Namespace).Update(ctx, next, metav1.UpdateOptions{})
 	if err != nil {
-		return s, fmt.Errorf("restore the Secret's %s: %w", SecretBaseURL, err)
+		return s, fmt.Errorf("restore the Secret: %w", err)
 	}
 	k.log.Info("restored the consumer's Secret", "consumer", name, "namespace", s.Namespace, "secret", s.Name)
 	return updated, nil
@@ -470,7 +489,12 @@ func (k *Keys) writeSecret(ctx context.Context, name string, t target, existing 
 		},
 		Annotations: map[string]string{AnnotationConsumer: name},
 	}
-	data := map[string][]byte{SecretBaseURL: []byte(k.opts.BaseURL), SecretKey: []byte(key)}
+	data := map[string][]byte{
+		SecretBaseURL:     []byte(k.opts.BaseURL),
+		SecretKey:         []byte(key),
+		SecretAisaBaseURL: []byte(k.opts.BaseURL),
+		SecretAisaKey:     []byte(key),
+	}
 	secrets := k.k8s.CoreV1().Secrets(t.namespace)
 	if existing == nil {
 		_, err := secrets.Create(ctx, &corev1.Secret{ObjectMeta: meta, Type: corev1.SecretTypeOpaque, Data: data}, metav1.CreateOptions{})

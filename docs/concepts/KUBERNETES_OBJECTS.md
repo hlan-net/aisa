@@ -102,6 +102,8 @@ aisa then:
    stringData:
      OPENAI_BASE_URL: http://<proxy-service>.<namespace>.svc.cluster.local/v1
      OPENAI_API_KEY: <key>
+     AISA_BASE_URL: http://<proxy-service>.<namespace>.svc.cluster.local/v1
+     AISA_API_KEY: <key>
    ```
    An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret, and it is valid from the moment it appears there.
 3. **Clears the mark**: removes the hash from `unwritten_sha256`, sets `issued_at` to the time of the mark and records the consumer's other hashes with that time in `superseded_sha256`, again in one write. Until then nothing of the old key changes: it stays valid without a grace period running, so a Secret write that keeps failing, such as a move to a namespace that does not exist yet, never locks out the Secret still in use, and a rotation whose Secret write failed stays due and is tried again. A pass that finds the key in the Secret with its mark still set finishes this step.
@@ -112,7 +114,7 @@ aisa then:
 
 | State found | Action |
 |---|---|
-| Secret owned by the consumer, its key's hash in `key_sha256` | Clear a leftover mark in `unwritten_sha256` and set `issued_at` to its time (a crash after step 2). Restore `OPENAI_BASE_URL` if it was changed; the key stays. Rotate the key when it is due |
+| Secret owned by the consumer, its key's hash in `key_sha256` | Clear a leftover mark in `unwritten_sha256` and set `issued_at` to its time (a crash after step 2). Restore `OPENAI_BASE_URL` and `AISA_BASE_URL` if changed, and ensure `AISA_API_KEY` matches; the key stays. Rotate the key when it is due |
 | Secret owned by the consumer, its key's hash not in `key_sha256` | The key was not issued by aisa, or was edited by hand. Issue a new key with steps 1 to 3, superseding the hashes already there as in rotation; the unknown key is never accepted. Logged and counted |
 | No Secret | Issue a new key with steps 1 to 3. Hashes already in `key_sha256` are recorded in `superseded_sha256` and kept for the grace period, because a running pod may still hold their key. The consumer's credential changes, so this is logged and counted |
 | A hash in `unwritten_sha256` that the Secret does not hold, older than a minute | Remove it: a crash between steps 1 and 2 left a valid hash whose key nobody has |

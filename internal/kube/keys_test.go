@@ -202,7 +202,8 @@ func TestIssueForANewConsumer(t *testing.T) {
 		t.Fatal("no Secret was written")
 	}
 	key := string(s.Data[SecretKey])
-	if !strings.HasPrefix(key, "aisa-") || string(s.Data[SecretBaseURL]) != baseURL {
+	if !strings.HasPrefix(key, "aisa-") || string(s.Data[SecretBaseURL]) != baseURL ||
+		string(s.Data[SecretAisaBaseURL]) != baseURL || string(s.Data[SecretAisaKey]) != key {
 		t.Errorf("Secret data = %q", s.Data)
 	}
 	if s.Labels[LabelConsumer] != DerivedName("batch-jobs", "consumer") || s.Annotations[AnnotationConsumer] != "batch-jobs" ||
@@ -330,7 +331,12 @@ func (kt *keysTest) ownedSecret(consumer, ns, name, key string) *corev1.Secret {
 			},
 			Annotations: map[string]string{AnnotationConsumer: consumer},
 		},
-		Data: map[string][]byte{SecretKey: []byte(key), SecretBaseURL: []byte(baseURL)},
+		Data: map[string][]byte{
+			SecretKey:         []byte(key),
+			SecretBaseURL:     []byte(baseURL),
+			SecretAisaKey:     []byte(key),
+			SecretAisaBaseURL: []byte(baseURL),
+		},
 	}
 }
 
@@ -387,6 +393,23 @@ func TestTheBaseURLIsRestored(t *testing.T) {
 	s = kt.secret("news", "aisa")
 	if string(s.Data[SecretBaseURL]) != baseURL || string(s.Data[SecretKey]) != key {
 		t.Errorf("Secret data = %q", s.Data)
+	}
+}
+
+func TestNamespacedKeysAreRestored(t *testing.T) {
+	kt := newKeysTest(t, news())
+	kt.pass()
+	key := kt.key("news", "aisa")
+	s := kt.secret("news", "aisa")
+	s.Data[SecretAisaBaseURL] = []byte("http://elsewhere/v1")
+	delete(s.Data, SecretAisaKey)
+	if _, err := kt.k8s.CoreV1().Secrets("news").Update(context.Background(), s, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	kt.pass()
+	s = kt.secret("news", "aisa")
+	if string(s.Data[SecretAisaBaseURL]) != baseURL || string(s.Data[SecretAisaKey]) != key {
+		t.Errorf("Secret namespaced data not restored = %q", s.Data)
 	}
 }
 
