@@ -78,6 +78,9 @@ Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/conc
 | Admin interface | An admin API and a UI on it (`/admin`); credentials with traceable metadata and expiry warnings; login through Vault | US-3 (Web UI and API in v0.2.0; authentication in aisa, key metadata and expiry warnings remain) |
 | Provider adapters | What is specific to a kind of provider, beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains can be used | US-2, US-3 |
 | Rendering without consul-template | A renderer in Go next to the proxy, which also logs in to Vault itself, in place of the template and the Vault Agent. It must follow leases as consul-template does | — |
+| Default model in Secret | Consumer declaration or quota profile carries `default_model`, written to Secret as `OPENAI_MODEL` / `LLM_MODEL` for clean client fallbacks | US-1 |
+| Consumer self-declaration | Namespace-scoped `Consumer` CRD or Deployment annotation (`aisa.hlan.net/consumer`) for GitOps-native registration from app charts | US-1 |
+| Anthropic-native passthrough | `/v1/messages` endpoint preserving prompt caching (`cache_control`) for long system prompts | US-1, US-2 |
 
 ## v0.4.0: Second proxy
 
