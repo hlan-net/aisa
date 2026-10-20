@@ -167,7 +167,10 @@ fi
 echo "== aisa: admin UI and management API"
 expect "admin: /admin redirects to /admin/" "301" \
     "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/admin")"
-if curl -fsS "$AISA/admin/" | grep -q "aisa // Administration"; then
+# The page is read whole before grep: with pipefail, grep -q exiting at the first match can make
+# curl fail on the closed pipe.
+admin_html="$(curl -fsS "$AISA/admin/" || true)"
+if grep -q "aisa // Administration" <<<"$admin_html"; then
     ok "admin: /admin/ serves the administration dashboard HTML"
 else
     fail "admin: /admin/ did not contain dashboard title"
@@ -182,6 +185,8 @@ expect "admin: backends list contains mock-local" "mock-local" \
     "$(curl -fsS "$AISA/admin/api/backends" | jq -r '.[] | select(.id == "mock-local") | .id')"
 expect "admin: models list contains qwen3" "qwen3" \
     "$(curl -fsS "$AISA/admin/api/models" | jq -r '.[] | select(.name == "qwen3") | .name')"
+expect "admin: the image carries the documentation" "Concept: Architecture" \
+    "$(curl -fsS "$AISA/admin/api/docs/concepts/ARCHITECTURE.md" | jq -r .title)"
 
 admin_consumer="admin-user-${smoke_run_id}"
 create_resp=$(curl -fsS -X POST -H "$JSON" \
