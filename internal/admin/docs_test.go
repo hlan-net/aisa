@@ -13,7 +13,7 @@ import (
 
 func TestDocIndexRendersAndRewritesLinks(t *testing.T) {
 	fsys := fstest.MapFS{
-		"concepts/VAULT.md": {Data: []byte("# Vault\n\n## S7 + S10: Footprint\n\n## Exposure\n\n## Exposure\n")},
+		"concepts/VAULT.md": {Data: []byte("# Vault\n\n## S7 + S10: Footprint\n\n## Exposure\n\n## Exposure\n\n## Exposure-1\n\n## Exposure\n")},
 		"features/quotas.md": {Data: []byte(strings.Join([]string{
 			"# Quotas and *budgets*",
 			"",
@@ -43,7 +43,7 @@ func TestDocIndexRendersAndRewritesLinks(t *testing.T) {
 	}
 
 	vault := idx.pages["concepts/VAULT.md"].HTML
-	for _, want := range []string{`id="s7--s10-footprint"`, `id="exposure"`, `id="exposure-1"`} {
+	for _, want := range []string{`id="s7--s10-footprint"`, `id="exposure"`, `id="exposure-1"`, `id="exposure-1-1"`, `id="exposure-2"`} {
 		if !strings.Contains(vault, want) {
 			t.Errorf("VAULT.md HTML lacks %s:\n%s", want, vault)
 		}

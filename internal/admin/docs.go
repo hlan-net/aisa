@@ -179,13 +179,15 @@ func plainText(n ast.Node, src []byte) string {
 }
 
 // gitHubIDs gives headings the anchors GitHub gives them, so links such as
-// ./CONSUL.md#backends-consul-catalog work in the admin UI as they do on GitHub.
+// ./CONSUL.md#backends-consul-catalog work in the admin UI as they do on GitHub. A repeated
+// heading gets -1, -2 and so on, skipping any id already given, so no two headings share one.
 type gitHubIDs struct {
-	seen map[string]int
+	next map[string]int  // the next suffix to try for a base id
+	used map[string]bool // every id given so far
 }
 
 func newGitHubIDs() *gitHubIDs {
-	return &gitHubIDs{seen: map[string]int{}}
+	return &gitHubIDs{next: map[string]int{}, used: map[string]bool{}}
 }
 
 func (g *gitHubIDs) Generate(value []byte, _ ast.NodeKind) []byte {
@@ -198,20 +200,21 @@ func (g *gitHubIDs) Generate(value []byte, _ ast.NodeKind) []byte {
 			b.WriteByte('-')
 		}
 	}
-	id := b.String()
-	if id == "" {
-		id = "section"
+	base := b.String()
+	if base == "" {
+		base = "section"
 	}
-	n := g.seen[id]
-	g.seen[id] = n + 1
-	if n > 0 {
-		id += "-" + strconv.Itoa(n)
+	id := base
+	for n := g.next[base]; g.used[id]; n++ {
+		id = base + "-" + strconv.Itoa(n+1)
+		g.next[base] = n + 1
 	}
+	g.used[id] = true
 	return []byte(id)
 }
 
 func (g *gitHubIDs) Put(value []byte) {
-	g.seen[string(value)]++
+	g.used[string(value)] = true
 }
 
 // listDocs serves the documentation index.
