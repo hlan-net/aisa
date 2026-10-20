@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-20
+
+The admin interface, the alerts as a `PrometheusRule`, aisa's own keys in the consumer's Secret next to `OPENAI_*`, and a guide for the developers of client applications.
+
 ### Added
 - **Namespaced credentials in consumer Secrets** ([#32](https://github.com/hlan-net/aisa/issues/32)): `AISA_BASE_URL` and `AISA_API_KEY` are now published in the consumer's Secret alongside `OPENAI_BASE_URL` and `OPENAI_API_KEY`. This prevents collision and unintended redirection when client applications configure direct OpenAI alongside in-cluster AISA proxy endpoints. aisa's secret reconciliation restores both namespaced and OpenAI keys if altered.
 - **Admin Interface & Management API** (`/admin`, US-3): an embedded, responsive administration Web UI and REST API (`/admin/api/...`) to inspect and manage consumers, quota profiles, backends, and models in Consul and Vault. Built with zero external dependencies (compiled directly into the binary with `embed.FS`), it supports automated cryptographically secure key generation and rotation (`aisa-<hex>`), storing only the SHA-256 hash in Vault KV v2 while revealing the plaintext key once to the holder. Configurable via `AISA_ADMIN_ENABLED` (`false` by default) and supported in the Helm chart (`admin.enabled`, with optional `admin.ingress.enabled` for external authentication proxies). To delete consumers via the admin API, aisa's Vault policy requires the `delete` capability on `secret/metadata/aisa/consumers/*`. Documented in `docs/features/admin-interface.md`.
@@ -85,6 +89,7 @@ The first release: the design, the answered spikes, the dev stack and the start 
 - **Decision API** (unstable `/v1`): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
 - **CI actions**: `actions/setup-go` v6 → v7 and `golangci/golangci-lint-action` v8 → v9 (golangci-lint pinned to v2.14). The other actions were checked against their published tags and are current. Dependabot also watches the dev stack's Dockerfile and Compose images.
 
-[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/hlan-net/aisa/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/hlan-net/aisa/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/hlan-net/aisa/releases/tag/v0.1.0
