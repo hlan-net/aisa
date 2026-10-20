@@ -70,6 +70,7 @@ import (
 	"github.com/hlan-net/aisa/internal/kube"
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/pricing"
 	"github.com/hlan-net/aisa/internal/quotas"
 	"github.com/hlan-net/aisa/internal/render"
 	"github.com/hlan-net/aisa/internal/server"
@@ -150,9 +151,16 @@ func run(args []string) error {
 		})
 	go store.Run(ctx)
 
+	prices := pricing.New(
+		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/pricing/", What: "model prices"},
+		log.With("component", "pricing"),
+		pricing.Options{OnLoad: func(s pricing.LoadStats) { observePrices(m, s) }})
+	go prices.Run(ctx)
+
 	checks := []server.Check{
 		{Name: "consumers", Probe: store.Ready},
 		{Name: "consumer_declarations", Probe: declarations.Ready},
+		{Name: "model_prices", Probe: prices.Ready},
 	}
 	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
 	var (
@@ -189,7 +197,7 @@ func run(args []string) error {
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide")),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
-			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens}),
+			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens, Pricer: prices}),
 		render.New(m, log.With("component", "render")),
 		adminHandler)
 	if err := srv.Run(ctx, cfg.Addr, cfg.MetricsAddr); err != nil {
@@ -340,6 +348,17 @@ func observeProfiles(m *metrics.Metrics, s quotas.LoadStats) {
 	m.QuotaProfileLoads.WithLabelValues(metrics.LoadOK).Inc()
 	m.QuotaProfiles.Set(float64(s.Valid))
 	m.QuotaProfilesInvalid.Set(float64(s.Invalid))
+}
+
+// observePrices puts the result of a load of the model prices into the metrics.
+func observePrices(m *metrics.Metrics, s pricing.LoadStats) {
+	if s.Err != nil {
+		m.ModelPriceLoads.WithLabelValues(metrics.LoadError).Inc()
+		return
+	}
+	m.ModelPriceLoads.WithLabelValues(metrics.LoadOK).Inc()
+	m.ModelPrices.Set(float64(s.Valid))
+	m.ModelPricesInvalid.Set(float64(s.Invalid))
 }
 
 // routes registers the contract endpoints and optional admin interface.

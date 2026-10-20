@@ -16,6 +16,7 @@ import (
 	"github.com/hlan-net/aisa/internal/kube"
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/pricing"
 	"github.com/hlan-net/aisa/internal/server"
 )
 
@@ -96,6 +97,23 @@ func TestObserveLoad(t *testing.T) {
 		"aisa_consumer_loads_total{result=ok}":    {testutil.ToFloat64(m.ConsumerLoads.WithLabelValues(metrics.LoadOK)), 1},
 		"aisa_consumer_loads_total{result=error}": {testutil.ToFloat64(m.ConsumerLoads.WithLabelValues(metrics.LoadError)), 1},
 		"aisa_consumers_loaded_timestamp_seconds": {testutil.ToFloat64(m.ConsumersLoaded), 1_700_000_000},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", name, tc.got, tc.want)
+		}
+	}
+}
+
+func TestObservePrices(t *testing.T) {
+	m := metrics.New("test")
+	observePrices(m, pricing.LoadStats{Valid: 2, Invalid: 1})
+	observePrices(m, pricing.LoadStats{Err: errors.New("consul down"), Valid: 9, Invalid: 9})
+
+	for name, tc := range map[string]struct{ got, want float64 }{
+		"aisa_model_prices":                        {testutil.ToFloat64(m.ModelPrices), 2},
+		"aisa_model_prices_invalid":                {testutil.ToFloat64(m.ModelPricesInvalid), 1},
+		"aisa_model_price_loads_total{result=ok}":  {testutil.ToFloat64(m.ModelPriceLoads.WithLabelValues(metrics.LoadOK)), 1},
+		"aisa_model_price_loads_total{result=err}": {testutil.ToFloat64(m.ModelPriceLoads.WithLabelValues(metrics.LoadError)), 1},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %v, want %v", name, tc.got, tc.want)

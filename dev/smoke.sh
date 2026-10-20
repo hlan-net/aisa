@@ -69,7 +69,7 @@ for _ in $(seq 1 30); do
     [[ "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")" == 200 ]] && break
     sleep 1
 done
-expect "aisa: ready (consumers, declarations and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")"
+expect "aisa: ready (consumers, declarations, prices and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")"
 # decide <key> <json body> [extra curl args...]: prints "<status> <X-Aisa-Consumer> <X-Aisa-Model>"
 decide() {
     local key=$1 body=$2
@@ -136,6 +136,19 @@ missing_before=${missing_before:-0}
 expect "aisa: usage without token counts accepted" "200" \
     "$(send_usage "{\"request_id\":\"${smoke_run_id}-5\",\"consumer\":\"chat-ui\",\"model\":\"qwen3\",\"backend\":\"mock-local\",\"status\":\"200\",\"prompt_tokens\":\"0\",\"completion_tokens\":\"0\",\"stream\":\"true\"}")"
 expect "aisa: missing usage counted" "$((missing_before + 1))" "$(missing_metric)"
+
+cost_metric() {
+    local consumer=$1 model=$2 currency=$3
+    curl -fsS "$AISA/metrics" | awk -v c="$consumer" -v m="$model" -v cur="$currency" '
+        $1 ~ "^aisa_cost_total{" && $1 ~ "consumer=\"" c "\"" && $1 ~ "model=\"" m "\"" && $1 ~ "currency=\"" cur "\"" { printf "%.6f", $2 + 0 }' | head -n1
+}
+cost_before=$(cost_metric chat-ui cloud-large EUR)
+cost_before=${cost_before:-0.000000}
+expect "aisa: usage of a priced model accepted" "200" \
+    "$(send_usage "{\"request_id\":\"${smoke_run_id}-cost\",\"consumer\":\"chat-ui\",\"model\":\"cloud-large\",\"backend\":\"mock-cloud\",\"status\":200,\"prompt_tokens\":1000,\"completion_tokens\":2000}")"
+expect "aisa: cost metric incremented (0.033 EUR)" \
+    "$(awk -v b="$cost_before" 'BEGIN { printf "%.6f", b + 0.033 }')" \
+    "$(cost_metric chat-ui cloud-large EUR)"
 
 echo "== aisa: token quotas"
 # A new consumer for each run, so a window left by an earlier run does not matter: declared in

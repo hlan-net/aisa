@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/pricing"
 	"github.com/hlan-net/aisa/internal/quotas"
 )
 
@@ -28,11 +29,17 @@ type Charger interface {
 	Charge(ctx context.Context, consumer string, tokens int64, at time.Time) error
 }
 
+// Pricer looks up the price of a model; pricing.Prices implements it.
+type Pricer interface {
+	Lookup(model string) (pricing.Price, bool)
+}
+
 // Handler ingests usage events from gateways at POST /v1/usage.
 type Handler struct {
 	metrics   *metrics.Metrics
 	dedup     *Dedup
 	charger   Charger
+	pricer    Pricer
 	estimator *Estimator
 	log       *slog.Logger
 	now       func() time.Time
@@ -44,6 +51,8 @@ type Options struct {
 	// counts when nothing is known yet of its consumer and model (AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS).
 	// Zero charges nothing in that case.
 	EstimateDefaultTokens int64
+	// Pricer looks up model prices for aisa_cost_total. When nil, cost is not computed.
+	Pricer Pricer
 }
 
 // New returns a usage handler. With a nil charger, tokens are not counted towards quotas.
@@ -52,6 +61,7 @@ func New(m *metrics.Metrics, dedup *Dedup, charger Charger, log *slog.Logger, op
 		metrics:   m,
 		dedup:     dedup,
 		charger:   charger,
+		pricer:    opts.Pricer,
 		estimator: NewEstimator(opts.EstimateDefaultTokens),
 		log:       log,
 		now:       time.Now,
@@ -252,6 +262,11 @@ func (h *Handler) recordEvent(ev Event) int64 {
 	}
 	if ev.CompletionTokens > 0 {
 		h.metrics.Tokens.WithLabelValues(consumer, ev.Model, ev.Backend, metrics.DirectionCompletion).Add(float64(ev.CompletionTokens))
+	}
+	if h.pricer != nil && (ev.PromptTokens > 0 || ev.CompletionTokens > 0) {
+		if price, ok := h.pricer.Lookup(ev.Model); ok {
+			h.metrics.Cost.WithLabelValues(consumer, ev.Model, price.Currency).Add(price.Cost(int64(ev.PromptTokens), int64(ev.CompletionTokens)))
+		}
 	}
 
 	if ev.LatencyMS > 0 {

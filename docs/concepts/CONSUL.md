@@ -75,6 +75,7 @@ aisa/quotas/<profile>             {"tokens_per_hour": 200000}
 aisa/state/<consumer>/<YYYY-MM>   persisted monthly tokens (written by aisa)
 ```
 
+- A model price (`aisa/pricing/<model>`) is a JSON object with `input_per_1k` and `output_per_1k` (non-negative numbers) and `currency` (a non-empty string such as `"EUR"`); other fields are ignored. A price entry that is not valid JSON or lacks these fields is logged and counted in `aisa_model_prices_invalid`, and its model has no `aisa_cost_total` series until it is fixed. `/readyz` reports `model_prices` until the first read.
 - A quota profile is a JSON object with `tokens_per_hour`, a non-negative integer; other fields are ignored. A profile without it, or one that is not valid JSON, is logged and counted in `aisa_quota_profiles_invalid`, and its consumers are denied with 503 until it is fixed ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#token-quotas-v020)).
 - Budgets are in tokens; prices only turn tokens into currency for reports ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#budgets-v030)).
 - Local models cost 0 by default. An energy-based price per token can be set from measured power use.
