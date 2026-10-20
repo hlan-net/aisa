@@ -2,7 +2,22 @@
 document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   setupActionDelegation();
+  setupDocLinks();
   void loadOverview();
+  const doc = new URLSearchParams(location.search).get('doc');
+  if (doc) {
+    showTab('docs');
+    void openDoc(doc, location.hash.slice(1), 'none');
+  }
+  window.addEventListener('popstate', () => {
+    const d = new URLSearchParams(location.search).get('doc');
+    if (d) {
+      showTab('docs');
+      void openDoc(d, location.hash.slice(1), 'none');
+    } else if (docsIndex && docsIndex.length > 0 && document.getElementById('tab-docs').classList.contains('active')) {
+      void openDoc(docsIndex[0].path, '', 'replace');
+    }
+  });
 });
 
 function setupActionDelegation() {
@@ -19,22 +34,23 @@ function setupActionDelegation() {
 
 // Navigation tabs
 function setupTabs() {
-  const tabs = document.querySelectorAll('.nav-tab');
-  tabs.forEach(tab => {
+  document.querySelectorAll('.nav-tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      tab.classList.add('active');
-      const target = document.getElementById('tab-' + tab.dataset.tab);
-      if (target) target.classList.add('active');
+      showTab(tab.dataset.tab);
 
       // Refresh data on tab switch
       if (tab.dataset.tab === 'overview') void loadOverview();
       if (tab.dataset.tab === 'consumers') void loadConsumers();
       if (tab.dataset.tab === 'quotas') void loadQuotas();
       if (tab.dataset.tab === 'backends') void loadBackends();
+      if (tab.dataset.tab === 'docs') void loadDocs();
     });
   });
+}
+
+function showTab(name) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + name));
 }
 
 // API helper
@@ -354,6 +370,87 @@ async function loadBackends() {
     tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color:var(--danger)">Failed to load backends: ${escapeHTML(err.message)}</td></tr>`;
     modelsContainer.innerHTML = `<div style="color:var(--danger)">Failed to load models: ${escapeHTML(err.message)}</div>`;
   }
+}
+
+// Documentation
+let docsIndex = null;
+let currentDoc = '';
+let docRequest = 0;
+
+// loadDocsIndex fills the document list once; it does not depend on any document loading.
+async function loadDocsIndex() {
+  if (docsIndex) return docsIndex;
+  const nav = document.getElementById('docs-nav');
+  try {
+    docsIndex = await api('/docs');
+  } catch (err) {
+    nav.innerHTML = `<div style="color:var(--danger)">Failed to load documentation: ${escapeHTML(err.message)}</div>`;
+    return null;
+  }
+  const sections = {};
+  docsIndex.forEach(d => {
+    sections[d.section] = sections[d.section] || [];
+    sections[d.section].push(d);
+  });
+  nav.innerHTML = Object.entries(sections).map(([section, docs]) => `
+    <div class="docs-section">${escapeHTML(section)}</div>
+    ${docs.map(d => `<a href="?doc=${encodeURI(d.path)}" class="docs-link${d.path === currentDoc ? ' active' : ''}" data-doc="${escapeHTML(d.path)}">${escapeHTML(d.title)}</a>`).join('')}
+  `).join('') || '<div style="color:var(--text-muted)">No documentation embedded.</div>';
+  return docsIndex;
+}
+
+// loadDocs runs when the Documentation tab is chosen: without a document in the URL it opens the
+// first one and records it there, so its heading links, a reload and a bookmark stay in the tab.
+async function loadDocs() {
+  const index = await loadDocsIndex();
+  if (!currentDoc && index && index.length > 0) {
+    await openDoc(index[0].path, '', 'replace');
+  }
+}
+
+// openDoc shows the document at path. mode is 'push' for a link the reader followed,
+// 'replace' to record a document opened on the reader's behalf, and anything else to leave the
+// URL as it is (it already names the document).
+async function openDoc(path, fragment, mode) {
+  const content = document.getElementById('doc-content');
+  const request = ++docRequest;
+  void loadDocsIndex();
+  let page;
+  try {
+    page = await api('/docs/' + encodeURI(path));
+  } catch (err) {
+    if (request === docRequest) {
+      content.innerHTML = `<div style="color:var(--danger)">Failed to load ${escapeHTML(path)}: ${escapeHTML(err.message)}</div>`;
+    }
+    return;
+  }
+  // A document asked for later wins over this one, whichever answer arrives first.
+  if (request !== docRequest) return;
+  currentDoc = page.path;
+  // The HTML is rendered by aisa from the Markdown embedded in its binary, with raw HTML omitted.
+  content.innerHTML = page.html;
+  content.querySelectorAll('a[href^="http"]').forEach(a => {
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+  });
+  const url = '?doc=' + encodeURI(page.path) + (fragment ? '#' + fragment : '');
+  if (mode === 'push') history.pushState(null, '', url);
+  else if (mode === 'replace') history.replaceState(null, '', url);
+  document.querySelectorAll('.docs-link').forEach(l => l.classList.toggle('active', l.dataset.doc === currentDoc));
+  const anchor = fragment ? document.getElementById(fragment) : null;
+  if (anchor) anchor.scrollIntoView();
+  else window.scrollTo(0, 0);
+}
+
+// Links between documents (?doc=<path>#<heading>) open in the documentation tab without a reload.
+function setupDocLinks() {
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('#tab-docs a[href^="?doc="]');
+    if (!a || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    const [path, fragment = ''] = a.getAttribute('href').slice('?doc='.length).split('#');
+    void openDoc(decodeURI(path), fragment, 'push');
+  });
 }
 
 // Formatters

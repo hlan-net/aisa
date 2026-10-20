@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hlan-net/aisa/docs"
 	"github.com/hlan-net/aisa/internal/admin/ui"
 	"github.com/hlan-net/aisa/internal/consul"
 	"github.com/hlan-net/aisa/internal/metrics"
@@ -50,6 +51,7 @@ type Handler struct {
 	opts    Options
 	log     *slog.Logger
 	checks  []server.Check
+	docs    *docIndex
 	mux     *http.ServeMux
 }
 
@@ -76,6 +78,12 @@ func New(c ConsulClient, v VaultClient, m *metrics.Metrics, log *slog.Logger, op
 		checks:  checks,
 		mux:     http.NewServeMux(),
 	}
+	idx, err := newDocIndex(docs.FS)
+	if err != nil {
+		log.Error("documentation is not available in the admin interface", "error", err)
+	} else {
+		h.docs = idx
+	}
 	h.routes()
 	return h
 }
@@ -97,6 +105,8 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("DELETE /admin/api/quotas/{name}", protectJSON(h.deleteQuota))
 	h.mux.HandleFunc("GET /admin/api/backends", h.listBackends)
 	h.mux.HandleFunc("GET /admin/api/models", h.listModels)
+	h.mux.HandleFunc("GET /admin/api/docs", h.listDocs)
+	h.mux.HandleFunc("GET /admin/api/docs/{path...}", h.getDoc)
 
 	// Web UI routes (embedded files)
 	fileServer := http.FileServer(http.FS(ui.FS))

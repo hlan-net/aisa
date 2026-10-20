@@ -9,18 +9,19 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 
 ---
 
-## Current state: v0.2.0 released
+## Current state: v0.2.1 released
 
 - Architecture and the three aisa ↔ proxy contracts are written down ([docs/concepts/](docs/concepts/)), with the Kubernetes objects applications see ([docs/concepts/KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md))
 - Quotas, budgets (in tokens) and usage metrics are specified ([docs/features/](docs/features/))
 - The spikes of v0.1.0 are answered ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S2 in part ([#12](https://github.com/hlan-net/aisa/issues/12))
 - Local dev stack with a mock backend and a stub aisa ([dev/](dev/)), and aisa on a laptop's cluster with the machine's Ollama ([deploy/helm/local/](deploy/helm/local/))
 - aisa authenticates consumers, declared in Consul with their keys' hashes in Vault, with `/v1/decide`, ingests usage events at `/v1/usage`, enforces token quotas from Consul with counters in Redis and exports its metrics; it does not enforce budgets yet ([cmd/aisa/](cmd/aisa/))
-- aisa issues each consumer's key into a Secret in its application's namespace and publishes the models on offer as `Model` objects ([internal/kube/](internal/kube/))
+- aisa issues each consumer's key into a Secret in its application's namespace, as `OPENAI_*` and `AISA_*`, and publishes the models on offer as `Model` objects ([internal/kube/](internal/kube/)); application developers have a guide ([docs/features/client-integration.md](docs/features/client-integration.md))
+- The holder can manage consumers, quota profiles, backends and models through aisa's admin interface (`/admin`, off by default; [docs/features/admin-interface.md](docs/features/admin-interface.md))
 - The APISIX proxy renders its routes from Consul and Vault, reports each render to aisa, and lets nothing of a provider's account through to the application ([proxies/apisix/](proxies/apisix/), [#35](https://github.com/hlan-net/aisa/issues/35))
-- aisa's Helm chart installs aisa, Redis and the proxy in one release ([deploy/helm/aisa/](deploy/helm/aisa/)); CI installs it in kind on amd64 and arm64
+- aisa's Helm chart installs aisa, Redis and the proxy in one release, with the alerts as a `PrometheusRule` ([deploy/helm/aisa/](deploy/helm/aisa/)); CI installs it in kind on amd64 and arm64
 - Each `v*` tag publishes a GitHub release, a multi-arch image on GHCR (`ghcr.io/hlan-net/aisa`) and both charts as OCI artifacts (`oci://ghcr.io/hlan-net/charts/aisa`, `oci://ghcr.io/hlan-net/charts/aisa-proxy-apisix`)
-- Open from v0.2.0: the Terraform module (PR 6), the Grafana dashboard (PR 7) and the application developer's guide (PR 10); they land in v0.2.x
+- Open from v0.2.0: the Terraform module (PR 6) and the Grafana dashboard (PR 7); they land in v0.2.x
 
 ---
 
@@ -51,7 +52,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 7 | `feature/dashboard` | Grafana dashboard and alert rules | The alert rules ship with the chart as a `PrometheusRule` ([#72](https://github.com/hlan-net/aisa/pull/72)); the dashboard is open |
 | 8 | `feature/helm-chart` | `deploy/helm/aisa`: aisa with optional Redis, published with the image as an OCI chart on GHCR; `helm lint`, kubeconform and a kind/k3d install test on amd64 and arm64 ([#6](https://github.com/hlan-net/aisa/issues/6)). The chart also installs and removes the proxy, through the proxy's own chart (`proxies/apisix/chart`) | Done ([#45](https://github.com/hlan-net/aisa/pull/45)); the metrics on a port of their own ([#46](https://github.com/hlan-net/aisa/issues/46)) followed ([#51](https://github.com/hlan-net/aisa/pull/51)) |
 | 9 | `feature/account-isolation` | Proxy rules for what passes between an application and a provider: an allowlist of forwarded request headers, no provider response headers or error bodies to the client ([#35](https://github.com/hlan-net/aisa/issues/35), US-2); in `PROXY_CONTRACT.md` and the APISIX template | Done ([#67](https://github.com/hlan-net/aisa/pull/67)) |
-| 10 | `feature/application-guide` | Instructions for the developer of a consuming application, and `/v1/models` through the gateway ([#34](https://github.com/hlan-net/aisa/issues/34), US-1) | `/v1/models` done ([#48](https://github.com/hlan-net/aisa/pull/48)); the instructions are open |
+| 10 | `feature/application-guide` | Instructions for the developer of a consuming application, and `/v1/models` through the gateway ([#34](https://github.com/hlan-net/aisa/issues/34), US-1) | Done ([#48](https://github.com/hlan-net/aisa/pull/48), [#75](https://github.com/hlan-net/aisa/pull/75)) |
 | 11 | `feature/consumers-in-consul` | The non-secret part of a consumer (name, quota profile, the namespace and Secret of its application) moves from Vault to Consul KV `aisa/consumers/<name>`; Vault keeps the key hashes | Done ([#58](https://github.com/hlan-net/aisa/pull/58)) |
 | 12 | `feature/kubernetes-objects` | aisa talks to the Kubernetes API: the `Model` CRD and its objects from Consul, and each consumer's key generated by aisa and written to a Secret in its application's namespace ([docs/concepts/KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md), [#32](https://github.com/hlan-net/aisa/issues/32), US-1) | Done ([#66](https://github.com/hlan-net/aisa/pull/66)) |
 
@@ -75,11 +76,11 @@ Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/conc
 | Item | Scope | Story |
 |------|-------|-------|
 | No way around the proxy | Applications cannot reach a backend directly | US-1 |
-| Admin interface | An admin API and a UI on it (`/admin`); credentials with traceable metadata and expiry warnings; login through Vault | US-3 (Web UI and API in v0.2.0; authentication in aisa, key metadata and expiry warnings remain) |
+| Admin interface | An admin API and a UI on it (`/admin`); credentials with traceable metadata and expiry warnings; login through Vault | US-3 (Web UI and API in v0.2.1, the documentation in it next; authentication in aisa, key metadata and expiry warnings remain) |
 | Provider adapters | What is specific to a kind of provider, beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains can be used | US-2, US-3 |
 | Rendering without consul-template | A renderer in Go next to the proxy, which also logs in to Vault itself, in place of the template and the Vault Agent. It must follow leases as consul-template does | — |
 | Default model in Secret | Consumer declaration or quota profile carries `default_model`, written to Secret as `OPENAI_MODEL` / `LLM_MODEL` for clean client fallbacks | US-1 |
-| Namespaced keys in Secret | Secret publishes `AISA_BASE_URL` / `AISA_API_KEY` / `AISA_MODEL` alongside `OPENAI_*` to prevent collisions with direct provider credentials | US-1 |
+| Namespaced keys in Secret | Secret publishes `AISA_BASE_URL` / `AISA_API_KEY` / `AISA_MODEL` alongside `OPENAI_*` to prevent collisions with direct provider credentials | US-1 (`AISA_BASE_URL` and `AISA_API_KEY` in v0.2.1; `AISA_MODEL` remains) |
 | Enriched Level 1 discovery | Return `capabilities` (e.g. tools, vision) and `context_length` in `GET /v1/models` so pods with `automountServiceAccountToken: false` need no CRD access | US-1 |
 | Pre-emptive quota headers | Return `X-Aisa-Quota-Remaining` and `X-Aisa-Quota-Reset` on inference responses; add consumer quota inspection endpoint | US-1 |
 | Key deprecation warning | Return `X-Aisa-Key-Deprecated: <expiry>` during the rotation grace window, and publish `AISA_KEY_ROTATED_AT` in Secret | US-1 |
