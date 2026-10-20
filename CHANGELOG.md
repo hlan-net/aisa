@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **Documentation in the admin interface** (US-3): a Documentation tab at `/admin` shows the Markdown under `docs/`, embedded in the binary and rendered to HTML by aisa (GFM, raw HTML omitted, GitHub's heading anchors), so the docs of the running version can be read in the browser without access to GitHub. Links between documents stay in the view and can be bookmarked (`/admin/?doc=<path>#<heading>`); links to other files of the repository open on GitHub. API: `GET /admin/api/docs` and `GET /admin/api/docs/{path}`. The image build now copies `docs/`; the Markdown renderer is [goldmark](https://github.com/yuin/goldmark).
+
 ## [0.2.1] - 2026-10-20
 
 The admin interface, the alerts as a `PrometheusRule`, aisa's own keys in the consumer's Secret next to `OPENAI_*`, and a guide for the developers of client applications.

@@ -55,6 +55,11 @@ Displays real-time system readiness checks (Vault connectivity, Consul declarati
 - **Backends**: Discovers instances of `aisa-backend` registered in the Consul service catalog, listing their IP/port, priority, fail policy, check status, and supported models.
 - **Models**: Summarizes available models mapped across discovered backends and indicates overall model health (healthy if at least one backend providing the model passes checks).
 
+### 5. Documentation
+- Shows aisa's documentation, the Markdown under `docs/` of the release the binary was built from, rendered to HTML. The files are embedded in the binary (`docs/docs.go`), so the view works airgapped and always matches the running version.
+- aisa renders each document once at start-up (GFM: tables, strikethrough, task lists, autolinks); raw HTML in the Markdown is omitted, not rendered. Headings get the same anchors as on GitHub.
+- A link to another document opens it in the view (`/admin/?doc=concepts/VAULT.md#consumer-credentials`, which can also be bookmarked); a link to any other file of the repository, such as `ROADMAP.md`, opens it on GitHub.
+
 ---
 
 ## REST API Reference
@@ -116,6 +121,12 @@ Returns system status, readiness probe states, and entity counts.
   Lists instances of `aisa-backend` discovered from the Consul service catalog.
 - `GET /admin/api/models`
   Lists unique models aggregate across healthy backends.
+
+### Documentation
+- `GET /admin/api/docs`
+  Lists the embedded documents: `[{"path": "concepts/ARCHITECTURE.md", "section": "concepts", "title": "Concept: Architecture"}, ...]`.
+- `GET /admin/api/docs/{path}`
+  Returns one document rendered to HTML: `{"path": ..., "section": ..., "title": ..., "html": "<h1 id=...>..."}`; 404 for a path that is not an embedded document.
 
 ---
 

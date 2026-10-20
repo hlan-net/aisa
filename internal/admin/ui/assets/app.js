@@ -2,7 +2,22 @@
 document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   setupActionDelegation();
+  setupDocLinks();
   void loadOverview();
+  const doc = new URLSearchParams(location.search).get('doc');
+  if (doc) {
+    showTab('docs');
+    void openDoc(doc, location.hash.slice(1), false);
+  }
+  window.addEventListener('popstate', () => {
+    const d = new URLSearchParams(location.search).get('doc');
+    if (d) {
+      showTab('docs');
+      void openDoc(d, location.hash.slice(1), false);
+    } else if (docsIndex && docsIndex.length > 0 && document.getElementById('tab-docs').classList.contains('active')) {
+      void openDoc(docsIndex[0].path, '', false);
+    }
+  });
 });
 
 function setupActionDelegation() {
@@ -19,22 +34,23 @@ function setupActionDelegation() {
 
 // Navigation tabs
 function setupTabs() {
-  const tabs = document.querySelectorAll('.nav-tab');
-  tabs.forEach(tab => {
+  document.querySelectorAll('.nav-tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      tab.classList.add('active');
-      const target = document.getElementById('tab-' + tab.dataset.tab);
-      if (target) target.classList.add('active');
+      showTab(tab.dataset.tab);
 
       // Refresh data on tab switch
       if (tab.dataset.tab === 'overview') void loadOverview();
       if (tab.dataset.tab === 'consumers') void loadConsumers();
       if (tab.dataset.tab === 'quotas') void loadQuotas();
       if (tab.dataset.tab === 'backends') void loadBackends();
+      if (tab.dataset.tab === 'docs') void loadDocs();
     });
   });
+}
+
+function showTab(name) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + name));
 }
 
 // API helper
@@ -354,6 +370,67 @@ async function loadBackends() {
     tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color:var(--danger)">Failed to load backends: ${escapeHTML(err.message)}</td></tr>`;
     modelsContainer.innerHTML = `<div style="color:var(--danger)">Failed to load models: ${escapeHTML(err.message)}</div>`;
   }
+}
+
+// Documentation
+let docsIndex = null;
+let currentDoc = '';
+
+async function loadDocs() {
+  const nav = document.getElementById('docs-nav');
+  try {
+    if (!docsIndex) {
+      docsIndex = await api('/docs');
+    }
+    const sections = {};
+    docsIndex.forEach(d => {
+      (sections[d.section] = sections[d.section] || []).push(d);
+    });
+    nav.innerHTML = Object.entries(sections).map(([section, docs]) => `
+      <div class="docs-section">${escapeHTML(section)}</div>
+      ${docs.map(d => `<a href="?doc=${encodeURI(d.path)}" class="docs-link${d.path === currentDoc ? ' active' : ''}" data-doc="${escapeHTML(d.path)}">${escapeHTML(d.title)}</a>`).join('')}
+    `).join('') || '<div style="color:var(--text-muted)">No documentation embedded.</div>';
+    if (!currentDoc && docsIndex.length > 0) {
+      await openDoc(docsIndex[0].path, '', false);
+    }
+  } catch (err) {
+    nav.innerHTML = `<div style="color:var(--danger)">Failed to load documentation: ${escapeHTML(err.message)}</div>`;
+  }
+}
+
+async function openDoc(path, fragment, push) {
+  const content = document.getElementById('doc-content');
+  try {
+    const page = await api('/docs/' + encodeURI(path));
+    currentDoc = page.path;
+    // The HTML is rendered by aisa from the Markdown embedded in its binary, with raw HTML omitted.
+    content.innerHTML = page.html;
+    content.querySelectorAll('a[href^="http"]').forEach(a => {
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    });
+    if (push) {
+      history.pushState(null, '', '?doc=' + encodeURI(page.path) + (fragment ? '#' + fragment : ''));
+    }
+    document.querySelectorAll('.docs-link').forEach(l => l.classList.toggle('active', l.dataset.doc === currentDoc));
+    if (!docsIndex) void loadDocs();
+    const anchor = fragment ? document.getElementById(fragment) : null;
+    if (anchor) anchor.scrollIntoView();
+    else window.scrollTo(0, 0);
+  } catch (err) {
+    content.innerHTML = `<div style="color:var(--danger)">Failed to load ${escapeHTML(path)}: ${escapeHTML(err.message)}</div>`;
+  }
+}
+
+// Links between documents (?doc=<path>#<heading>) open in the documentation tab without a reload.
+function setupDocLinks() {
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('#tab-docs a[href^="?doc="]');
+    if (!a || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    e.preventDefault();
+    const [path, fragment = ''] = a.getAttribute('href').slice('?doc='.length).split('#');
+    void openDoc(decodeURI(path), fragment, true);
+  });
 }
 
 // Formatters
