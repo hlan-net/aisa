@@ -29,6 +29,9 @@ const repoURL = "https://github.com/hlan-net/aisa"
 // headingIDPrefix keeps the ids of a document's headings apart from the ids of the dashboard.
 const headingIDPrefix = "doc-"
 
+// docsHash starts the dashboard's link to a document: #docs/<path>[#<heading>].
+const docsHash = "#docs/"
+
 // rootDocs are the documents at the top of the repository, in the order the UI lists them.
 var rootDocs = []string{"README.md", "ROADMAP.md", "CHANGELOG.md"}
 
@@ -205,7 +208,7 @@ func (t *linkRewriter) rewrite(current, dest string) (string, bool) {
 		return dest, false
 	}
 	if strings.HasPrefix(dest, "#") {
-		return "#docs/" + current + dest, false
+		return docsHash + current + dest, false
 	}
 	if strings.Contains(dest, "://") || strings.HasPrefix(dest, "mailto:") || strings.HasPrefix(dest, "/") {
 		return dest, true
@@ -214,9 +217,9 @@ func (t *linkRewriter) rewrite(current, dest string) (string, bool) {
 	resolved := path.Clean(path.Join(path.Dir(current), target))
 	if t.known[resolved] {
 		if frag != "" {
-			return "#docs/" + resolved + "#" + frag, false
+			return docsHash + resolved + "#" + frag, false
 		}
-		return "#docs/" + resolved, false
+		return docsHash + resolved, false
 	}
 	if strings.HasPrefix(resolved, "../") || resolved == ".." {
 		return dest, true
