@@ -5,11 +5,13 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/hlan-net/aisa/docs"
 	"github.com/hlan-net/aisa/internal/admin/ui"
 	"github.com/hlan-net/aisa/internal/consul"
 	"github.com/hlan-net/aisa/internal/metrics"
@@ -40,6 +42,7 @@ type Options struct {
 	ConsulPrefix string // Prefix in Consul KV, defaults to "aisa"
 	VaultMount   string // KV v2 mount in Vault, defaults to "secret"
 	VaultPrefix  string // Prefix in Vault KV v2 mount, defaults to "aisa"
+	Docs         fs.FS  // Markdown documentation shown under Docs, defaults to the embedded docs/
 }
 
 // Handler serves both the admin JSON API and the embedded web dashboard.
@@ -50,6 +53,7 @@ type Handler struct {
 	opts    Options
 	log     *slog.Logger
 	checks  []server.Check
+	docs    fs.FS
 	mux     *http.ServeMux
 }
 
@@ -66,6 +70,9 @@ func New(c ConsulClient, v VaultClient, m *metrics.Metrics, log *slog.Logger, op
 		opts.VaultPrefix = "aisa"
 	}
 	opts.VaultPrefix = strings.Trim(opts.VaultPrefix, "/")
+	if opts.Docs == nil {
+		opts.Docs = docs.FS
+	}
 
 	h := &Handler{
 		consul:  c,
@@ -74,6 +81,7 @@ func New(c ConsulClient, v VaultClient, m *metrics.Metrics, log *slog.Logger, op
 		opts:    opts,
 		log:     log,
 		checks:  checks,
+		docs:    opts.Docs,
 		mux:     http.NewServeMux(),
 	}
 	h.routes()
@@ -97,6 +105,8 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("DELETE /admin/api/quotas/{name}", protectJSON(h.deleteQuota))
 	h.mux.HandleFunc("GET /admin/api/backends", h.listBackends)
 	h.mux.HandleFunc("GET /admin/api/models", h.listModels)
+	h.mux.HandleFunc("GET /admin/api/docs", h.listDocs)
+	h.mux.HandleFunc("GET /admin/api/docs/{path...}", h.getDoc)
 
 	// Web UI routes (embedded files)
 	fileServer := http.FileServer(http.FS(ui.FS))

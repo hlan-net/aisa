@@ -17,7 +17,7 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 - Local dev stack with a mock backend and a stub aisa ([dev/](dev/)), and aisa on a laptop's cluster with the machine's Ollama ([deploy/helm/local/](deploy/helm/local/))
 - aisa authenticates consumers, declared in Consul with their keys' hashes in Vault, with `/v1/decide`, ingests usage events at `/v1/usage`, enforces token quotas from Consul with counters in Redis and exports its metrics; it does not enforce budgets yet ([cmd/aisa/](cmd/aisa/))
 - aisa issues each consumer's key into a Secret in its application's namespace, as `OPENAI_*` and `AISA_*`, and publishes the models on offer as `Model` objects ([internal/kube/](internal/kube/)); application developers have a guide ([docs/features/client-integration.md](docs/features/client-integration.md))
-- The holder can manage consumers, quota profiles, backends and models through aisa's admin interface (`/admin`, off by default; [docs/features/admin-interface.md](docs/features/admin-interface.md))
+- The holder can manage consumers, quota profiles, backends and models through aisa's admin interface (`/admin`, off by default; [docs/features/admin-interface.md](docs/features/admin-interface.md)), and read aisa's documentation there, embedded in the binary
 - The APISIX proxy renders its routes from Consul and Vault, reports each render to aisa, and lets nothing of a provider's account through to the application ([proxies/apisix/](proxies/apisix/), [#35](https://github.com/hlan-net/aisa/issues/35))
 - aisa's Helm chart installs aisa, Redis and the proxy in one release, with the alerts as a `PrometheusRule` ([deploy/helm/aisa/](deploy/helm/aisa/)); CI installs it in kind on amd64 and arm64
 - Each `v*` tag publishes a GitHub release, a multi-arch image on GHCR (`ghcr.io/hlan-net/aisa`) and both charts as OCI artifacts (`oci://ghcr.io/hlan-net/charts/aisa`, `oci://ghcr.io/hlan-net/charts/aisa-proxy-apisix`)
@@ -76,7 +76,7 @@ Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/conc
 | Item | Scope | Story |
 |------|-------|-------|
 | No way around the proxy | Applications cannot reach a backend directly | US-1 |
-| Admin interface | An admin API and a UI on it (`/admin`); credentials with traceable metadata and expiry warnings; login through Vault | US-3 (Web UI and API in v0.2.1; authentication in aisa, key metadata and expiry warnings remain) |
+| Admin interface | An admin API and a UI on it (`/admin`); credentials with traceable metadata and expiry warnings; login through Vault | US-3 (Web UI and API in v0.2.1, the documentation in it in v0.2.x; authentication in aisa, key metadata and expiry warnings remain) |
 | Provider adapters | What is specific to a kind of provider, beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains can be used | US-2, US-3 |
 | Rendering without consul-template | A renderer in Go next to the proxy, which also logs in to Vault itself, in place of the template and the Vault Agent. It must follow leases as consul-template does | — |
 | Default model in Secret | Consumer declaration or quota profile carries `default_model`, written to Secret as `OPENAI_MODEL` / `LLM_MODEL` for clean client fallbacks | US-1 |

@@ -19,22 +19,28 @@ function setupActionDelegation() {
 
 // Navigation tabs
 function setupTabs() {
-  const tabs = document.querySelectorAll('.nav-tab');
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      tab.classList.add('active');
-      const target = document.getElementById('tab-' + tab.dataset.tab);
-      if (target) target.classList.add('active');
-
-      // Refresh data on tab switch
-      if (tab.dataset.tab === 'overview') void loadOverview();
-      if (tab.dataset.tab === 'consumers') void loadConsumers();
-      if (tab.dataset.tab === 'quotas') void loadQuotas();
-      if (tab.dataset.tab === 'backends') void loadBackends();
-    });
+  document.querySelectorAll('.nav-tab').forEach(tab => {
+    tab.addEventListener('click', () => activateTab(tab.dataset.tab));
   });
+  // A link to a document (#docs/<path>) opens the Docs tab at that document.
+  if (location.hash.startsWith('#docs/')) activateTab('docs');
+  window.addEventListener('hashchange', () => {
+    if (location.hash.startsWith('#docs/')) activateTab('docs');
+  });
+}
+
+function activateTab(name) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  const target = document.getElementById('tab-' + name);
+  if (target) target.classList.add('active');
+
+  // Refresh data on tab switch
+  if (name === 'overview') void loadOverview();
+  if (name === 'consumers') void loadConsumers();
+  if (name === 'quotas') void loadQuotas();
+  if (name === 'backends') void loadBackends();
+  if (name === 'docs') void loadDocs();
 }
 
 // API helper
@@ -353,6 +359,104 @@ async function loadBackends() {
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color:var(--danger)">Failed to load backends: ${escapeHTML(err.message)}</td></tr>`;
     modelsContainer.innerHTML = `<div style="color:var(--danger)">Failed to load models: ${escapeHTML(err.message)}</div>`;
+  }
+}
+
+// Docs: aisa's Markdown documentation, embedded in the binary and rendered by the admin API.
+const DOCS_REPO_URL = 'https://github.com/hlan-net/aisa/blob/main';
+const DOCS_DEFAULT = 'concepts/ARCHITECTURE.md';
+let docsList = null;
+let docsCurrent = null;
+
+async function loadDocs() {
+  const nav = document.getElementById('docs-nav');
+  if (!docsList) {
+    try {
+      docsList = await api('/docs');
+    } catch (err) {
+      nav.innerHTML = `<div style="color:var(--danger)">Failed to load documents: ${escapeHTML(err.message)}</div>`;
+      return;
+    }
+    const sections = {};
+    docsList.forEach(d => (sections[d.section] ||= []).push(d));
+    nav.innerHTML = Object.entries(sections).map(([section, docs]) => `
+      <div class="docs-section">${escapeHTML(section || 'docs')}</div>
+      ${docs.map(d => `<a href="#docs/${escapeHTML(d.path)}" class="docs-link" data-doc="${escapeHTML(d.path)}">${escapeHTML(d.title)}</a>`).join('')}
+    `).join('');
+    nav.addEventListener('click', (e) => {
+      const link = e.target.closest('a[data-doc]');
+      if (!link) return;
+      e.preventDefault();
+      void openDoc(link.dataset.doc);
+    });
+    document.getElementById('docs-content').addEventListener('click', onDocContentClick);
+  }
+  const [path, anchor] = location.hash.startsWith('#docs/') ? location.hash.slice(6).split('#') : [];
+  if (path && docsList.some(d => d.path === path)) {
+    await openDoc(path, anchor);
+  } else if (!docsCurrent && docsList.length) {
+    await openDoc(docsList.some(d => d.path === DOCS_DEFAULT) ? DOCS_DEFAULT : docsList[0].path);
+  }
+}
+
+async function openDoc(path, anchor) {
+  const content = document.getElementById('docs-content');
+  let page;
+  try {
+    page = await api('/docs/' + path.split('/').map(encodeURIComponent).join('/'));
+  } catch (err) {
+    content.innerHTML = `<div style="color:var(--danger)">Failed to load ${escapeHTML(path)}: ${escapeHTML(err.message)}</div>`;
+    return;
+  }
+  docsCurrent = path;
+  // The server renders the Markdown without its raw HTML, so the page carries no scripts.
+  content.innerHTML = page.html;
+  rewriteDocLinks(content, path);
+  document.querySelectorAll('.docs-link').forEach(l => l.classList.toggle('active', l.dataset.doc === path));
+  history.replaceState(null, '', '#docs/' + path + (anchor ? '#' + anchor : ''));
+  const target = anchor && document.getElementById(anchor);
+  if (target) target.scrollIntoView();
+  else window.scrollTo(0, 0);
+}
+
+// rewriteDocLinks points links between documents at the Docs tab, and links to other files of
+// the repository at GitHub; anchors within the page stay as they are.
+function rewriteDocLinks(content, path) {
+  const base = 'https://repo.invalid/docs/' + path;
+  content.querySelectorAll('a[href]').forEach(a => {
+    const href = a.getAttribute('href');
+    if (href.startsWith('#')) return;
+    const url = new URL(href, base);
+    if (url.origin !== 'https://repo.invalid') {
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      return;
+    }
+    const docPath = url.pathname.startsWith('/docs/') ? url.pathname.slice(6) : null;
+    if (docPath && docsList.some(d => d.path === docPath)) {
+      a.dataset.doc = docPath;
+      a.dataset.anchor = url.hash.slice(1);
+      a.setAttribute('href', '#docs/' + docPath + url.hash);
+    } else {
+      a.href = DOCS_REPO_URL + url.pathname + url.hash;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    }
+  });
+}
+
+function onDocContentClick(e) {
+  const link = e.target.closest('a[href]');
+  if (!link) return;
+  if (link.dataset.doc) {
+    e.preventDefault();
+    void openDoc(link.dataset.doc, link.dataset.anchor);
+  } else if (link.getAttribute('href').startsWith('#')) {
+    e.preventDefault();
+    const anchor = decodeURIComponent(link.getAttribute('href').slice(1));
+    const target = document.getElementById(anchor);
+    if (target) target.scrollIntoView();
+    history.replaceState(null, '', '#docs/' + docsCurrent + '#' + anchor);
   }
 }
 
