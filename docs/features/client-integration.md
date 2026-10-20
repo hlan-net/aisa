@@ -1,6 +1,6 @@
 # Client Application Integration Guide
 
-This guide describes how to integrate client applications (such as JFYI, Moirai, or any custom service) with `aisa` in Kubernetes, while preserving the application's ability to run standalone and connect directly to AI providers.
+This guide describes how to integrate client applications (a chat UI, a batch service, a CLI tool or any other service) with `aisa` in Kubernetes, while preserving the application's ability to run standalone and connect directly to AI providers.
 
 ---
 
@@ -40,17 +40,17 @@ To ensure forward compatibility, client applications should treat the Secret con
 
 Applications integrating with AISA typically follow one of two patterns:
 
-#### Pattern A: Implicit Fallback Hierarchy (e.g. JFYI)
+#### Pattern A: Implicit Fallback Hierarchy (e.g. a batch service, `batch-jobs`)
 
 When the application has a single global inference engine, use a strict configuration precedence:
 
 ```text
-1. Explicit Direct Provider Keys (e.g. JFYI_ANTHROPIC_API_KEY, direct vendor credentials)
+1. Explicit Direct Provider Keys (e.g. `ANTHROPIC_API_KEY`, direct vendor credentials)
 2. In-cluster AISA Environment (OPENAI_BASE_URL + OPENAI_API_KEY from Secret)
 3. Local Default Fallback (e.g. http://localhost:11434/v1 for local Ollama)
 ```
 
-#### Pattern B: Multi-Provider / Explicit Provider Selection (e.g. Moirai)
+#### Pattern B: Multi-Provider / Explicit Provider Selection (e.g. a chat UI, `chat-ui`)
 
 When the application lets users or tenants select between different providers (e.g. `ollama`, `openai`, `gemini`, `aisa`):
 
@@ -104,7 +104,7 @@ If your application also supports direct OpenAI credentials, using `envFrom` can
 1. Kubernetes `env` variables **always override** `envFrom` variables of the same name (even if the `env` variable is empty `""`).
 2. Standard OpenAI SDKs automatically pick up `OPENAI_BASE_URL` from `envFrom`, which might accidentally redirect direct OpenAI calls to the AISA proxy with the wrong key.
 
-To prevent collisions, map the Secret keys explicitly to `AISA_*` variables using `secretKeyRef` (as demonstrated in Moirai):
+To prevent collisions, map the Secret keys explicitly to `AISA_*` variables using `secretKeyRef`:
 
 ```yaml
 containers:
@@ -335,7 +335,7 @@ status:
 
 > [!WARNING]
 > **ServiceAccount Token Requirement:**
-> Reading the `Model` CRD requires access to the Kubernetes API. If your pod sets `automountServiceAccountToken: false` (common in security-hardened workloads such as JFYI), the pod cannot communicate with the Kubernetes API server and **cannot use Level 2**. Use **Level 1 HTTP Discovery (`GET /v1/models`)** instead, which works purely through the proxy endpoint.
+> Reading the `Model` CRD requires access to the Kubernetes API. If your pod sets `automountServiceAccountToken: false` (common in security-hardened workloads such as batch services), the pod cannot communicate with the Kubernetes API server and **cannot use Level 2**. Use **Level 1 HTTP Discovery (`GET /v1/models`)** instead, which works purely through the proxy endpoint.
 
 ---
 
@@ -439,7 +439,7 @@ To test applications running locally (or in Docker Compose) against in-cluster A
 
 ## 8. Implementation Checklist for Agents
 
-When updating a client repository (e.g. JFYI or Moirai):
+When updating a client repository (e.g. `chat-ui` or `batch-jobs`):
 
 - [ ] **Preserve Direct Keys**: Verify direct provider settings (direct API keys, custom endpoints) remain operational and are not hijacked by AISA variables.
 - [ ] **Select Integration Pattern**:
