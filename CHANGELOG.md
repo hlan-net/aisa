@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **Documentation in the admin interface** (US-3, [`admin-interface.md`](docs/features/admin-interface.md#5-documentation)): a Documentation tab shows `README.md`, `ROADMAP.md`, `CHANGELOG.md` and the documents under `docs/` as HTML, with a link of its own for each document and heading (`/admin/#docs/<path>`). The documents are embedded into the binary at build time and rendered by aisa with goldmark, without their raw HTML; links between them stay in the admin interface, and links to other files of the repository open on GitHub at the running version's tag. New endpoints `GET /admin/api/docs` and `GET /admin/api/docs/{path}`.
+
 ## [0.2.1] - 2026-10-20
 
 The admin interface, the alerts as a `PrometheusRule`, aisa's own keys in the consumer's Secret next to `OPENAI_*`, and a guide for the developers of client applications.

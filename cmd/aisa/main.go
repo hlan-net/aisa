@@ -62,6 +62,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
+	"github.com/hlan-net/aisa"
 	"github.com/hlan-net/aisa/internal/admin"
 	"github.com/hlan-net/aisa/internal/config"
 	"github.com/hlan-net/aisa/internal/consul"
@@ -172,7 +173,7 @@ func run(args []string) error {
 	var adminHandler http.Handler
 	if cfg.Admin.Enabled {
 		adminHandler = admin.New(cc, vc, m, log.With("component", "admin"),
-			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix},
+			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix, Docs: aisa.Docs},
 			checks...)
 	}
 

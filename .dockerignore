@@ -5,3 +5,8 @@ bin
 dist
 docs
 *.md
+# The documents the admin interface shows (docs.go).
+!docs/**/*.md
+!README.md
+!ROADMAP.md
+!CHANGELOG.md

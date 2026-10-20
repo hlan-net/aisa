@@ -2,6 +2,8 @@
 document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   setupActionDelegation();
+  window.addEventListener('hashchange', routeHash);
+  routeHash();
   void loadOverview();
 });
 
@@ -19,22 +21,89 @@ function setupActionDelegation() {
 
 // Navigation tabs
 function setupTabs() {
-  const tabs = document.querySelectorAll('.nav-tab');
-  tabs.forEach(tab => {
+  document.querySelectorAll('.nav-tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      tab.classList.add('active');
-      const target = document.getElementById('tab-' + tab.dataset.tab);
-      if (target) target.classList.add('active');
+      const name = tab.dataset.tab;
+      if (name === 'docs') {
+        // The document view follows the URL's hash, so a document has a link of its own.
+        const hash = '#docs/' + (currentDoc || 'README.md');
+        if (location.hash === hash) routeHash();
+        else location.hash = hash;
+        return;
+      }
+      if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+      showTab(name);
 
       // Refresh data on tab switch
-      if (tab.dataset.tab === 'overview') void loadOverview();
-      if (tab.dataset.tab === 'consumers') void loadConsumers();
-      if (tab.dataset.tab === 'quotas') void loadQuotas();
-      if (tab.dataset.tab === 'backends') void loadBackends();
+      if (name === 'overview') void loadOverview();
+      if (name === 'consumers') void loadConsumers();
+      if (name === 'quotas') void loadQuotas();
+      if (name === 'backends') void loadBackends();
     });
   });
+}
+
+function showTab(name) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + name));
+}
+
+// Documentation: #docs/<path>[#<heading>] shows a document of the repository, rendered by aisa.
+let docsIndex = null;
+let currentDoc = null;
+
+function routeHash() {
+  if (!location.hash.startsWith('#docs/')) return false;
+  const rest = decodeURIComponent(location.hash.slice('#docs/'.length));
+  const i = rest.indexOf('#');
+  const path = i < 0 ? rest : rest.slice(0, i);
+  const heading = i < 0 ? '' : rest.slice(i + 1);
+  showTab('docs');
+  void openDoc(path || 'README.md', heading);
+  return true;
+}
+
+async function loadDocsIndex() {
+  if (docsIndex) return docsIndex;
+  const nav = document.getElementById('admin-docs-nav');
+  try {
+    const data = await api('/docs');
+    docsIndex = data.docs || [];
+  } catch (err) {
+    nav.innerHTML = `<div style="color:var(--danger)">Failed to load documents: ${escapeHTML(err.message)}</div>`;
+    throw err;
+  }
+  const sections = new Map();
+  docsIndex.forEach(d => {
+    const key = d.section || '';
+    if (!sections.has(key)) sections.set(key, []);
+    sections.get(key).push(d);
+  });
+  nav.innerHTML = [...sections].map(([section, docs]) => `
+    ${section ? `<div class="docs-section">${escapeHTML(section)}</div>` : ''}
+    ${docs.map(d => `<a class="docs-link" href="#docs/${escapeHTML(d.path)}" data-path="${escapeHTML(d.path)}">${escapeHTML(d.title)}</a>`).join('')}
+  `).join('') || '<div style="color:var(--text-muted)">No documents in this build.</div>';
+  return docsIndex;
+}
+
+async function openDoc(path, heading) {
+  const article = document.getElementById('admin-docs-article');
+  try {
+    await loadDocsIndex();
+    if (path !== currentDoc) {
+      article.innerHTML = '<div style="color:var(--text-muted)">Loading...</div>';
+      const doc = await api('/docs/' + path.split('/').map(encodeURIComponent).join('/'));
+      // The HTML is rendered by aisa from the documents built into it, without their raw HTML.
+      article.innerHTML = doc.html;
+      currentDoc = path;
+      document.querySelectorAll('.docs-link').forEach(a => a.classList.toggle('active', a.dataset.path === path));
+    }
+    const target = heading ? document.getElementById('doc-' + heading) : null;
+    if (target) target.scrollIntoView();
+    else window.scrollTo(0, 0);
+  } catch (err) {
+    article.innerHTML = `<div style="color:var(--danger)">Failed to load ${escapeHTML(path)}: ${escapeHTML(err.message)}</div>`;
+  }
 }
 
 // API helper

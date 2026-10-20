@@ -13,6 +13,9 @@ ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+# The documents the admin interface shows, embedded by docs.go.
+COPY docs.go README.md ROADMAP.md CHANGELOG.md ./
+COPY docs/ docs/
 COPY cmd/ cmd/
 COPY internal/ internal/
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \

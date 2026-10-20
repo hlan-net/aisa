@@ -19,6 +19,7 @@ When enabled (via `AISA_ADMIN_ENABLED=true`, disabled by default), aisa serves t
 Browser / Client ──▶ GET /admin ────────▶ 301 Redirect to /admin/
 Browser / Client ──▶ GET /admin/ ───────▶ Embedded HTML Dashboard (Single-Page App)
 Browser / Client ──▶ GET /admin/assets/*▶ Embedded CSS and Vanilla JavaScript
+Browser / Client ──▶ GET /admin/#docs/… ▶ aisa's documentation, rendered from the build
 API Client       ──▶ /admin/api/* ──────▶ REST Administration JSON API
 ```
 
@@ -54,6 +55,11 @@ Displays real-time system readiness checks (Vault connectivity, Consul declarati
 ### 4. Backends & Models Catalog
 - **Backends**: Discovers instances of `aisa-backend` registered in the Consul service catalog, listing their IP/port, priority, fail policy, check status, and supported models.
 - **Models**: Summarizes available models mapped across discovered backends and indicates overall model health (healthy if at least one backend providing the model passes checks).
+
+### 5. Documentation
+The **Documentation** tab shows aisa's own Markdown documents as HTML: `README.md`, `ROADMAP.md`, `CHANGELOG.md` and everything under `docs/`. They are embedded into the binary when it is built (`docs.go`), so the tab shows the documents of the version that runs and works without a network connection. aisa renders them on the server with [goldmark](https://github.com/yuin/goldmark) (GitHub Flavored Markdown) and leaves out raw HTML in them.
+
+Every document has a link of its own, `/admin/#docs/<path>`, and `/admin/#docs/<path>#<heading>` opens it at a heading. Links between documents stay in the tab, headings keep their GitHub anchors, and links to other files of the repository open them on GitHub at the tag of the running version (`main` for a development build).
 
 ---
 
@@ -116,6 +122,12 @@ Returns system status, readiness probe states, and entity counts.
   Lists instances of `aisa-backend` discovered from the Consul service catalog.
 - `GET /admin/api/models`
   Lists unique models aggregate across healthy backends.
+
+### Documentation
+- `GET /admin/api/docs`
+  Lists the embedded documents: `{"docs": [{"path": "docs/concepts/VAULT.md", "title": "Concept: Vault integration", "section": "concepts"}, …]}`. `section` is empty for the documents at the top of the repository.
+- `GET /admin/api/docs/{path}`
+  Returns one document rendered as HTML: `{"path": …, "title": …, "html": …}`. A path that is not in the list answers 404.
 
 ---
 

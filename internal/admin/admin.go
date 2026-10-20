@@ -5,6 +5,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -40,6 +41,7 @@ type Options struct {
 	ConsulPrefix string // Prefix in Consul KV, defaults to "aisa"
 	VaultMount   string // KV v2 mount in Vault, defaults to "secret"
 	VaultPrefix  string // Prefix in Vault KV v2 mount, defaults to "aisa"
+	Docs         fs.FS  // The repository's Markdown documents (README.md, docs/…), nil for none
 }
 
 // Handler serves both the admin JSON API and the embedded web dashboard.
@@ -50,6 +52,7 @@ type Handler struct {
 	opts    Options
 	log     *slog.Logger
 	checks  []server.Check
+	docs    *docs
 	mux     *http.ServeMux
 }
 
@@ -76,6 +79,12 @@ func New(c ConsulClient, v VaultClient, m *metrics.Metrics, log *slog.Logger, op
 		checks:  checks,
 		mux:     http.NewServeMux(),
 	}
+	d, err := newDocs(opts.Docs)
+	if err != nil {
+		log.Warn("the admin interface shows no documents", "err", err)
+		d, _ = newDocs(nil)
+	}
+	h.docs = d
 	h.routes()
 	return h
 }
@@ -97,6 +106,8 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("DELETE /admin/api/quotas/{name}", protectJSON(h.deleteQuota))
 	h.mux.HandleFunc("GET /admin/api/backends", h.listBackends)
 	h.mux.HandleFunc("GET /admin/api/models", h.listModels)
+	h.mux.HandleFunc("GET /admin/api/docs", h.listDocs)
+	h.mux.HandleFunc("GET /admin/api/docs/{path...}", h.getDoc)
 
 	// Web UI routes (embedded files)
 	fileServer := http.FileServer(http.FS(ui.FS))
