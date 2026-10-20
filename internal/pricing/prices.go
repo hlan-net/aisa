@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -130,25 +129,7 @@ func (p *Prices) Run(ctx context.Context) {
 
 // apply replaces the prices with those read.
 func (p *Prices) apply(pairs []consul.Pair) {
-	valid := map[string]Price{}
-	invalid := map[string]error{}
-	for _, kv := range pairs {
-		// The prefix itself, or a folder under it.
-		if kv.Key == "" || strings.HasSuffix(kv.Key, "/") {
-			continue
-		}
-		pr, err := parsePrice(kv.Value)
-		if err != nil {
-			invalid[kv.Key] = err
-			continue
-		}
-		valid[kv.Key] = pr
-	}
-	names := make([]string, 0, len(invalid))
-	for name := range invalid {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	valid, invalid, names := consul.ParseEntries(pairs, parsePrice)
 	for _, name := range names {
 		p.log.Error("invalid model price", "model", name, "error", invalid[name])
 	}

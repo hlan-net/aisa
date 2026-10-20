@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -141,25 +140,7 @@ func (p *Profiles) Run(ctx context.Context) {
 
 // apply replaces the profiles with those read.
 func (p *Profiles) apply(pairs []consul.Pair) {
-	valid := map[string]Profile{}
-	invalid := map[string]error{}
-	for _, kv := range pairs {
-		// The prefix itself, or a folder under it.
-		if kv.Key == "" || strings.HasSuffix(kv.Key, "/") {
-			continue
-		}
-		pr, err := parseProfile(kv.Value)
-		if err != nil {
-			invalid[kv.Key] = err
-			continue
-		}
-		valid[kv.Key] = pr
-	}
-	names := make([]string, 0, len(invalid))
-	for name := range invalid {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	valid, invalid, names := consul.ParseEntries(pairs, parseProfile)
 	for _, name := range names {
 		// Consumers with this profile are denied with 503 until it is fixed.
 		p.log.Error("invalid quota profile", "profile", name, "error", invalid[name])

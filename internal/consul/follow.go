@@ -3,6 +3,7 @@ package consul
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -102,4 +103,29 @@ func nextIndex(prev, next uint64) uint64 {
 		return 0
 	}
 	return max(next, 1)
+}
+
+// ParseEntries parses the values of the entries in pairs, skipping the prefix itself and the
+// folders under it. It returns the entries that could be read, those that could not with their
+// errors, and the names of the latter in order, for logging.
+func ParseEntries[T any](pairs []Pair, parse func([]byte) (T, error)) (valid map[string]T, invalid map[string]error, invalidNames []string) {
+	valid = map[string]T{}
+	invalid = map[string]error{}
+	for _, kv := range pairs {
+		if kv.Key == "" || strings.HasSuffix(kv.Key, "/") {
+			continue
+		}
+		v, err := parse(kv.Value)
+		if err != nil {
+			invalid[kv.Key] = err
+			continue
+		}
+		valid[kv.Key] = v
+	}
+	invalidNames = make([]string, 0, len(invalid))
+	for name := range invalid {
+		invalidNames = append(invalidNames, name)
+	}
+	sort.Strings(invalidNames)
+	return valid, invalid, invalidNames
 }

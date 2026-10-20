@@ -141,3 +141,28 @@ func TestKVPrefixList(t *testing.T) {
 		t.Errorf("err = %v, want one that names the consumer declarations", err)
 	}
 }
+
+func TestParseEntries(t *testing.T) {
+	parse := func(v []byte) (string, error) {
+		if len(v) == 0 {
+			return "", errors.New("empty")
+		}
+		return string(v), nil
+	}
+	valid, invalid, names := ParseEntries([]Pair{
+		{Key: "", Value: []byte("prefix")},
+		{Key: "folder/", Value: nil},
+		{Key: "b"},
+		{Key: "ok", Value: []byte("v")},
+		{Key: "a"},
+	}, parse)
+	if len(valid) != 1 || valid["ok"] != "v" {
+		t.Errorf("valid = %v, want only ok=v", valid)
+	}
+	if len(invalid) != 2 || invalid["a"] == nil || invalid["b"] == nil {
+		t.Errorf("invalid = %v, want a and b", invalid)
+	}
+	if strings.Join(names, ",") != "a,b" {
+		t.Errorf("names = %v, want [a b]", names)
+	}
+}
