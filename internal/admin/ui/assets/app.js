@@ -384,7 +384,8 @@ async function loadDocs() {
     }
     const sections = {};
     docsIndex.forEach(d => {
-      (sections[d.section] = sections[d.section] || []).push(d);
+      sections[d.section] = sections[d.section] || [];
+      sections[d.section].push(d);
     });
     nav.innerHTML = Object.entries(sections).map(([section, docs]) => `
       <div class="docs-section">${escapeHTML(section)}</div>
