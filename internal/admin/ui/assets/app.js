@@ -378,7 +378,10 @@ async function loadDocs() {
       return;
     }
     const sections = {};
-    docsList.forEach(d => (sections[d.section] ||= []).push(d));
+    docsList.forEach(d => {
+      if (!sections[d.section]) sections[d.section] = [];
+      sections[d.section].push(d);
+    });
     nav.innerHTML = Object.entries(sections).map(([section, docs]) => `
       <div class="docs-section">${escapeHTML(section || 'docs')}</div>
       ${docs.map(d => `<a href="#docs/${escapeHTML(d.path)}" class="docs-link" data-doc="${escapeHTML(d.path)}">${escapeHTML(d.title)}</a>`).join('')}
