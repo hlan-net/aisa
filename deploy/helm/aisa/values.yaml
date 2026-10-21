@@ -60,7 +60,9 @@ consul:
 quotas:
   enabled: true
   # The quota profile of a consumer whose declaration names none, such as "batch". Empty: such a
-  # consumer is denied with 403 no_quota, so no consumer is served without a limit (#33).
+  # consumer is denied with 403 no_quota, so no consumer is served without a limit (#33). The
+  # profile must be under aisa/quotas/ in Consul: aisa is not ready until it has read it, and
+  # aisa_quota_profiles_missing{source="default"} shows it absent later (#82).
   defaultProfile: ""
 
 # Admin interface and embedded web UI (/admin). Off by default.

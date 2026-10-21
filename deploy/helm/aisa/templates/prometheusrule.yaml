@@ -73,6 +73,17 @@ spec:
             description: >-
               The consumers of a broken profile under aisa/quotas/ in Consul KV are answered 503.
               aisa's log names the profile.
+        - alert: AisaQuotaProfileMissing
+          expr: aisa_quota_profiles_missing > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $value }}` }} quota profile(s) named by the {{ `{{ $labels.source }}` }} are not in Consul"
+            description: >-
+              A profile that quotas.defaultProfile (source default) or a consumer's declaration
+              (source consumer) names is not under aisa/quotas/ in Consul KV, so its consumers are
+              answered 503. aisa's log names it at every load of the profiles, and at every request.
         - alert: AisaQuotaCountersFailing
           expr: sum by (op) (rate(aisa_quota_errors_total[5m])) > 0
           for: 5m
