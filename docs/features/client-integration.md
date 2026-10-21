@@ -20,9 +20,10 @@ This guide describes how to integrate client applications (a chat UI, a batch se
 The proxy serves the OpenAI-compatible API, and these paths of it:
 
 - `POST /v1/chat/completions`, streamed or not, through aisa's decision
+- `POST /v1/embeddings`, through aisa's decision; its prompt tokens count towards the consumer's quota. Use a model whose `Model` object has the feature `TextEmbedding`: every model is routed on both paths, and a chat model asked for embeddings answers with its backend's error
 - `GET /v1/models`, the models on offer, without a credential
 
-Provider-native APIs, such as Anthropic's `/v1/messages`, are not offered: use an OpenAI-compatible client, or the OpenAI-compatible endpoint of the provider's SDK. `/v1/embeddings` and `/v1/completions` are not offered yet ([#34](https://github.com/hlan-net/aisa/issues/34)).
+Provider-native APIs, such as Anthropic's `/v1/messages`, are not offered: use an OpenAI-compatible client, or the OpenAI-compatible endpoint of the provider's SDK. The legacy `/v1/completions` is not offered either ([#34](https://github.com/hlan-net/aisa/issues/34)).
 
 ---
 

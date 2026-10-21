@@ -199,6 +199,23 @@ one "denied by a quota" dev-key-blocked qwen3 429 ""
 one "unknown key" wrong-key qwen3 401 ""
 models "the model list, a dollar in a name included" "cloud-large down-model llama3.2 qwen3 $DOLLAR_MODEL"
 
+echo "== embeddings"
+# POST /v1/embeddings takes the same path as a chat: the decision, then the model's route, which
+# calls the backend's /v1/embeddings (#34). An embedding has prompt tokens only.
+curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
+code=$(curl -sS -o "$OUT/body" -w "$STATUS" -H "$CHAT_UI" -H "$JSON" \
+    -d '{"model":"qwen3","input":["hello there","general kenobi"]}' "$PROXY/v1/embeddings")
+expect "embeddings: status" "200" "$code"
+expect "embeddings: one vector per input" "2 list" "$(jq -r '"\(.data | length) \(.object)"' "$OUT/body")"
+sleep 2
+got=$(events)
+expect "embeddings: one usage event" "1" "$(grep -c . <<<"$got" || true)"
+expect "embeddings: event status and consumer" "200 chat-ui" "$(jq -r "$OUTCOME" <<<"$got")"
+expect "embeddings: the event has the prompt tokens" "4" "$(jq -r '.prompt_tokens' <<<"$got")"
+curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
+expect "embeddings, unknown key: refused" "401" "$(curl -sS -o /dev/null -w "$STATUS" \
+    -H 'Authorization: Bearer wrong-key' -H "$JSON" -d '{"model":"qwen3","input":"hello"}' "$PROXY/v1/embeddings")"
+
 echo "== account isolation"
 isolated "a completion" "hello there" 200 none
 isolated "the provider refuses the key" "mock:error:401" 502 provider_error

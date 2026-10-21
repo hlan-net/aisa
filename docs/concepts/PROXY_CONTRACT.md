@@ -221,7 +221,7 @@ A proxy is complete when it provides:
 2. a usage log sink with an explicit format that maps to the event schema, including streaming token counts, and carries no credentials
 3. a consul-template template for the gateway config, with an explicit upstream timeout, the [check](#checking-the-rendered-config) before the gateway loads it, and the [report](#reporting-a-render) of each render
 4. an example deployment and an integration test against a mock backend
-5. the client-facing paths of the OpenAI-compatible API: `POST /v1/chat/completions` through the decision, and `GET /v1/models` from the rendered models
+5. the client-facing paths of the OpenAI-compatible API: `POST /v1/chat/completions` and `POST /v1/embeddings` through the decision, each sent to the backend on the same path, and `GET /v1/models` from the rendered models. An embedding's usage event has prompt tokens and no completion tokens. Provider-native APIs (such as `/v1/messages`) and `/v1/completions` are not part of the contract
 6. [account isolation](#account-isolation): an allowlist of the request headers a provider gets and of the response headers a client gets, and a provider's error bodies replaced by the gateway's, covered by the integration test
 
 ## Versioning
