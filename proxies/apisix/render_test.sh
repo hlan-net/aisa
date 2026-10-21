@@ -120,6 +120,8 @@ expect_in_route() {
     echo "ok: $what"
 }
 expect_in_route "the default timeout of 300 s" '"model-qwen3"' '^        timeout: 300000$'
+expect_in_route "a fast failure is retried on another instance (S11)" '"model-qwen3"' '^        fallback_strategy: \[http_5xx\]$'
+expect_in_route "a slow failure is not retried (S11)" '"model-qwen3"' '^        retry_on_failure_within_ms: 5000$'
 expect_in_route "a chat route calls the backend's chat path" '"model-qwen3"' 'endpoint: "http://mock-local:8080/v1/chat/completions"'
 expect_in_route "an embeddings route matches the embeddings path" '"embed-model-qwen3"' '^    uri: /v1/embeddings$'
 expect_in_route "an embeddings route calls the backend's embeddings path" '"embed-model-qwen3"' 'endpoint: "http://mock-local:8080/v1/embeddings"'

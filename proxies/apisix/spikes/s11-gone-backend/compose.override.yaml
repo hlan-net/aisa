@@ -1,0 +1,10 @@
+# Spike S11: APISIX reads this spike's routes, and the stub aisa, which the spike does not use,
+# takes no host port, so that the spike runs on a machine where 8081 is taken.
+#   docker compose -f dev/compose.yaml -f proxies/apisix/spikes/s11-gone-backend/compose.override.yaml ...
+services:
+  apisix:
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ../proxies/apisix/spikes/s11-gone-backend/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+  stub-aisa:
+    ports: !override []
