@@ -210,3 +210,23 @@ func TestCeiling(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// Two keyed backends on one address with different ports: the address names neither, the
+// ID and the address:port still do.
+func TestCatalogSharedAddress(t *testing.T) {
+	c := NewCatalog(&fakeHealth{instances: []consul.Instance{
+		{ID: "a", Address: "10.0.0.9", Port: 8001, Meta: map[string]string{"models": "m1", "key": "openai"}},
+		{ID: "b", Address: "10.0.0.9", Port: 8002, Meta: map[string]string{"models": "m2", "key": "anthropic"}},
+		{ID: "c", Address: "10.0.0.10", Port: 8001, Meta: map[string]string{"models": "m1", "key": "openai"}},
+		{ID: "d", Address: "10.0.0.10", Port: 8002, Meta: map[string]string{"models": "m1", "key": "openai"}},
+	}}, discard, CatalogOptions{})
+	c.Refresh(context.Background())
+	if key, ok := c.KeyOf("10.0.0.9"); ok {
+		t.Errorf("KeyOf(shared address) = %q, want none", key)
+	}
+	for name, want := range map[string]string{"a": "openai", "b": "anthropic", "10.0.0.9:8001": "openai", "10.0.0.9:8002": "anthropic", "10.0.0.10": "openai"} {
+		if key, ok := c.KeyOf(name); !ok || key != want {
+			t.Errorf("KeyOf(%s) = %q, %v, want %q", name, key, ok, want)
+		}
+	}
+}

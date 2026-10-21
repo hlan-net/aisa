@@ -89,15 +89,22 @@ func (c *Catalog) Refresh(ctx context.Context) bool {
 func (c *Catalog) apply(instances []consul.Instance) {
 	byModel := map[string][]string{}
 	byBackend := map[string]string{}
+	// A name that two backends with different keys share, such as an address with several
+	// ports, names neither: a charge by it would go to whichever came last.
+	ambiguous := map[string]bool{}
 	for _, in := range instances {
 		key := strings.TrimSpace(in.Meta["key"])
 		if key == "" {
 			continue
 		}
 		for _, name := range []string{in.ID, in.Address, net.JoinHostPort(in.Address, strconv.Itoa(in.Port))} {
-			if name != "" {
-				byBackend[name] = key
+			if name == "" {
+				continue
 			}
+			if other, ok := byBackend[name]; ok && other != key {
+				ambiguous[name] = true
+			}
+			byBackend[name] = key
 		}
 		for model := range strings.SplitSeq(in.Meta["models"], ",") {
 			model = strings.TrimSpace(model)
@@ -109,6 +116,9 @@ func (c *Catalog) apply(instances []consul.Instance) {
 	}
 	for _, keys := range byModel {
 		sort.Strings(keys)
+	}
+	for name := range ambiguous {
+		delete(byBackend, name)
 	}
 	c.mu.Lock()
 	c.loaded, c.byModel, c.byBackend = true, byModel, byBackend

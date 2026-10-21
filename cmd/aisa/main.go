@@ -306,7 +306,7 @@ func newCeiling(cfg config.Config, cc *consul.Client, rdb *redis.Client, m *metr
 	monthly = budgets.NewMonthly(set, budgets.NewMonths(rdb, "aisa:provider-"), cc, budgets.Always{}, m, log,
 		budgets.MonthlyOptions{
 			Location: loc, StatePrefix: cfg.Consul.Prefix + "/state/providers/",
-			Limit: m.ProviderBudgetLimit, Spent: m.ProviderBudgetSpent,
+			Limit: m.ProviderBudgetLimit, Spent: m.ProviderBudgetSpent, Label: "provider",
 		})
 	catalog := budgets.NewCatalog(cc, log, budgets.CatalogOptions{Service: "aisa-backend"})
 	return budgets.NewCeiling(catalog, monthly, log), set, monthly, catalog

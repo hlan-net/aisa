@@ -185,7 +185,7 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 			log.Info("downgrade", "consumer", consumer.Name, "model", model, "to", v.DowngradeTo)
 			model, result = v.DowngradeTo, metrics.ResultDowngrade
 		}
-		if v.Outcome != budgets.NoBudget {
+		if v.Outcome != budgets.NoBudget && v.Err == nil {
 			remaining = strconv.FormatInt(v.Remaining, 10)
 		}
 	}
@@ -194,16 +194,20 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 	// to the provider budget's model, and the consumer's remaining tokens stay as said: the
 	// holder's total is not the client's business.
 	if h.provider != nil {
-		v := h.provider.Check(r.Context(), model)
-		switch v.Outcome {
-		case budgets.Unavailable:
-			log.Error("cannot check the provider budget", "model", model, "provider", v.Provider, "error", v.Err)
-			return h.deny(w, log, consumer.Name, denial{
-				status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
-				typ: "server_error", code: "budget_unavailable", msg: "aisa cannot check the monthly budget at the moment",
-			})
-		case budgets.Exhausted:
-			if v.OnExhausted != budgets.Downgrade || v.DowngradeTo == "" || v.DowngradeTo == model {
+		// Twice at most: the downgrade's model is checked too, and is not downgraded again.
+		for downgraded := false; ; downgraded = true {
+			v := h.provider.Check(r.Context(), model)
+			if v.Outcome == budgets.Unavailable {
+				log.Error("cannot check the provider budget", "model", model, "provider", v.Provider, "error", v.Err)
+				return h.deny(w, log, consumer.Name, denial{
+					status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
+					typ: "server_error", code: "budget_unavailable", msg: "aisa cannot check the monthly budget at the moment",
+				})
+			}
+			if v.Outcome != budgets.Exhausted {
+				break
+			}
+			if downgraded || v.OnExhausted != budgets.Downgrade || v.DowngradeTo == "" || v.DowngradeTo == model {
 				return h.deny(w, log, consumer.Name, denial{
 					status: http.StatusTooManyRequests, result: metrics.ResultDenyProviderBudget,
 					typ: "insufficient_quota", code: "provider_budget_exhausted",

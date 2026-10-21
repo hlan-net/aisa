@@ -377,3 +377,73 @@ func TestRun(t *testing.T) {
 		t.Errorf("persisted by Run = %d, want 7", got)
 	}
 }
+
+// A broken budget denies its consumer on priced models only; on a free model the request is
+// allowed, with the error and without the budget's numbers.
+func TestBrokenBudgetOnFreeModel(t *testing.T) {
+	ctx := context.Background()
+	mo, _, _ := newMonthly(t, &fakeKV{})
+	if v := mo.Check(ctx, "broken", "cloud-large"); v.Outcome != Unavailable || !v.Applies || v.Err == nil {
+		t.Errorf("priced: %+v", v)
+	}
+	if v := mo.Check(ctx, "broken", "qwen3"); v.Outcome != Allow || v.Applies || v.Err == nil || v.Limit != 0 {
+		t.Errorf("free: %+v", v)
+	}
+	// Before the budgets are read, the same.
+	unread := NewMonthly(NewBudgets(nil, discard, Options{}), mo.counter, &fakeKV{}, paidModels{"cloud-large": true}, metrics.New("test"), discard, MonthlyOptions{})
+	if v := unread.Check(ctx, "chat-ui", "cloud-large"); v.Outcome != Unavailable {
+		t.Errorf("unread, priced: %+v", v)
+	}
+	if v := unread.Check(ctx, "chat-ui", "qwen3"); v.Outcome != Allow || v.Err == nil {
+		t.Errorf("unread, free: %+v", v)
+	}
+}
+
+// After the counter has failed, the persisted total is used without asking for a second: a
+// Redis that is down costs one timeout a second, not one per request.
+func TestCounterBackoff(t *testing.T) {
+	ctx := context.Background()
+	mo, mr, m := newMonthly(t, &fakeKV{})
+	now := mo.opts.Now()
+	clock := now
+	mo.opts.Now = func() time.Time { return clock }
+	if err := mo.Charge(ctx, "chat-ui", 10, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	mo.persist(ctx)
+	mr.Close()
+	for i := 0; i < 5; i++ {
+		if v := mo.Check(ctx, "chat-ui", "cloud-large"); v.Used != 10 {
+			t.Errorf("check %d with Redis down: %+v", i, v)
+		}
+	}
+	if n := testutil.ToFloat64(m.BudgetErrors.WithLabelValues(metrics.BudgetOpCheck)); n != 1 {
+		t.Errorf("aisa_budget_errors_total{check} after 5 checks = %v, want 1", n)
+	}
+	clock = now.Add(2 * time.Second)
+	mo.Check(ctx, "chat-ui", "cloud-large")
+	if n := testutil.ToFloat64(m.BudgetErrors.WithLabelValues(metrics.BudgetOpCheck)); n != 2 {
+		t.Errorf("aisa_budget_errors_total{check} after the backoff = %v, want 2", n)
+	}
+}
+
+// The gauges of a budget that is removed go with it.
+func TestObserveRemovesGoneBudgets(t *testing.T) {
+	ctx := context.Background()
+	mo, _, m := newMonthly(t, &fakeKV{})
+	mo.observe(ctx)
+	if n := testutil.CollectAndCount(m.BudgetLimit); n != 2 {
+		t.Fatalf("aisa_budget_limit series = %d, want 2", n)
+	}
+	mo.budgets.apply([]consul.Pair{{Key: "chat-ui", Value: []byte(`{"monthly_tokens": 1000}`)}})
+	mo.observe(ctx)
+	if n := testutil.CollectAndCount(m.BudgetLimit); n != 1 {
+		t.Errorf("aisa_budget_limit series after batch-jobs is gone = %d, want 1", n)
+	}
+	if n := testutil.CollectAndCount(m.BudgetSpent); n != 1 {
+		t.Errorf("aisa_budget_spent series after batch-jobs is gone = %d, want 1", n)
+	}
+	if n := testutil.ToFloat64(m.BudgetLimit.WithLabelValues("chat-ui", "2026-10")); n != 1000 {
+		t.Errorf("chat-ui's limit = %v", n)
+	}
+}
