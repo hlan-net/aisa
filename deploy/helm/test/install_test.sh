@@ -289,6 +289,50 @@ fi
 ok "the Secret of a removed consumer is deleted"
 expect "the key of a removed consumer" 401 "$(chat "$key" qwen3)"
 
+echo "== a backend registered in the catalog"
+# A backend outside the cluster is registered through the catalog, on a node without a Consul
+# agent, as CONSUL.md's Terraform example does (#69). Nothing runs its check, so its status is
+# what the registration wrote, and the catalog's default is critical.
+port_forward consul 18500 8500
+catalog() {
+    local path=$1 body=$2
+    curl -fsS -o /dev/null -X PUT -H "X-Consul-Token: test-root" -d "$body" "http://127.0.0.1:18500/v1/catalog/$path"
+}
+static_backend() {
+    local status=$1
+    jq -cn --arg addr "mock-local.$NS.svc.cluster.local" --arg status "$status" '{
+        Node: "static-box", Address: $addr, NodeMeta: {"external-node": "true"},
+        Service: {ID: "mock-static", Service: "aisa-backend", Address: $addr, Port: 8080,
+                  Meta: {provider: "openai-compatible", models: "static-model"}},
+        Check: ({CheckID: "service:mock-static", Name: "mock-static", ServiceID: "mock-static"}
+                + if $status == "" then {} else {Status: $status} end)}'
+}
+listed() {
+    curl -fsS http://127.0.0.1:19080/v1/models | jq -r '[.data[].id] | index("static-model") != null'
+}
+check_output() {
+    curl -fsS -H "X-Consul-Token: test-root" "http://127.0.0.1:18500/v1/health/checks/aisa-backend" |
+        jq -r '[.[] | select(.CheckID == "service:mock-static")][0] | [.Status, .Output] | @tsv'
+}
+catalog register "$(static_backend "")"
+# Give the proxy the time it takes to render a change, and more, before saying it did not.
+sleep 10
+expect "a catalog registration without a status is critical, with no output" $'critical\t' "$(check_output)"
+expect "a critical backend's model is not on offer" false "$(listed)"
+catalog register "$(static_backend passing)"
+for _ in $(seq 1 60); do
+    [[ "$(listed)" = true ]] && break
+    sleep 1
+done
+expect "a catalog registration with status passing is passing, with no output" $'passing\t' "$(check_output)"
+expect "a passing backend's model is on offer" true "$(listed)"
+catalog deregister '{"Node": "static-box"}'
+for _ in $(seq 1 60); do
+    [[ "$(listed)" = false ]] && break
+    sleep 1
+done
+expect "a deregistered backend's model is no longer on offer" false "$(listed)"
+
 echo "== admin interface"
 port_forward "$RELEASE" 18080 8080
 overview=$(curl -fsS http://127.0.0.1:18080/admin/api/overview)

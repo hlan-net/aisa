@@ -32,6 +32,7 @@ resource "consul_service" "ollama_1" {
     http     = "http://gpu-box.internal:11434/api/version"
     interval = "30s"
     timeout  = "5s"
+    status   = "passing"  # the catalog's default is critical, and nothing may ever change it: see below
   }
 }
 ```
@@ -43,7 +44,8 @@ resource "consul_service" "ollama_1" {
 - The meta `fail_policy` says whether the backend may serve requests while aisa is unreachable: `open` backends serve them without a decision, `closed` backends (the default) do not. A request is answered with 503 only when its model has no `open` backend. It belongs to the backend and not to the consumer, because without aisa the gateway cannot tell who the consumer is. An `open` backend serves any credential in that time, including an unknown one, and its usage is charged to no quota or budget, so set it only where unmetered use costs nothing that matters, typically local models ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#proxy-rules-for-the-decision)).
 - The meta `timeout` is how long, in seconds, the gateway waits for the backend's next byte: before the first token, between tokens, or for a whole non-streamed answer. It defaults to 300, and the proxy caps it at what its gateway accepts ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#3-config-rendering-gateway-configuration)). Slow local models need it raised. A value that is not whole seconds leaves the backend out of the rendered config, with a comment that names it.
 - A backend that needs an API key names it with the meta `key`: the secret `secret/aisa/providers/<key>` in Vault ([`VAULT.md`](./VAULT.md#provider-keys)).
-- A failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically. Until then, requests sent to it fail. That window is the check's interval and timeout, plus the template's quiet period and the gateway's reload: with a 2 s interval it was about 3 s (spike S9). Requests already sent to the backend can wait until the gateway's timeout.
+- **Who runs the check.** A catalog registration carries a check's definition, but only a Consul agent that owns the service executes it: an agent on the backend's node, or [consul-esm](https://github.com/hashicorp/consul-esm) for nodes registered through the catalog, as the Terraform provider does. Without either, the check's status is whatever the registration wrote, and its `interval` and `timeout` do nothing. The Terraform provider registers through `/v1/catalog/register`, where an omitted status is `critical`, so without the `status` above the backend is never rendered and its models are never on offer. A check that nothing has run has an empty output (`/v1/health/checks/aisa-backend`), which tells it from one that ran ([#69](https://github.com/hlan-net/aisa/issues/69)).
+- Where something executes the check, a failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically. Until then, requests sent to it fail. That window is the check's interval and timeout, plus the template's quiet period and the gateway's reload: with a 2 s interval it was about 3 s (spike S9). Requests already sent to the backend can wait until the gateway's timeout. With a static status, nothing drops a backend that is down: every request sent to it fails, after the gateway's timeout when the machine does not refuse the connection, so choose the meta `timeout` with this in mind, or run consul-esm.
 
 ## Consumers: Consul KV
 
