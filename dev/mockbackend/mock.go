@@ -57,6 +57,9 @@ const errorTrigger = "mock:error:"
 
 // accountHeaders are what a provider says about the account in its response headers, as
 // OpenAI does; a gateway must not pass them on.
+// headerBackend names the backend that answered, for tests that look past the gateway.
+const headerBackend = "X-Mock-Backend"
+
 var accountHeaders = map[string]string{
 	"Openai-Organization":            "org-mock",
 	"Openai-Processing-Ms":           "1",
@@ -138,7 +141,7 @@ func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.last = r.Header.Clone()
 	s.mu.Unlock()
-	w.Header().Set("X-Mock-Backend", s.cfg.Name)
+	w.Header().Set(headerBackend, s.cfg.Name)
 	for k, v := range accountHeaders {
 		w.Header().Set(k, v)
 	}
@@ -227,7 +230,7 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.last = r.Header.Clone()
 	s.mu.Unlock()
-	w.Header().Set("X-Mock-Backend", s.cfg.Name)
+	w.Header().Set(headerBackend, s.cfg.Name)
 
 	var req struct {
 		Model string          `json:"model"`
@@ -435,7 +438,7 @@ func sleep(r *http.Request, d time.Duration) bool {
 // ollamaChat answers Ollama's native POST /api/chat, non-streaming only, with the same token
 // counts as the OpenAI endpoint: prompt_eval_count and eval_count.
 func (s *server) ollamaChat(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("X-Mock-Backend", s.cfg.Name)
+	w.Header().Set(headerBackend, s.cfg.Name)
 	var req struct {
 		Model    string        `json:"model"`
 		Messages []chatMessage `json:"messages"`
