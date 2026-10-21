@@ -26,7 +26,7 @@ func Unthrottled(rc *rest.Config) *rest.Config {
 // ClientConfig is the config of aisa's Kubernetes clients: unthrottled, with client-go's
 // metrics registered through register and in use.
 func ClientConfig(rc *rest.Config, register func(...prometheus.Collector) error) (*rest.Config, error) {
-	cm := NewClientMetrics()
+	cm := clientMetrics()
 	if err := register(cm.Collectors()...); err != nil {
 		return nil, fmt.Errorf("kubernetes client metrics: %w", err)
 	}
@@ -70,17 +70,19 @@ func (c *ClientMetrics) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{c.requests, c.latency, c.rateLimiter}
 }
 
-var installOnce sync.Once
+// clientMetrics are the one set client-go reports into. client-go takes metrics once per
+// process, so every registry that wants them must be given these, not a new set that client-go
+// would never feed.
+var clientMetrics = sync.OnceValue(NewClientMetrics)
 
 // Install makes client-go report into these metrics. client-go takes metrics once per
-// process, so only the first call has an effect.
+// process, so only the first Install in a process has an effect; ClientConfig installs
+// clientMetrics.
 func (c *ClientMetrics) Install() {
-	installOnce.Do(func() {
-		clientmetrics.Register(clientmetrics.RegisterOpts{
-			RequestResult:      resultMetric{c.requests},
-			RequestLatency:     latencyMetric{c.latency},
-			RateLimiterLatency: latencyMetric{c.rateLimiter},
-		})
+	clientmetrics.Register(clientmetrics.RegisterOpts{
+		RequestResult:      resultMetric{c.requests},
+		RequestLatency:     latencyMetric{c.latency},
+		RateLimiterLatency: latencyMetric{c.rateLimiter},
 	})
 }
 

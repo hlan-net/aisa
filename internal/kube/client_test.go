@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,23 +81,18 @@ func mustURL(t *testing.T, s string) url.URL {
 }
 
 // TestClientConfigCountsRequests makes a request with a client of ClientConfig and finds it in
-// the registry the metrics were registered in.
+// the registry the metrics were registered in, and in a registry given them later: client-go
+// reports into one set per process, which every registration must share.
 func TestClientConfigCountsRequests(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"kind":"Namespace","apiVersion":"v1","metadata":{"name":"aisa"}}`))
 	}))
 	defer api.Close()
+	host := strings.TrimPrefix(api.URL, "http://")
 
 	reg := prometheus.NewRegistry()
-	rc, err := ClientConfig(&rest.Config{Host: api.URL}, func(cs ...prometheus.Collector) error {
-		for _, c := range cs {
-			if err := reg.Register(c); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	rc, err := ClientConfig(&rest.Config{Host: api.URL}, registerIn(reg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +106,55 @@ func TestClientConfigCountsRequests(t *testing.T) {
 	if _, err := k8s.CoreV1().Namespaces().Get(context.Background(), "aisa", metav1.GetOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := testutil.GatherAndCount(reg, "rest_client_requests_total", "rest_client_request_duration_seconds"); err != nil || n != 2 {
-		t.Errorf("client metrics after one request: %d series, err %v; want 2", n, err)
+	if n := requestsTo(t, reg, host); n != 1 {
+		t.Errorf("rest_client_requests_total{host=%q} = %v after one request, want 1", host, n)
 	}
+	if n, err := testutil.GatherAndCount(reg, "rest_client_request_duration_seconds"); err != nil || n == 0 {
+		t.Errorf("rest_client_request_duration_seconds: %d series, err %v; want the request's", n, err)
+	}
+
+	later := prometheus.NewRegistry()
+	if _, err := ClientConfig(&rest.Config{Host: api.URL}, registerIn(later)); err != nil {
+		t.Fatal(err)
+	}
+	if n := requestsTo(t, later, host); n != 1 {
+		t.Errorf("rest_client_requests_total{host=%q} = %v in a registry given the metrics later, want 1", host, n)
+	}
+}
+
+// registerIn registers collectors in reg, as metrics.Register does in aisa's registry.
+func registerIn(reg prometheus.Registerer) func(...prometheus.Collector) error {
+	return func(cs ...prometheus.Collector) error {
+		for _, c := range cs {
+			if err := reg.Register(c); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// requestsTo is rest_client_requests_total for a host in reg, over every code and method.
+func requestsTo(t *testing.T, reg prometheus.Gatherer, host string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n float64
+	for _, f := range families {
+		if f.GetName() != "rest_client_requests_total" {
+			continue
+		}
+		for _, s := range f.GetMetric() {
+			for _, l := range s.GetLabel() {
+				if l.GetName() == "host" && l.GetValue() == host {
+					n += s.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return n
 }
 
 func TestClientConfigFailsWithoutItsMetrics(t *testing.T) {
