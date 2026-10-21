@@ -165,6 +165,25 @@ declarations=$(awk '/^aisa_consumer_declarations /{print $2}' <<<"$metrics")
 expect "aisa read its consumer declarations from Consul (a token from Vault): chat-ui and batch-jobs" 2 "$declarations"
 profiles=$(awk '/^aisa_quota_profiles /{print $2}' <<<"$metrics")
 expect "aisa read its quota profiles from Consul (a token from Vault)" 1 "$profiles"
+# A consumer whose declared profile is not in Consul is counted before it sends anything (#82).
+missing_gauge() {
+    curl -fsS http://127.0.0.1:18090/metrics | awk -v s="$1" '$0 ~ "^aisa_quota_profiles_missing\\{source=\"" s "\"\\}" {print $2}'
+}
+expect "no consumer names a quota profile that is not in Consul" 0 "$(missing_gauge consumer)"
+consul kv put aisa/consumers/typo '{"quota_profile": "nonesuch"}' >/dev/null
+missing=0
+for _ in $(seq 1 30); do
+    missing=$(missing_gauge consumer)
+    [[ "${missing:-0}" = 1 ]] && break
+    sleep 1
+done
+expect "a consumer whose quota profile is not in Consul is counted in aisa_quota_profiles_missing" 1 "$missing"
+consul kv delete aisa/consumers/typo >/dev/null
+for _ in $(seq 1 30); do
+    [[ "$(missing_gauge consumer)" = 0 ]] && break
+    sleep 1
+done
+expect "the count falls when the consumer is removed" 0 "$(missing_gauge consumer)"
 # The proxy reports its renders to the URI the chart gives it (AISA_RENDER_URI). The first
 # render comes before aisa is up, so the proxy's loop sends the report again within 30 s.
 promoted=0
@@ -396,6 +415,37 @@ if probe_aisa np-other-ops "$ops" "app=np-other"; then
     fail "a pod in no peer is kept away from aisa's metrics port"
 fi
 ok "a pod in no peer is kept away from aisa's metrics port"
+
+echo "== a default quota profile that is not in Consul"
+# A pod whose quotas.defaultProfile names no profile never becomes ready (#82). The rollout
+# waits for it, so the pod before it keeps serving.
+helm upgrade "$RELEASE" "$ROOT/deploy/helm/aisa" -n "$NS" -f "$HERE/values-test.yaml" \
+    --set quotas.defaultProfile=nonesuch >/dev/null || fail "helm upgrade with a default profile"
+aisa_pods="app.kubernetes.io/name=aisa,app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=control"
+newest_pod() {
+    "${K[@]}" get pods -l "$aisa_pods" --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}'
+}
+pod=""
+for _ in $(seq 1 60); do
+    pod=$(newest_pod)
+    [[ -n "$pod" && "$("${K[@]}" get pod "$pod" -o jsonpath='{.status.phase}')" = Running ]] && break
+    sleep 1
+done
+[[ -n "$pod" ]] || fail "a new aisa pod was started with the default profile"
+# Give it the time it takes to read its profiles, and more; then it must still not be ready.
+sleep 15
+ready=$("${K[@]}" get pod "$pod" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+expect "a pod whose default quota profile is not in Consul is not ready" False "$ready"
+logs=$("${K[@]}" logs "$pod")
+grep -q '"check":"quota_profiles".*nonesuch' <<<"$logs" ||
+    fail "the pod's log names the check and the profile: $(grep -c . <<<"$logs") lines"
+ok "the pod's log names the check and the profile"
+helm upgrade "$RELEASE" "$ROOT/deploy/helm/aisa" -n "$NS" -f "$HERE/values-test.yaml" \
+    --set quotas.defaultProfile=interactive --wait --timeout 3m >/dev/null || {
+    "${K[@]}" get pods -o wide >&2
+    fail "helm upgrade with a default profile that is in Consul"
+}
+ok "a pod whose default quota profile is in Consul is ready"
 
 echo "== helm uninstall"
 cleanup

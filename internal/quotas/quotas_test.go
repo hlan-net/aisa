@@ -5,13 +5,16 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 
@@ -422,5 +425,117 @@ func TestCheckHugeUsageStaysExhausted(t *testing.T) {
 	v := q.Check(context.Background(), consumers.Consumer{Name: "a", QuotaProfile: "batch"})
 	if v.Outcome != Exhausted || v.Used != math.MaxInt64 || v.RetryAfter <= 0 {
 		t.Errorf("verdict = %+v, want exhausted with saturated usage", v)
+	}
+}
+
+// declared are consumer declarations for Profiles.Consumers.
+type declared struct {
+	loaded bool
+	valid  map[string]consumers.Declaration
+}
+
+func (d declared) Snapshot() (map[string]consumers.Declaration, map[string]bool, bool) {
+	return d.valid, nil, d.loaded
+}
+
+func TestProfilesDefaultAndMissing(t *testing.T) {
+	ctx := context.Background()
+	consumersOf := &declared{}
+	p := NewProfiles(nil, discard, ProfileOptions{Default: "standard", Consumers: consumersOf})
+	if p.Ready(ctx) == nil {
+		t.Error("ready before a load")
+	}
+	if m := p.Missing(); m.Default || m.Consumers != nil {
+		t.Errorf("before a load: missing = %+v, want nothing", m)
+	}
+
+	// Loaded without the default: not ready, and the default is missing.
+	p.apply([]consul.Pair{{Key: "batch", Value: []byte(`{"tokens_per_hour": 10}`)}})
+	if err := p.Ready(ctx); !errors.Is(err, ErrDefaultMissing) {
+		t.Errorf("without the default: Ready = %v, want ErrDefaultMissing", err)
+	}
+	if m := p.Missing(); !m.Default || m.Consumers != nil {
+		t.Errorf("without the default: missing = %+v, want the default only", m)
+	}
+
+	// The consumers are read: those whose profile is not there are missing, by name. A consumer
+	// without a profile uses the default, which is reported once, as the default.
+	consumersOf.loaded = true
+	consumersOf.valid = map[string]consumers.Declaration{
+		"chat-ui":    {QuotaProfile: "batch"},
+		"batch-jobs": {QuotaProfile: "bacth"},
+		"news":       {QuotaProfile: "nonesuch"},
+		"cli":        {},
+	}
+	want := map[string]string{"batch-jobs": "bacth", "news": "nonesuch"}
+	if m := p.Missing(); !m.Default || !maps.Equal(m.Consumers, want) {
+		t.Errorf("missing = %+v, want the default and %v", m, want)
+	}
+	reg := prometheus.NewPedanticRegistry()
+	if err := reg.Register(p.Collectors()[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Register(p.Collectors()[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(`
+# HELP aisa_quota_profiles_missing Quota profiles that are named and not in Consul, by who names them: the default profile (source=default) or a consumer's declaration (source=consumer, one per consumer). Their consumers are answered 503.
+# TYPE aisa_quota_profiles_missing gauge
+aisa_quota_profiles_missing{source="consumer"} 2
+aisa_quota_profiles_missing{source="default"} 1
+`), "aisa_quota_profiles_missing"); err != nil {
+		t.Error(err)
+	}
+
+	// The default appears, broken: it is not missing (it is invalid), and not seen either.
+	p.apply([]consul.Pair{
+		{Key: "batch", Value: []byte(`{"tokens_per_hour": 10}`)},
+		{Key: "standard", Value: []byte(`{"tokens_per_hour": "many"}`)},
+	})
+	if err := p.Ready(ctx); !errors.Is(err, ErrDefaultMissing) {
+		t.Errorf("with the default invalid: Ready = %v, want ErrDefaultMissing", err)
+	}
+	if m := p.Missing(); m.Default {
+		t.Errorf("with the default invalid: missing = %+v, want it not missing", m)
+	}
+
+	// The default is read, valid: ready, and a consumer's profile fixed is no longer missing.
+	p.apply([]consul.Pair{
+		{Key: "batch", Value: []byte(`{"tokens_per_hour": 10}`)},
+		{Key: "bacth", Value: []byte(`{"tokens_per_hour": 10}`)},
+		{Key: "standard", Value: []byte(`{"tokens_per_hour": 10}`)},
+	})
+	if err := p.Ready(ctx); err != nil {
+		t.Errorf("with the default: Ready = %v", err)
+	}
+	if m := p.Missing(); m.Default || !maps.Equal(m.Consumers, map[string]string{"news": "nonesuch"}) {
+		t.Errorf("with the default: missing = %+v, want news only", m)
+	}
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(`
+# HELP aisa_quota_profiles_missing Quota profiles that are named and not in Consul, by who names them: the default profile (source=default) or a consumer's declaration (source=consumer, one per consumer). Their consumers are answered 503.
+# TYPE aisa_quota_profiles_missing gauge
+aisa_quota_profiles_missing{source="consumer"} 1
+aisa_quota_profiles_missing{source="default"} 0
+`), "aisa_quota_profiles_missing"); err != nil {
+		t.Error(err)
+	}
+
+	// The default removed later: reported as missing, but aisa stays ready.
+	p.apply([]consul.Pair{{Key: "batch", Value: []byte(`{"tokens_per_hour": 10}`)}})
+	if err := p.Ready(ctx); err != nil {
+		t.Errorf("after the default is removed: Ready = %v, want ready still", err)
+	}
+	if m := p.Missing(); !m.Default {
+		t.Errorf("after the default is removed: missing = %+v, want the default", m)
+	}
+
+	// Without a default, nothing waits for one.
+	none := NewProfiles(nil, discard, ProfileOptions{})
+	none.apply(nil)
+	if err := none.Ready(ctx); err != nil {
+		t.Errorf("without a default: Ready = %v", err)
+	}
+	if m := none.Missing(); m.Default {
+		t.Errorf("without a default: missing = %+v", m)
 	}
 }
