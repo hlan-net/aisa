@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -563,5 +564,50 @@ func TestHandlerCost(t *testing.T) {
 	// Only cloud-large and qwen3 have prices, so aisa_cost_total has 2 series.
 	if n := testutil.CollectAndCount(m.Cost); n != 2 {
 		t.Errorf("aisa_cost_total has %d series, want 2", n)
+	}
+}
+
+// pricedModels prices cloud-large and gives qwen3 a price of zero.
+type pricedModels struct{}
+
+func (pricedModels) Lookup(model string) (pricing.Price, bool) {
+	switch model {
+	case "cloud-large":
+		return pricing.Price{InputPer1K: 0.003, OutputPer1K: 0.015, Currency: "EUR"}, true
+	case "qwen3":
+		return pricing.Price{Currency: "EUR"}, true
+	}
+	return pricing.Price{}, false
+}
+
+// The tokens of priced models are charged to the budget as well as to the quota; those of free
+// models and of models without a price only to the quota.
+func TestHandlerChargesBudget(t *testing.T) {
+	m := metrics.New("test")
+	quota := &fakeCharger{charges: map[string]int64{}}
+	budget := &fakeCharger{charges: map[string]int64{}}
+	h := New(m, NewDedup(100, 5*time.Minute), quota, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Options{Pricer: pricedModels{}, Budget: budget})
+	h.now = func() time.Time { return time.Date(2026, 10, 21, 12, 30, 20, 0, time.UTC) }
+
+	body := `[
+		{"request_id": "a", "consumer": "chat-ui", "model": "cloud-large", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-10-21T12:00:10Z"},
+		{"request_id": "b", "consumer": "chat-ui", "model": "qwen3", "status": 200, "prompt_tokens": 100, "ts": "2026-10-21T12:00:20Z"},
+		{"request_id": "c", "consumer": "chat-ui", "model": "unpriced", "status": 200, "prompt_tokens": 1000, "ts": "2026-10-21T12:00:30Z"},
+		{"request_id": "d", "consumer": "batch-jobs", "model": "cloud-large", "status": 500, "prompt_tokens": 3, "ts": "2026-10-21T12:01:00Z"}
+	]`
+	req := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	wantQuota := map[string]int64{"chat-ui@12:00:00": 1115, "batch-jobs@12:01:00": 3}
+	wantBudget := map[string]int64{"chat-ui@12:00:00": 15, "batch-jobs@12:01:00": 3}
+	if !maps.Equal(quota.charges, wantQuota) {
+		t.Errorf("quota charges = %v, want %v", quota.charges, wantQuota)
+	}
+	if !maps.Equal(budget.charges, wantBudget) {
+		t.Errorf("budget charges = %v, want %v", budget.charges, wantBudget)
 	}
 }

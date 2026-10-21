@@ -45,6 +45,9 @@
 package main
 
 import (
+	// The budgets' calendar month is in the holder's time zone; the image has no zoneinfo.
+	_ "time/tzdata"
+
 	"context"
 	"flag"
 	"fmt"
@@ -63,6 +66,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/hlan-net/aisa/internal/admin"
+	"github.com/hlan-net/aisa/internal/budgets"
 	"github.com/hlan-net/aisa/internal/config"
 	"github.com/hlan-net/aisa/internal/consul"
 	"github.com/hlan-net/aisa/internal/consumers"
@@ -164,11 +168,13 @@ func run(args []string) error {
 	}
 	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
 	var (
-		quota   decide.QuotaChecker
-		charger ledger.Charger
+		quota         decide.QuotaChecker
+		charger       ledger.Charger
+		budget        decide.BudgetChecker
+		budgetCharger ledger.Charger
 	)
 	if cfg.QuotasEnabled() {
-		q, profiles, closeQuotas := newQuotas(cfg, cc, declarations, m, log.With("component", "quotas"))
+		q, profiles, rdb, closeQuotas := newQuotas(cfg, cc, declarations, m, log.With("component", "quotas"))
 		defer closeQuotas()
 		if err := m.Register(profiles.Collectors()...); err != nil {
 			return fmt.Errorf("quota profile metrics: %w", err)
@@ -176,8 +182,16 @@ func run(args []string) error {
 		go profiles.Run(ctx)
 		quota, charger = q, q
 		checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
+
+		// The budgets count the months in the same Redis, and keep a copy of the totals in
+		// Consul KV (docs/features/quotas-and-budgets.md, Budgets).
+		monthly, budgetSet := newBudgets(cfg, cc, rdb, prices, m, log.With("component", "budgets"))
+		go budgetSet.Run(ctx)
+		go monthly.Run(ctx)
+		budget, budgetCharger = monthly, monthly
+		checks = append(checks, server.Check{Name: "budgets", Probe: budgetSet.Ready})
 	} else {
-		log.Warn("token quotas are off: set AISA_REDIS_ADDR to turn them on")
+		log.Warn("token quotas and budgets are off: set AISA_REDIS_ADDR to turn them on")
 	}
 
 	var adminHandler http.Handler
@@ -198,9 +212,10 @@ func run(args []string) error {
 
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
-		decide.New(store, quota, m, log.With("component", "decide"), decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile}),
+		decide.New(store, quota, m, log.With("component", "decide"),
+			decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile, Budget: budget}),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
-			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens, Pricer: prices}),
+			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens, Pricer: prices, Budget: budgetCharger}),
 		render.New(m, log.With("component", "render")),
 		adminHandler)
 	if err := srv.Run(ctx, cfg.Addr, cfg.MetricsAddr); err != nil {
@@ -211,9 +226,10 @@ func run(args []string) error {
 }
 
 // newQuotas returns the token quotas with their profiles from Consul and counters in Redis,
-// and a function that closes the connections to Redis. The profiles know the default and the
-// consumers' declarations, to report a profile that is named and not there (#82).
-func newQuotas(cfg config.Config, cc *consul.Client, declarations *consumers.Declarations, m *metrics.Metrics, log *slog.Logger) (*quotas.Quota, *quotas.Profiles, func()) {
+// the Redis client, and a function that closes the connections to Redis. The profiles know
+// the default and the consumers' declarations, to report a profile that is named and not
+// there (#82).
+func newQuotas(cfg config.Config, cc *consul.Client, declarations *consumers.Declarations, m *metrics.Metrics, log *slog.Logger) (*quotas.Quota, *quotas.Profiles, *redis.Client, func()) {
 	profiles := quotas.NewProfiles(
 		quotas.ConsulSource{Client: cc, Prefix: cfg.Consul.Prefix + "/quotas/"},
 		log,
@@ -226,7 +242,41 @@ func newQuotas(cfg config.Config, cc *consul.Client, declarations *consumers.Dec
 		Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password,
 	})
 	q := quotas.New(profiles, quotas.NewWindow(rdb, "aisa:"), m, log, quotas.Options{})
-	return q, profiles, func() { _ = rdb.Close() }
+	return q, profiles, rdb, func() { _ = rdb.Close() }
+}
+
+// newBudgets returns the monthly budgets with their definitions from Consul, counters in
+// Redis, persisted totals in Consul KV and the prices that say which models they bound.
+func newBudgets(cfg config.Config, cc *consul.Client, rdb *redis.Client, prices *pricing.Prices, m *metrics.Metrics, log *slog.Logger) (*budgets.Monthly, *budgets.Budgets) {
+	// Validated by the config.
+	loc, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	var monthly *budgets.Monthly
+	set := budgets.NewBudgets(
+		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/budgets/", What: "budgets"},
+		log,
+		budgets.Options{OnLoad: func(s budgets.LoadStats) {
+			observeBudgets(m, s)
+			if s.Err == nil && monthly != nil {
+				monthly.Observe(context.Background())
+			}
+		}})
+	monthly = budgets.NewMonthly(set, budgets.NewMonths(rdb, "aisa:"), cc, prices, m, log,
+		budgets.MonthlyOptions{Location: loc, StatePrefix: cfg.Consul.Prefix + "/state/"})
+	return monthly, set
+}
+
+// observeBudgets puts the result of a load of the budgets into the metrics.
+func observeBudgets(m *metrics.Metrics, s budgets.LoadStats) {
+	if s.Err != nil {
+		m.BudgetLoads.WithLabelValues(metrics.LoadError).Inc()
+		return
+	}
+	m.BudgetLoads.WithLabelValues(metrics.LoadOK).Inc()
+	m.Budgets.Set(float64(s.Valid))
+	m.BudgetsInvalid.Set(float64(s.Invalid))
 }
 
 // kubeSources are what the Kubernetes objects are made from: the consumers' declarations, a

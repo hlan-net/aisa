@@ -14,6 +14,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/hlan-net/aisa/internal/budgets"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/quotas"
@@ -549,4 +550,93 @@ func TestNoQuotaProfile(t *testing.T) {
 			}
 		})
 	}
+}
+
+type fakeBudget struct {
+	verdict budgets.Verdict
+	checked []string // "consumer/model"
+}
+
+func (f *fakeBudget) Check(_ context.Context, consumer, model string) budgets.Verdict {
+	f.checked = append(f.checked, consumer+"/"+model)
+	return f.verdict
+}
+
+func TestBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		verdict       budgets.Verdict
+		wantStatus    int
+		wantModel     string
+		wantCode      string
+		wantResult    string
+		wantRemaining string
+	}{
+		{"no budget", budgets.Verdict{Outcome: budgets.NoBudget}, 200, "cloud-large", "", metrics.ResultAllow, ""},
+		{"tokens left", budgets.Verdict{Outcome: budgets.Allow, Applies: true, Limit: 100, Used: 40, Remaining: 60},
+			200, "cloud-large", "", metrics.ResultAllow, "60"},
+		{"soft limit", budgets.Verdict{Outcome: budgets.Allow, Applies: true, Limit: 100, Used: 90, Remaining: 10, Soft: true},
+			200, "cloud-large", "", metrics.ResultAllow, "10"},
+		{"exhausted, a free model", budgets.Verdict{Outcome: budgets.Allow, Applies: false, Limit: 100, Used: 100, Remaining: 0},
+			200, "cloud-large", "", metrics.ResultAllow, "0"},
+		{"exhausted, reject", budgets.Verdict{Outcome: budgets.Exhausted, Applies: true, Limit: 100, Used: 100, OnExhausted: budgets.Reject},
+			429, "", "budget_exhausted", metrics.ResultDenyBudget, ""},
+		{"exhausted, downgrade", budgets.Verdict{Outcome: budgets.Exhausted, Applies: true, Limit: 100, Used: 120, OnExhausted: budgets.Downgrade, DowngradeTo: "qwen3"},
+			200, "qwen3", "", metrics.ResultDowngrade, "0"},
+		{"exhausted, downgrade to itself", budgets.Verdict{Outcome: budgets.Exhausted, Applies: true, Limit: 100, Used: 120, OnExhausted: budgets.Downgrade, DowngradeTo: "cloud-large"},
+			429, "", "budget_exhausted", metrics.ResultDenyBudget, ""},
+		{"broken budget", budgets.Verdict{Outcome: budgets.Unavailable, Err: errors.New("monthly_tokens is missing")},
+			503, "", "budget_unavailable", metrics.ResultUnavailable, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := metrics.New("test")
+			b := &fakeBudget{verdict: tc.verdict}
+			q := &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Allow}}
+			l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}}}
+			h := New(l, q, m, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Budget: b})
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"cloud-large"}`))
+			req.Header.Set("Authorization", "Bearer key-chat")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.wantStatus, rec.Body)
+			}
+			if got := rec.Header().Get(HeaderModel); got != tc.wantModel {
+				t.Errorf("X-Aisa-Model = %q, want %q", got, tc.wantModel)
+			}
+			if got := rec.Header().Get(HeaderBudgetRemaining); got != tc.wantRemaining {
+				t.Errorf("X-Aisa-Budget-Remaining = %q, want %q", got, tc.wantRemaining)
+			}
+			checkDenial(t, rec, tc.wantCode)
+			if rec.Code == 429 && rec.Header().Get("Retry-After") != "" {
+				t.Error("a budget denial carries no Retry-After: the month decides")
+			}
+			if n := testutil.ToFloat64(m.Decisions.WithLabelValues("chat-ui", tc.wantResult)); n != 1 {
+				t.Errorf("aisa_decisions_total{chat-ui,%s} = %v, want 1", tc.wantResult, n)
+			}
+			if len(b.checked) != 1 || b.checked[0] != "chat-ui/cloud-large" {
+				t.Errorf("budget checked for %v, want chat-ui/cloud-large once", b.checked)
+			}
+		})
+	}
+}
+
+// The budget is checked after the quota: an exhausted quota is a 429 of its own, and the budget
+// is not asked.
+func TestBudgetAfterQuota(t *testing.T) {
+	m := metrics.New("test")
+	b := &fakeBudget{verdict: budgets.Verdict{Outcome: budgets.Exhausted, Applies: true, OnExhausted: budgets.Reject}}
+	q := &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Exhausted, Limit: 10, Used: 10, RetryAfter: time.Second}}
+	l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}}}
+	h := New(l, q, m, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Budget: b})
+	req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"cloud-large"}`))
+	req.Header.Set("Authorization", "Bearer key-chat")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 429 || len(b.checked) != 0 {
+		t.Errorf("status = %d, budget checked %v", rec.Code, b.checked)
+	}
+	checkDenial(t, rec, "rate_limit_exceeded")
 }

@@ -106,6 +106,13 @@ func (p *Prices) Lookup(model string) (Price, bool) {
 	return pr, ok
 }
 
+// Paid reports whether a model has a price above zero: whether the budgets bound its use.
+// A model without a price entry, or whose prices are 0, is free.
+func (p *Prices) Paid(model string) bool {
+	price, ok := p.Lookup(model)
+	return ok && price.Paid()
+}
+
 // Ready returns nil once the prices have been read, for aisa's readiness.
 func (p *Prices) Ready(context.Context) error {
 	p.mu.RLock()

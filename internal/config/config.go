@@ -36,7 +36,10 @@ type Config struct {
 	// DefaultQuotaProfile is the quota profile of a consumer whose declaration names none
 	// (AISA_DEFAULT_QUOTA_PROFILE). Empty: such a consumer is denied (403 no_quota).
 	DefaultQuotaProfile string
-	Admin               Admin
+	// Timezone is the time zone of the budgets' calendar month (AISA_TIMEZONE), an IANA name
+	// such as "Europe/Helsinki"; "UTC" by default.
+	Timezone string
+	Admin    Admin
 	// Kubernetes is off outside a cluster.
 	Kubernetes Kubernetes
 }
@@ -157,6 +160,7 @@ type Ledger struct {
 // Defaults are the values used for variables that are unset or empty.
 func Defaults() Config {
 	return Config{
+		Timezone:        "UTC",
 		Addr:            ":8080",
 		LogLevel:        slog.LevelInfo,
 		ShutdownTimeout: 10 * time.Second,
@@ -368,6 +372,12 @@ func quotasFromEnv(getenv func(string) string, cfg *Config) error {
 		return fmt.Errorf("set CONSUL_HTTP_TOKEN or CONSUL_HTTP_TOKEN_FILE, not both")
 	}
 	cfg.DefaultQuotaProfile = strings.TrimSpace(getenv("AISA_DEFAULT_QUOTA_PROFILE"))
+	if tz := strings.TrimSpace(getenv("AISA_TIMEZONE")); tz != "" {
+		cfg.Timezone = tz
+	}
+	if _, err := time.LoadLocation(cfg.Timezone); err != nil {
+		return fmt.Errorf("AISA_TIMEZONE: want an IANA time zone such as Europe/Helsinki, got %q: %w", cfg.Timezone, err)
+	}
 	r := &cfg.Redis
 	r.Addr = getenv("AISA_REDIS_ADDR")
 	r.Username = getenv("AISA_REDIS_USERNAME")
