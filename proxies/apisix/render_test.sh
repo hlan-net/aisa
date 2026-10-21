@@ -17,7 +17,8 @@ CONSUL="${CONSUL:-http://127.0.0.1:8500}"
 
 OUT=$(mktemp -d)
 # A backend that exists only for this test: model names that once gave a normal and a fail-open
-# route the same ID ("qwen3-fail-open" next to the fail-open "qwen3"), and a name too long and
+# route the same ID ("qwen3-fail-open" next to the fail-open "qwen3"), one that would give an
+# embeddings route the ID of another kind's ("fail-open-qwen3"), and a name too long and
 # with characters a route ID cannot have.
 LONG_MODEL="example-org/a-model-name-that-is-much-longer-than-a-route-id-may-be:latest"
 # A dollar in a name: an APISIX variable to fault-injection, unless the model list escapes it.
@@ -31,7 +32,7 @@ cleanup() {
 trap cleanup EXIT
 curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
 {"ID": "render-test", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
- "Meta": {"provider": "openai-compatible", "models": "qwen3-fail-open,$LONG_MODEL,$DOLLAR_MODEL", "fail_policy": "open"}}
+ "Meta": {"provider": "openai-compatible", "models": "qwen3-fail-open,fail-open-qwen3,$LONG_MODEL,$DOLLAR_MODEL", "fail_policy": "open"}}
 EOF
 # A timeout above the cap of ai-proxy-multi, and one that is not a number: the first is capped,
 # the second leaves its backend out (#18).
@@ -103,6 +104,11 @@ fi
 echo "ok: $(wc -l < "$OUT/ids" | tr -d ' ') route IDs, all unique and valid"
 expect "a route for a model named like another model's fail-open route" '^  - id: "model-qwen3-fail-open"$'
 expect "a fail-open route for that model" '^  - id: "fail-open-qwen3-fail-open"$'
+# Embeddings (#34): every model on /v1/embeddings too, with the backend called on that path.
+expect "the client route takes embeddings" '^    uris: \[/v1/chat/completions, /v1/embeddings\]$'
+expect "an embeddings route for the local model" '^  - id: "embed-model-qwen3"$'
+expect "an embeddings fail-open route for the local model" '^  - id: "embed-fail-open-qwen3"$'
+expect "an embeddings route for a model named like a fail-open route" '^  - id: "embed-model-fail-open-qwen3"$'
 expect "a route for the long model name, by its full name" "\"http_x_aisa_model\", \"==\", \"$LONG_MODEL\""
 expect "a fail-open route for the long model name" "\"http_x_aisa_requested_model\", \"==\", \"$LONG_MODEL\""
 
@@ -114,6 +120,9 @@ expect_in_route() {
     echo "ok: $what"
 }
 expect_in_route "the default timeout of 300 s" '"model-qwen3"' '^        timeout: 300000$'
+expect_in_route "a chat route calls the backend's chat path" '"model-qwen3"' 'endpoint: "http://mock-local:8080/v1/chat/completions"'
+expect_in_route "an embeddings route matches the embeddings path" '"embed-model-qwen3"' '^    uri: /v1/embeddings$'
+expect_in_route "an embeddings route calls the backend's embeddings path" '"embed-model-qwen3"' 'endpoint: "http://mock-local:8080/v1/embeddings"'
 expect_in_route "a timeout above 600 s is capped" '"model-slow-test"' '^        timeout: 600000$'
 expect "a backend with an invalid timeout is named in a comment" "^# Skipped backend \"render-test-bad-timeout\": invalid 'timeout' metadata \"fast\""
 if grep -q '^  - id: "model-bad-timeout-test"$' "$RENDERED"; then

@@ -2,15 +2,19 @@
 # (secret/data/aisa/providers/*). Do not edit directly: the next render replaces this file.
 #
 # Routes:
-#   client                   the client-facing route: pre-step, forward-auth, then internal listener
+#   client                   the client-facing route of POST /v1/chat/completions and /v1/embeddings:
+#                            pre-step, forward-auth, then internal listener
 #   models                   GET /v1/models: the models on offer, answered by the gateway itself
-#   model-<name>             normal route per model on the internal listener (matched by X-Aisa-Model)
-#   fail-open-<name>         fail-open route for models with fail_policy="open" when aisa is unreachable
+#   model-<name>             normal chat route per model on the internal listener (matched by X-Aisa-Model)
+#   fail-open-<name>         fail-open chat route for models with fail_policy="open" when aisa is unreachable
+#   embed-model-<name>       the same two for /v1/embeddings: a backend is called on the path the
+#   embed-fail-open-<name>   client called, and ai-proxy-multi takes one endpoint per instance
 #   aisa-unreachable         answers 503 when aisa is unreachable and the model does not fail open (priority 5)
 #   no-backend               answers 503 for any model without a healthy backend (priority 0)
 #
-# The two kinds of model route have prefixes of their own, so no model name can make a route ID
-# of one kind equal to one of the other (a model "qwen3-fail-open" next to "qwen3", for example).
+# The four kinds of model route have prefixes of their own, none the start of another, so no model
+# name can make a route ID of one kind equal to one of another (a model "qwen3-fail-open" next to
+# "qwen3", or "fail-open-qwen3" next to the embeddings of "qwen3", for example).
 
 {{- /* The backends whose meta the template can render (#18): the others are left out, with a
        comment that names them. "valid" maps the service ID of each usable backend to "1". */}}
@@ -136,7 +140,7 @@ global_rules:
 
 routes:
   - id: client
-    uri: /v1/chat/completions
+    uris: [/v1/chat/completions, /v1/embeddings]
     methods: [POST]
     vars: [["server_port", "==", "9080"]]
     plugins:
@@ -183,7 +187,7 @@ routes:
           X-Request-Id: $apisix_request_id
         # Fail-open support (#4): allow_degradation passes the request to internal hop
         # only when aisa is unreachable (connection error or timeout). Answers from aisa
-        # (400, 401, 413, 429, 503) are passed directly to the client.
+        # (400, 401, 403, 413, 429, 503) are passed directly to the client.
         allow_degradation: true
         status_on_error: 503
       # Runs after forward-auth, and only when forward-auth let the request through: aisa allowed
@@ -246,19 +250,22 @@ routes:
           # time, so a dollar in a name is written as the JSON escape \u0024, which it leaves alone.
           body: {{ sprig_dict "object" "list" "data" $models | toJSON | regexReplaceAll "\\$" "\\u0024" | toJSON }}
 
+{{- /* Each model on both paths: a chat model asked for embeddings gets its backend's answer. */}}
+{{- range $embed := sprig_list false true }}
 {{- range scratch.MapValues "models" }}
-{{- template "model-route" (sprig_dict "model" . "failOpen" false) }}
+{{- template "model-route" (sprig_dict "model" . "failOpen" false "embed" $embed) }}
 {{- end }}
 
 {{- /* Fail-open routes for models whose backends have fail_policy = "open" (#4) */}}
 {{- range scratch.MapValues "fail_open_models" }}
-{{- template "model-route" (sprig_dict "model" . "failOpen" true) }}
+{{- template "model-route" (sprig_dict "model" . "failOpen" true "embed" $embed) }}
+{{- end }}
 {{- end }}
 
   # aisa was unreachable (no X-Aisa-Model, which aisa sets on every request it allows) and the
   # requested model has no fail-open route: fail closed, with an answer that says why.
   - id: aisa-unreachable
-    uri: /v1/chat/completions
+    uris: [/v1/chat/completions, /v1/embeddings]
     methods: [POST]
     priority: 5
     vars: [["server_port", "==", "9081"], ["http_x_aisa_model", "!", "~~", "."]]
@@ -279,7 +286,7 @@ routes:
           status: $status
 
   - id: no-backend
-    uri: /v1/chat/completions
+    uris: [/v1/chat/completions, /v1/embeddings]
     methods: [POST]
     priority: 0
     vars: [["server_port", "==", "9081"]]
@@ -305,14 +312,20 @@ routes:
     .failOpen  false: the normal route, matched by X-Aisa-Model, with every backend of the model;
                true: the fail-open route, matched when aisa was unreachable (no X-Aisa-Model) by
                X-Aisa-Requested-Model, with only the backends that have fail_policy = "open"
+    .embed     false: POST /v1/chat/completions; true: POST /v1/embeddings
 */}}
 {{- define "model-route" }}{{ $model := .model }}{{ $failOpen := .failOpen }}
+  {{- $path := "/v1/chat/completions" }}{{ if .embed }}{{ $path = "/v1/embeddings" }}{{ end }}
   {{- /* A route ID for APISIX: letters, digits, '-', '_', '.', at most 64 characters. The prefix
          says the kind of route, "model-" or "fail-open-", so the two kinds never share an ID.
          A name that had to be changed or shortened gets a hash of the full name. */}}
   {{- /* $room: what 64 leaves after the prefix; $cut: what it leaves for the name next to "-" and 8 hex digits */}}
   {{- $prefix := "model-" }}{{ $room := 58 }}{{ $cut := 49 }}
   {{- if $failOpen }}{{ $prefix = "fail-open-" }}{{ $room = 54 }}{{ $cut = 45 }}{{ end }}
+  {{- if .embed }}
+    {{- $prefix = "embed-model-" }}{{ $room = 52 }}{{ $cut = 43 }}
+    {{- if $failOpen }}{{ $prefix = "embed-fail-open-" }}{{ $room = 48 }}{{ $cut = 39 }}{{ end }}
+  {{- end }}
   {{- $safe := $model | regexReplaceAll "[^a-zA-Z0-9_.-]" "-" }}
   {{- $id := printf "%s%s" $prefix $safe }}
   {{- if or (ne $safe $model) (gt (len $safe) $room) }}
@@ -342,7 +355,7 @@ routes:
   {{- if gt $maxTimeoutSec 600 }}{{ $maxTimeoutSec = 600 }}{{ end }}
 
   - id: {{ $id | toJSON }}
-    uri: /v1/chat/completions
+    uri: {{ $path }}
     methods: [POST]
     priority: 10
     {{- if $failOpen }}
@@ -403,7 +416,7 @@ routes:
             {{- $scheme := "http" }}
             {{- if index .ServiceMeta "key" }}{{ $scheme = "https" }}{{ end }}
             {{- with index .ServiceMeta "scheme" }}{{ if eq . "http" "https" }}{{ $scheme = . }}{{ end }}{{ end }}
-            override: {endpoint: {{ printf "%s://%s:%d/v1/chat/completions" $scheme .Address .Port | toJSON }}}
+            override: {endpoint: {{ printf "%s://%s:%d%s" $scheme .Address .Port $path | toJSON }}}
         {{- end }}
       http-logger:
         uri: {{ or (env "AISA_USAGE_URI") "http://aisa:8080/v1/usage" }}

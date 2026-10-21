@@ -15,6 +15,16 @@ This guide describes how to integrate client applications (a chat UI, a batch se
 3. **No Direct Vault or Consul Access:**
    - Client applications never access Vault or Consul. Identity, quotas, budgets, rate-limiting, and provider isolation are handled upstream by `aisa` and its proxy.
 
+### What the endpoint offers
+
+The proxy serves the OpenAI-compatible API, and these paths of it:
+
+- `POST /v1/chat/completions`, streamed or not, through aisa's decision
+- `POST /v1/embeddings`, through aisa's decision; its prompt tokens count towards the consumer's quota. Use a model whose `Model` object has the feature `TextEmbedding`: every model is routed on both paths, and a chat model asked for embeddings answers with its backend's error
+- `GET /v1/models`, the models on offer, without a credential
+
+Provider-native APIs, such as Anthropic's `/v1/messages`, are not offered: use an OpenAI-compatible client, or the OpenAI-compatible endpoint of the provider's SDK. The legacy `/v1/completions` is not offered either ([#34](https://github.com/hlan-net/aisa/issues/34)).
+
 ---
 
 ## 2. Environment Variables & Secret Contract
@@ -227,7 +237,8 @@ AISA enforces token quotas via a sliding 60-minute window in Redis. When declari
 |---|---|---|---|
 | `batch` | `100,000` to `200,000` | ~30–50 tokens/sec (~1 request/min) | Background jobs, scrapers, bulk data processing, embeddings |
 | `interactive` | `1,000,000` to `5,000,000` | ~300–1,500 tokens/sec (~10–30 rpm) | User-facing chat, real-time UI queries, interactive agents |
-| `unlimited` | None (omit `quota_profile`) | Unbounded | Internal admin tools, critical cluster infrastructure |
+
+A consumer without `quota_profile` is denied with 403 `no_quota`, unless the holder has set a default profile; no consumer is unlimited.
 
 > [!TIP]
 > Choose `batch` for non-urgent tasks to prevent background processes from consuming quota needed by user-facing services.
@@ -345,31 +356,45 @@ When designing error handling in client applications:
 
 ### Status Codes and Error Types
 
-| HTTP Status | Error Type / Code | Description | Client Action |
-|---|---|---|---|
-| **401 Unauthorized** | `aisa_unauthorized` | Missing API key, key unknown to Vault, or key superseded and grace period has expired | Restart pod to refresh Secret, or check consumer registration |
-| **429 Too Many Requests** | `aisa_quota_exceeded` | Consumer has exceeded its hourly token quota | Read `Retry-After` header and wait before retrying, or request higher quota profile |
-| **429 Too Many Requests** | `provider_rate_limited` | Upstream provider (e.g. OpenAI/Anthropic) returned 429 | Back off and retry with exponential jitter |
-| **502 Bad Gateway** | `provider_error` | Upstream model server failed or returned invalid response | Retry or failover to secondary provider/model |
-| **503 Service Unavailable** | `aisa_backend_unavailable` | No healthy backend instance is currently serving the requested model | Verify model name via `GET /v1/models` or check backend health |
+Every error is an OpenAI-style body, `{"error": {"message": …, "type": …, "code": …}}`. The answers of aisa's decision have a `code`; the proxy's own answers have only a `type`. Match on `code` first, then on `type`; the message is for people and may change.
 
-Sample 429 quota error response:
+| HTTP Status | `type` / `code` | From | Description | Client Action |
+|---|---|---|---|---|
+| **400** | `invalid_request_error` / `missing_model` | aisa | The request names no model | Send `model` in the body |
+| **400** | `invalid_request_error` / `invalid_model` | aisa | The model name is longer than 256 bytes | Use a name from `GET /v1/models` |
+| **401** | `invalid_request_error` / `invalid_api_key` | aisa | No `Authorization: Bearer` key, a key aisa does not know, or a replaced key after its grace period | Re-read the Secret (restart the pod, or mount it as a file), or check the consumer's declaration |
+| **403** | `invalid_request_error` / `no_quota` | aisa | The consumer has no quota profile, and the holder has set no default | Ask the holder to give the consumer a `quota_profile` |
+| **413** | `invalid_request_error` / `request_too_large` | aisa | The body is too large for aisa to find the model in it (the proxy normally spares aisa the body) | Make the request smaller |
+| **429** | `tokens` / `rate_limit_exceeded` | aisa | The consumer's hourly token quota is used up | Wait for `Retry-After` seconds; or ask for a larger quota profile |
+| **429** | `provider_rate_limited` | proxy | The provider limits the gateway's account | Back off with jitter and retry |
+| **431** | `invalid_request_error` | proxy | The request has more headers than the proxy reads | Send fewer headers |
+| **4xx** | `invalid_request_error` | proxy | The provider rejected the request (its own text is not passed on) | Check the request against the model's limits, such as its context length |
+| **502** | `provider_error` | proxy | The provider failed, or refused the gateway's credentials | Retry later; the holder sees the cause in the gateway's log |
+| **5xx** | `gateway_error` | proxy | The gateway could not reach a provider | Retry later |
+| **503** | `server_error` / `consumers_unavailable` or `quota_unavailable` | aisa | aisa cannot verify keys or the consumer's quota at the moment, and refuses rather than guesses | Retry with backoff |
+| **503** | `aisa_unreachable` | proxy | aisa is down and this model's backends do not serve without it | Retry with backoff, or use a local model that fails open |
+| **503** | `no_backend` | proxy | No healthy backend serves the model | Check the name in `GET /v1/models`; the model may be on a machine that is asleep |
+
+Sample 429 quota error response, with `Retry-After: 142`:
 
 ```json
 {
   "error": {
-    "message": "Token quota exceeded; retry after 142s",
-    "type": "aisa_quota_exceeded",
-    "code": 429
+    "message": "token quota exhausted: 1000412 of 1000000 tokens per hour used",
+    "type": "tokens",
+    "code": "rate_limit_exceeded"
   }
 }
 ```
 
+Budgets, and the downgrade to a cheaper model when one is used up, come in v0.3.0. Until then no version sends `X-Aisa-Budget-Remaining`, and a request is never answered by another model than the one it names.
+
 ### Timeouts & Streaming (`stream: true`)
 
 1. **Upstream Timeouts:**
-   - Model inference requests can be long-running (especially with large local models or complex reasoning). AISA backends are configured with timeouts up to **600 seconds**.
-   - Client HTTP clients (such as `httpx` or `requests`) should set an explicit read timeout of at least 120–600s rather than relying on default short timeouts.
+   - Model inference requests can be long-running (especially with large local models or complex reasoning). The proxy waits for a backend's next byte **300 seconds** by default; the holder can raise it per backend to at most **600 seconds** ([`CONSUL.md`](../concepts/CONSUL.md#backends-consul-catalog), meta `timeout`).
+   - The timeout applies to the wait for the next byte, so a streamed answer can take longer than it in total, and a non-streamed one cannot. Stream (`stream: true`) when an answer may take minutes.
+   - Client HTTP clients (such as `httpx` or `requests`) should set an explicit read timeout of at least 300 s rather than relying on default short timeouts.
 2. **Streaming Semantics:**
    - The AISA proxy natively streams Server-Sent Events (SSE) when `stream: true` is passed.
    - For OpenAI SDKs and compatible servers (such as Ollama), token counts are transmitted in the final chunk (`stream_options: {"include_usage": true}`).

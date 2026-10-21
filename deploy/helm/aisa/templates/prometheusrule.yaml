@@ -147,6 +147,18 @@ spec:
             description: >-
               Whole usage requests are rejected with none of their events read; the log sink drops
               them after its retries. The proxy's log format and aisa's version may not match.
+        - alert: AisaSlowDecisions
+          expr: histogram_quantile(0.95, sum by (le) (rate(aisa_decide_duration_seconds_bucket[5m]))) > 0.25
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "aisa takes over 250 ms to decide a request"
+            description: >-
+              The p95 time aisa takes to answer /v1/decide is {{ `{{ $value | humanizeDuration }}` }}.
+              Every request waits for it before it reaches a backend, and the backend's seconds hide
+              it from the client. aisa_decide_stage_duration_seconds shows whether the quota (Redis)
+              or the consumer lookup (Vault, on unknown keys) is slow.
         - alert: AisaSlowFirstToken
           expr: histogram_quantile(0.95, sum by (le, model, backend) (rate(aisa_ttft_seconds_bucket[15m]))) > 20
           for: 15m

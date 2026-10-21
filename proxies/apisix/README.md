@@ -11,7 +11,7 @@ The proxy operates APISIX in **standalone mode** (without etcd) using a two-hop 
 The proxy implements the three contracts of [`PROXY_CONTRACT.md`](../../docs/concepts/PROXY_CONTRACT.md):
 
 ```
-Client ──▶ [Port 9080: client route]
+Client ──▶ [Port 9080: client route: POST /v1/chat/completions, POST /v1/embeddings]
                  │
                  ├── (1) forward-auth ──▶ aisa /v1/decide
                  │
@@ -19,6 +19,7 @@ Client ──▶ [Port 9080: client route]
                                        │
                                        ├── model-<name> ──────────▶ Backend (e.g. Ollama, OpenAI)
                                        ├── fail-open-<name> ──────▶ Fail-open Backend
+                                       ├── embed-model-<name>, embed-fail-open-<name>: the same for /v1/embeddings
                                        ├── aisa-unreachable (503)
                                        └── no-backend (503)
             [Port 9080: models route] ──▶ GET /v1/models, answered by the gateway from the rendered models
@@ -34,7 +35,7 @@ Client ──▶ [Port 9080: client route]
   * Injects `X-Aisa-Request-Id: $apisix_request_id` to correlate decision and usage events.
 * `forward-auth` queries aisa `/v1/decide` with the client's `Authorization` and `X-Aisa-Requested-Model`.
 * On decision allow, forward-auth sets `X-Aisa-Consumer` and `X-Aisa-Model`, and forwards to the internal listener (`127.0.0.1:9081`).
-* Denials (400, 401, 413, 429, 503) pass directly to the client with `Retry-After` when set (Rule 4).
+* Denials (400, 401, 403, 413, 429, 503) pass directly to the client with `Retry-After` when set (Rule 4).
 
 ### 2. Usage Events (`POST /v1/usage`)
 

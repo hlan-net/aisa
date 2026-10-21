@@ -357,3 +357,49 @@ func TestAProviderErrorAndAccountHeaders(t *testing.T) {
 		t.Errorf("after DELETE: status %d, headers %v, err %v", d.StatusCode, last.Headers, err)
 	}
 }
+
+func TestEmbeddings(t *testing.T) {
+	srv := newTestServer(t, Config{Models: []string{"nomic-embed"}})
+	for _, tc := range []struct {
+		name, body          string
+		wantStatus, vectors int
+		wantPrompt          int
+	}{
+		{"one input", `{"model":"nomic-embed","input":"hello there world"}`, 200, 1, 3},
+		{"several inputs", `{"model":"nomic-embed","input":["hello there","world"]}`, 200, 2, 3},
+		{"no input", `{"model":"nomic-embed","input":[]}`, 400, 0, 0},
+		{"an empty input", `{"model":"nomic-embed","input":["hello", " "]}`, 400, 0, 0},
+		{"another model", `{"model":"qwen3","input":"hello"}`, 404, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/embeddings", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
+			}
+			if tc.wantStatus != http.StatusOK {
+				return
+			}
+			var out struct {
+				Data  []struct{ Embedding []float64 } `json:"data"`
+				Usage map[string]int                  `json:"usage"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+				t.Fatal(err)
+			}
+			if len(out.Data) != tc.vectors || len(out.Data[0].Embedding) == 0 {
+				t.Errorf("data = %+v, want %d vectors", out.Data, tc.vectors)
+			}
+			if out.Usage["prompt_tokens"] != tc.wantPrompt || out.Usage["total_tokens"] != tc.wantPrompt {
+				t.Errorf("usage = %v, want %d prompt tokens", out.Usage, tc.wantPrompt)
+			}
+		})
+	}
+}

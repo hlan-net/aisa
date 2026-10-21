@@ -38,6 +38,7 @@ POST /v1/decide            (GET is accepted too, for gateways that cannot send a
                          the header, only the dev stub, so v1 is corrected instead of versioned.
        400 no model in the header or the body, or a model name longer than 256 bytes
        401 unknown or invalid credential
+       403 the consumer has no quota profile and aisa has no default (no_quota)
        413 no model in the header, and the body is larger than 16 MiB
        429 quota or budget exhausted, with Retry-After in seconds for a token quota
        503 aisa cannot verify credentials: its consumers could not be read from Vault recently
@@ -57,7 +58,7 @@ Spike S8 showed that these must hold for the decision to be safe and for downgra
 1. **Strip client-supplied `X-Aisa-*` headers** before the decision. Some forward-auth implementations clear them only on a successful answer, so a client could otherwise choose the model itself when aisa is unreachable and the proxy fails open.
 2. **Set `X-Aisa-Requested-Model` from the body**, overwriting any client value, or forward the body.
 3. **Route by `X-Aisa-Model` and forward the request with that model**, not the one the client asked for. A downgrade changes both the backend and the model name in the forwarded body.
-4. **Pass every answer aisa returns to the client unchanged**: 400, 401, 413, 429 and 503, with `Retry-After` when aisa sets it. A 503 from aisa is a decision (fail closed: it cannot verify credentials or quotas), not an outage, and must never lead to fail-open routing. aisa is *unreachable* only when the gateway gets no answer from it: the connection fails or the request times out. Then the gateway answers 503 itself when the requested model has no backend with `fail_policy = "open"`.
+4. **Pass every answer aisa returns to the client unchanged**: 400, 401, 403, 413, 429 and 503, with `Retry-After` when aisa sets it. A 503 from aisa is a decision (fail closed: it cannot verify credentials or quotas), not an outage, and must never lead to fail-open routing. aisa is *unreachable* only when the gateway gets no answer from it: the connection fails or the request times out. Then the gateway answers 503 itself when the requested model has no backend with `fail_policy = "open"`.
 5. **When aisa is unreachable, route by `X-Aisa-Requested-Model`** (rule 2), and only to the model's backends with `fail_policy = "open"`. Never route by `X-Aisa-Model` then: no decision set it. There is no downgrade, and any credential is accepted, including an unknown one. The usage events of these requests have an empty `consumer`; aisa counts them under the consumer `unknown` and charges no quota or budget.
 
 ## 2. Usage events (after the request)
@@ -201,7 +202,9 @@ aisa exports its own normalized metrics, so the dashboards and alerts work with 
 | `aisa_cost_total` | consumer, model, currency |
 | `aisa_budget_limit`, `aisa_budget_spent` | consumer, period |
 | `aisa_latency_seconds`, `aisa_ttft_seconds` (histograms) | model, backend |
-| `aisa_decisions_total` | consumer, result (`allow`/`deny_auth`/`invalid`/`unavailable`/`deny_quota`/`deny_budget`/`downgrade`); a rejected credential and a 503 before the credential is checked count under the consumer `unknown` |
+| `aisa_decisions_total` | consumer, result (`allow`/`deny_auth`/`invalid`/`no_quota`/`unavailable`/`deny_quota`/`deny_budget`/`downgrade`); a rejected credential and a 503 before the credential is checked count under the consumer `unknown` |
+| `aisa_decide_duration_seconds` (histogram) | result, as in `aisa_decisions_total`: the time aisa took to answer `/v1/decide`, without the network to and from the gateway |
+| `aisa_decide_stage_duration_seconds` (histogram) | stage (`consumer`: finding the key's consumer, which waits for a reload from Vault only on an unknown key; `quota`: reading the token usage from Redis) |
 | `aisa_usage_events_total` | result (`accepted`/`duplicate`/`rejected`) |
 | `aisa_usage_requests_rejected_total` | reason (`malformed`/`too_large`/`unreadable`): usage requests rejected as a whole, whose events are in no other metric |
 | `aisa_usage_missing_total` | consumer, model, backend: successful requests reported without token counts, which aisa charges by estimate |
@@ -218,7 +221,7 @@ A proxy is complete when it provides:
 2. a usage log sink with an explicit format that maps to the event schema, including streaming token counts, and carries no credentials
 3. a consul-template template for the gateway config, with an explicit upstream timeout, the [check](#checking-the-rendered-config) before the gateway loads it, and the [report](#reporting-a-render) of each render
 4. an example deployment and an integration test against a mock backend
-5. the client-facing paths of the OpenAI-compatible API: `POST /v1/chat/completions` through the decision, and `GET /v1/models` from the rendered models
+5. the client-facing paths of the OpenAI-compatible API: `POST /v1/chat/completions` and `POST /v1/embeddings` through the decision, each sent to the backend on the same path, and `GET /v1/models` from the rendered models. An embedding's usage event has prompt tokens and no completion tokens. Provider-native APIs (such as `/v1/messages`) and `/v1/completions` are not part of the contract
 6. [account isolation](#account-isolation): an allowlist of the request headers a provider gets and of the response headers a client gets, and a provider's error bodies replaced by the gateway's, covered by the integration test
 
 ## Versioning

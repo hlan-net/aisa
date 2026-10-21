@@ -214,6 +214,16 @@ done
 [[ "$tokens" != 0 ]] || fail "usage events reached aisa"
 ok "usage events reached aisa ($tokens tokens for chat-ui)"
 
+# aisa times its own decisions (#71): every request above was decided, and a decision takes a
+# small part of a request, well under a second, even on a runner.
+decide=$(curl -fsS http://127.0.0.1:18090/metrics |
+    awk '/^aisa_decide_duration_seconds_count/{n += $2} /^aisa_decide_duration_seconds_sum/{s += $2} END {printf "%d %f", n, s}')
+read -r decide_count decide_sum <<<"$decide"
+(( decide_count >= 3 )) || fail "aisa timed its decisions: want at least 3, got $decide_count"
+awk -v n="$decide_count" -v s="$decide_sum" 'BEGIN { exit !(s / n < 1) }' ||
+    fail "aisa's decisions take under a second on average: $decide_sum s for $decide_count"
+ok "aisa timed its decisions ($decide_count in $decide_sum s)"
+
 echo "== Kubernetes objects"
 # The consumer's Secret: written by aisa, with a key that it issued.
 for _ in $(seq 1 60); do
@@ -236,6 +246,19 @@ done
 expect "the key in the Secret passes the proxy" 200 "$status"
 issued=$(curl -fsS http://127.0.0.1:18090/metrics | awk '/^aisa_consumer_keys_issued_total\{reason="new"\}/{print $2}')
 expect "aisa counted the key it issued" 1 "$issued"
+
+# aisa's Kubernetes client is not rate limited by client-go (#70); the log is at debug, where
+# client-go reports its waits. Its requests are in aisa's metrics.
+# Read whole, not piped into grep -q: with pipefail, grep's early exit would fail the pipe.
+aisa_log=$("${K[@]}" logs deploy/"$RELEASE" -c aisa)
+if grep -q 'client-side throttling' <<<"$aisa_log"; then
+    fail "aisa's Kubernetes client does not throttle itself"
+fi
+ok "aisa's Kubernetes client does not throttle itself"
+metrics=$(curl -fsS http://127.0.0.1:18090/metrics)
+grep -q '^rest_client_requests_total{' <<<"$metrics" ||
+    fail "aisa's metrics have its Kubernetes client's requests"
+ok "aisa's metrics have its Kubernetes client's requests"
 
 # The Model objects: one per model on offer, found by what they can do.
 for _ in $(seq 1 60); do
@@ -265,6 +288,50 @@ if kubectl -n "$APP_NS" get secret aisa >/dev/null 2>&1; then
 fi
 ok "the Secret of a removed consumer is deleted"
 expect "the key of a removed consumer" 401 "$(chat "$key" qwen3)"
+
+echo "== a backend registered in the catalog"
+# A backend outside the cluster is registered through the catalog, on a node without a Consul
+# agent, as CONSUL.md's Terraform example does (#69). Nothing runs its check, so its status is
+# what the registration wrote, and the catalog's default is critical.
+port_forward consul 18500 8500
+catalog() {
+    local path=$1 body=$2
+    curl -fsS -o /dev/null -X PUT -H "X-Consul-Token: test-root" -d "$body" "http://127.0.0.1:18500/v1/catalog/$path"
+}
+static_backend() {
+    local status=$1
+    jq -cn --arg addr "mock-local.$NS.svc.cluster.local" --arg status "$status" '{
+        Node: "static-box", Address: $addr, NodeMeta: {"external-node": "true"},
+        Service: {ID: "mock-static", Service: "aisa-backend", Address: $addr, Port: 8080,
+                  Meta: {provider: "openai-compatible", models: "static-model"}},
+        Check: ({CheckID: "service:mock-static", Name: "mock-static", ServiceID: "mock-static"}
+                + if $status == "" then {} else {Status: $status} end)}'
+}
+listed() {
+    curl -fsS http://127.0.0.1:19080/v1/models | jq -r '[.data[].id] | index("static-model") != null'
+}
+check_output() {
+    curl -fsS -H "X-Consul-Token: test-root" "http://127.0.0.1:18500/v1/health/checks/aisa-backend" |
+        jq -r '[.[] | select(.CheckID == "service:mock-static")][0] | [.Status, .Output] | @tsv'
+}
+catalog register "$(static_backend "")"
+# Give the proxy the time it takes to render a change, and more, before saying it did not.
+sleep 10
+expect "a catalog registration without a status is critical, with no output" $'critical\t' "$(check_output)"
+expect "a critical backend's model is not on offer" false "$(listed)"
+catalog register "$(static_backend passing)"
+for _ in $(seq 1 60); do
+    [[ "$(listed)" = true ]] && break
+    sleep 1
+done
+expect "a catalog registration with status passing is passing, with no output" $'passing\t' "$(check_output)"
+expect "a passing backend's model is on offer" true "$(listed)"
+catalog deregister '{"Node": "static-box"}'
+for _ in $(seq 1 60); do
+    [[ "$(listed)" = false ]] && break
+    sleep 1
+done
+expect "a deregistered backend's model is no longer on offer" false "$(listed)"
 
 echo "== admin interface"
 port_forward "$RELEASE" 18080 8080

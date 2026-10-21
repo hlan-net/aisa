@@ -40,7 +40,7 @@ func newHandler(unavailable bool) (*Handler, *metrics.Metrics) {
 		keys:        map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}},
 		unavailable: unavailable,
 	}
-	return New(l, nil, m, slog.New(slog.NewTextHandler(io.Discard, nil))), m
+	return New(l, nil, m, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{}), m
 }
 
 type decideCase struct {
@@ -398,7 +398,7 @@ func TestQuota(t *testing.T) {
 			m := metrics.New("test")
 			q := &fakeQuota{verdict: tc.verdict}
 			l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}}}
-			h := New(l, q, m, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			h := New(l, q, m, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 
 			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"qwen3"}`))
 			req.Header.Set("Authorization", "Bearer key-chat")
@@ -438,7 +438,7 @@ func checkDenial(t *testing.T, rec *httptest.ResponseRecorder, wantCode string) 
 func TestQuotaNotCheckedForInvalidRequests(t *testing.T) {
 	q := &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Exhausted}}
 	l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui"}}}
-	h := New(l, q, metrics.New("test"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(l, q, metrics.New("test"), slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 	for _, auth := range []string{"Bearer nope", "Bearer key-chat"} {
 		// The second has a known key but no model.
 		req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{}`))
@@ -447,5 +447,106 @@ func TestQuotaNotCheckedForInvalidRequests(t *testing.T) {
 	}
 	if len(q.checked) != 0 {
 		t.Errorf("quota checked for %d invalid requests", len(q.checked))
+	}
+}
+
+// TestDecideDuration checks that each answer is timed once, under the result it counted, and
+// that the stages it went through are timed too.
+func TestDecideDuration(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		key        string
+		verdict    quotas.Verdict
+		wantResult string
+		wantStages map[string]uint64
+	}{
+		{"allow", "key-chat", quotas.Verdict{Outcome: quotas.Allow}, metrics.ResultAllow,
+			map[string]uint64{metrics.StageConsumer: 1, metrics.StageQuota: 1}},
+		{"unknown key", "nope", quotas.Verdict{Outcome: quotas.Allow}, metrics.ResultDenyAuth,
+			map[string]uint64{metrics.StageConsumer: 1, metrics.StageQuota: 0}},
+		{"quota exhausted", "key-chat", quotas.Verdict{Outcome: quotas.Exhausted, Limit: 1, Used: 1}, metrics.ResultDenyQuota,
+			map[string]uint64{metrics.StageConsumer: 1, metrics.StageQuota: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := metrics.New("test")
+			l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}}}
+			h := New(l, &fakeQuota{verdict: tc.verdict}, m, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"qwen3"}`))
+			req.Header.Set("Authorization", "Bearer "+tc.key)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+
+			got := histogramCounts(t, m, "aisa_decide_duration_seconds", "result")
+			if len(got) != 1 || got[tc.wantResult] != 1 {
+				t.Errorf("aisa_decide_duration_seconds counts = %v, want 1 under %s only", got, tc.wantResult)
+			}
+			stages := histogramCounts(t, m, "aisa_decide_stage_duration_seconds", "stage")
+			for stage, want := range tc.wantStages {
+				if stages[stage] != want {
+					t.Errorf("aisa_decide_stage_duration_seconds{stage=%q} count = %d, want %d", stage, stages[stage], want)
+				}
+			}
+		})
+	}
+}
+
+// histogramCounts returns the sample counts of a histogram by the value of one label.
+func histogramCounts(t *testing.T, m *metrics.Metrics, name, label string) map[string]uint64 {
+	t.Helper()
+	families, err := m.Gatherer().Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]uint64{}
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		for _, s := range f.GetMetric() {
+			for _, l := range s.GetLabel() {
+				if l.GetName() == label {
+					counts[l.GetValue()] += s.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	return counts
+}
+
+func TestNoQuotaProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name, defaultProfile string
+		wantStatus           int
+		wantCode, wantResult string
+		wantChecked          string
+	}{
+		{"denied without a default", "", 403, "no_quota", metrics.ResultNoQuota, ""},
+		{"the default applies", "batch", 200, "", metrics.ResultAllow, "batch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := metrics.New("test")
+			q := &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Allow}}
+			l := fakeLookup{keys: map[string]consumers.Consumer{"key-open": {Name: "open-ended"}}}
+			h := New(l, q, m, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{DefaultQuotaProfile: tc.defaultProfile})
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"qwen3"}`))
+			req.Header.Set("Authorization", "Bearer key-open")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.wantStatus, rec.Body)
+			}
+			checkDenial(t, rec, tc.wantCode)
+			if n := testutil.ToFloat64(m.Decisions.WithLabelValues("open-ended", tc.wantResult)); n != 1 {
+				t.Errorf("aisa_decisions_total{open-ended,%s} = %v, want 1", tc.wantResult, n)
+			}
+			switch {
+			case tc.wantChecked == "" && len(q.checked) != 0:
+				t.Errorf("quota checked for a denied consumer: %+v", q.checked)
+			case tc.wantChecked != "" && (len(q.checked) != 1 || q.checked[0].QuotaProfile != tc.wantChecked):
+				t.Errorf("checked = %+v, want the profile %s", q.checked, tc.wantChecked)
+			}
+		})
 	}
 }

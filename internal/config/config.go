@@ -33,7 +33,10 @@ type Config struct {
 	// configured too.
 	Consul Consul
 	Redis  Redis
-	Admin  Admin
+	// DefaultQuotaProfile is the quota profile of a consumer whose declaration names none
+	// (AISA_DEFAULT_QUOTA_PROFILE). Empty: such a consumer is denied (403 no_quota).
+	DefaultQuotaProfile string
+	Admin               Admin
 	// Kubernetes is off outside a cluster.
 	Kubernetes Kubernetes
 }
@@ -364,6 +367,7 @@ func quotasFromEnv(getenv func(string) string, cfg *Config) error {
 	if c.Token != "" && c.TokenFile != "" {
 		return fmt.Errorf("set CONSUL_HTTP_TOKEN or CONSUL_HTTP_TOKEN_FILE, not both")
 	}
+	cfg.DefaultQuotaProfile = strings.TrimSpace(getenv("AISA_DEFAULT_QUOTA_PROFILE"))
 	r := &cfg.Redis
 	r.Addr = getenv("AISA_REDIS_ADDR")
 	r.Username = getenv("AISA_REDIS_USERNAME")

@@ -13,7 +13,7 @@ aisa — **AI Service [Access, Admin, Authority]** — offers inference to the a
 | Path | Contents |
 |---|---|
 | `docs/concepts/` | The core design: `ARCHITECTURE.md`, `PROXY_CONTRACT.md` (the three aisa ↔ proxy contracts), `VAULT.md`, `CONSUL.md`, `KUBERNETES_OBJECTS.md` (what applications see: `Model` objects and their Secret) |
-| `docs/features/` | User-facing capabilities: `quotas-and-budgets.md`, `usage-metrics.md` |
+| `docs/features/` | User-facing capabilities: `quotas-and-budgets.md`, `usage-metrics.md`, `client-integration.md` (for the developers of applications), `admin-interface.md` |
 | `docs/process/` | How work is done: `SPIKES.md` (open questions and their outcomes), `USER_STORIES.md` (who aisa is built for, US-1 to US-3, with acceptance criteria and gaps) |
 | `cmd/aisa/`, `internal/` | aisa itself: `config` (environment variables), `server` (HTTP, health), `metrics` (the `aisa_*` registry), `vault`, `consumers`, `decide`, `ledger`, `consul`, `pricing`, `quotas`, `kube` (the consumers' Secrets and the `Model` objects), `render`, `version` |
 | `Dockerfile` | The product image: a static binary in a distroless image, amd64 and arm64 |

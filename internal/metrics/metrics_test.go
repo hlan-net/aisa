@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -20,6 +21,8 @@ func TestContractMetrics(t *testing.T) {
 	m.Latency.WithLabelValues("qwen3", "ollama-1").Observe(12)
 	m.TTFT.WithLabelValues("qwen3", "ollama-1").Observe(0.8)
 	m.Decisions.WithLabelValues("chat-ui", ResultAllow).Inc()
+	m.DecideDuration.WithLabelValues(ResultAllow).Observe(0.001)
+	m.DecideStageDuration.WithLabelValues(StageQuota).Observe(0.0005)
 	m.UsageEvents.WithLabelValues(EventAccepted).Inc()
 	m.UsageRequestsRejected.WithLabelValues(UsageRequestMalformed).Inc()
 	m.UsageMissing.WithLabelValues("chat-ui", "qwen3", "ollama-1").Inc()
@@ -33,6 +36,7 @@ func TestContractMetrics(t *testing.T) {
 	for _, name := range []string{
 		"aisa_requests_total", "aisa_tokens_total", "aisa_cost_total", "aisa_budget_limit",
 		"aisa_budget_spent", "aisa_latency_seconds", "aisa_ttft_seconds", "aisa_decisions_total",
+		"aisa_decide_duration_seconds", "aisa_decide_stage_duration_seconds",
 		"aisa_usage_events_total", "aisa_usage_requests_rejected_total", "aisa_usage_missing_total",
 		"aisa_tokens_estimated_total", "aisa_config_renders_total", "aisa_config_rendered_timestamp_seconds",
 		"aisa_config_backends", "aisa_config_models", "aisa_build_info",
@@ -77,5 +81,20 @@ func TestHandler(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the output lacks %q", want)
 		}
+	}
+}
+
+func TestRegister(t *testing.T) {
+	m := New("test")
+	c := prometheus.NewCounter(prometheus.CounterOpts{Name: "rest_client_requests_total", Help: "test"})
+	if err := m.Register(c); err != nil {
+		t.Fatal(err)
+	}
+	c.Inc()
+	if n, _ := testutil.GatherAndCount(m.Gatherer(), "rest_client_requests_total"); n != 1 {
+		t.Errorf("a registered collector is not served: %d series", n)
+	}
+	if err := m.Register(c); err == nil {
+		t.Error("registering a collector twice: want an error")
 	}
 }

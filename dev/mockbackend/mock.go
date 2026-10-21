@@ -55,6 +55,9 @@ type server struct {
 // and an error body that names the account and the key, as a provider's can: "mock:error:401".
 const errorTrigger = "mock:error:"
 
+// headerBackend names the backend that answered, for tests that look past the gateway.
+const headerBackend = "X-Mock-Backend"
+
 // accountHeaders are what a provider says about the account in its response headers, as
 // OpenAI does; a gateway must not pass them on.
 var accountHeaders = map[string]string{
@@ -78,6 +81,7 @@ func newServer(cfg Config, log *slog.Logger) http.Handler {
 	})
 	mux.HandleFunc("GET /v1/models", s.models)
 	mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
+	mux.HandleFunc("POST /v1/embeddings", s.embeddings)
 	// A minimal part of Ollama's native API, so scripts written for a real Ollama can run
 	// against the mock.
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
@@ -133,14 +137,21 @@ func (s *server) models(w http.ResponseWriter, _ *http.Request) {
 	devutil.WriteJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
-func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+// answering begins the answer of an OpenAI-compatible endpoint: it keeps the request's headers
+// for GET /debug/last-request and sets the response headers a provider sets, the backend's
+// name and the account headers a gateway must strip, whatever the endpoint.
+func (s *server) answering(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.last = r.Header.Clone()
 	s.mu.Unlock()
-	w.Header().Set("X-Mock-Backend", s.cfg.Name)
+	w.Header().Set(headerBackend, s.cfg.Name)
 	for k, v := range accountHeaders {
 		w.Header().Set(k, v)
 	}
+}
+
+func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	s.answering(w, r)
 
 	var req chatRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
@@ -215,6 +226,63 @@ func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.stream(w, r, id, created, req.Model, u, finish, includeUsage)
+}
+
+// embeddingVector is the vector of every input: the mock models no meaning, only the shape.
+var embeddingVector = []float64{0.1, 0.2, 0.3, 0.4}
+
+// embeddings answers POST /v1/embeddings with one vector per input, a string or an array of
+// strings, and prompt tokens counted as words, as for a chat; an embedding has no completion.
+func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
+	s.answering(w, r)
+
+	var req struct {
+		Model string          `json:"model"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
+		devutil.WriteOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json",
+			fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+	if req.Model == "" {
+		devutil.WriteOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "missing_model", "model is required")
+		return
+	}
+	if len(s.cfg.Models) > 0 && !slices.Contains(s.cfg.Models, req.Model) {
+		devutil.WriteOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found",
+			fmt.Sprintf("model %q is not served by %s", req.Model, s.cfg.Name))
+		return
+	}
+	var inputs []string
+	var one string
+	if err := json.Unmarshal(req.Input, &one); err == nil {
+		inputs = []string{one}
+	} else if err := json.Unmarshal(req.Input, &inputs); err != nil || len(inputs) == 0 {
+		devutil.WriteOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_input",
+			"input must be a string or a non-empty array of strings")
+		return
+	}
+	// An empty input is refused, as OpenAI refuses it: answered 200 with no tokens, it would be
+	// a success without usage to aisa, which charges such a request by estimate.
+	if slices.ContainsFunc(inputs, func(in string) bool { return strings.TrimSpace(in) == "" }) {
+		devutil.WriteOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_input",
+			"input must not be empty")
+		return
+	}
+	data := make([]map[string]any, 0, len(inputs))
+	prompt := 0
+	for i, in := range inputs {
+		prompt += len(strings.Fields(in))
+		data = append(data, map[string]any{"object": "embedding", "index": i, "embedding": embeddingVector})
+	}
+	s.log.Info("embeddings", "backend", s.cfg.Name, "model", req.Model, "inputs", len(inputs), "prompt_tokens", prompt)
+	devutil.WriteJSON(w, http.StatusOK, map[string]any{
+		"object": "list",
+		"data":   data,
+		"model":  req.Model,
+		"usage":  map[string]int{"prompt_tokens": prompt, "total_tokens": prompt},
+	})
 }
 
 // stream writes an OpenAI-style server-sent event stream with one chunk per token.
@@ -381,7 +449,7 @@ func sleep(r *http.Request, d time.Duration) bool {
 // ollamaChat answers Ollama's native POST /api/chat, non-streaming only, with the same token
 // counts as the OpenAI endpoint: prompt_eval_count and eval_count.
 func (s *server) ollamaChat(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("X-Mock-Backend", s.cfg.Name)
+	w.Header().Set(headerBackend, s.cfg.Name)
 	var req struct {
 		Model    string        `json:"model"`
 		Messages []chatMessage `json:"messages"`
