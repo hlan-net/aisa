@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -80,5 +81,20 @@ func TestHandler(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the output lacks %q", want)
 		}
+	}
+}
+
+func TestRegister(t *testing.T) {
+	m := New("test")
+	c := prometheus.NewCounter(prometheus.CounterOpts{Name: "rest_client_requests_total", Help: "test"})
+	if err := m.Register(c); err != nil {
+		t.Fatal(err)
+	}
+	c.Inc()
+	if n, _ := testutil.GatherAndCount(m.Gatherer(), "rest_client_requests_total"); n != 1 {
+		t.Errorf("a registered collector is not served: %d series", n)
+	}
+	if err := m.Register(c); err == nil {
+		t.Error("registering a collector twice: want an error")
 	}
 }

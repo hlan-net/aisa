@@ -239,12 +239,9 @@ func runKubernetes(ctx context.Context, cfg config.Config, src kubeSources, m *m
 	if err != nil {
 		return fmt.Errorf("kubernetes: %w", err)
 	}
-	rc = kube.Unthrottled(rc)
-	cm := kube.NewClientMetrics()
-	if err := m.Register(cm.Collectors()...); err != nil {
+	if rc, err = kube.ClientConfig(rc, m.Register); err != nil {
 		return fmt.Errorf("kubernetes: %w", err)
 	}
-	cm.Install()
 	k8s, err := kubernetes.NewForConfig(rc)
 	if err != nil {
 		return fmt.Errorf("kubernetes: %w", err)

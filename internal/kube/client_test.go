@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -76,4 +77,47 @@ func mustURL(t *testing.T, s string) url.URL {
 		t.Fatal(err)
 	}
 	return *u
+}
+
+// TestClientConfigCountsRequests makes a request with a client of ClientConfig and finds it in
+// the registry the metrics were registered in.
+func TestClientConfigCountsRequests(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Namespace","apiVersion":"v1","metadata":{"name":"aisa"}}`))
+	}))
+	defer api.Close()
+
+	reg := prometheus.NewRegistry()
+	rc, err := ClientConfig(&rest.Config{Host: api.URL}, func(cs ...prometheus.Collector) error {
+		for _, c := range cs {
+			if err := reg.Register(c); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.QPS != -1 {
+		t.Errorf("QPS = %v, want -1", rc.QPS)
+	}
+	k8s, err := kubernetes.NewForConfig(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k8s.CoreV1().Namespaces().Get(context.Background(), "aisa", metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := testutil.GatherAndCount(reg, "rest_client_requests_total", "rest_client_request_duration_seconds"); err != nil || n != 2 {
+		t.Errorf("client metrics after one request: %d series, err %v; want 2", n, err)
+	}
+}
+
+func TestClientConfigFailsWithoutItsMetrics(t *testing.T) {
+	_, err := ClientConfig(&rest.Config{}, func(...prometheus.Collector) error { return errors.New("duplicate") })
+	if err == nil {
+		t.Fatal("want an error when the metrics cannot be registered")
+	}
 }

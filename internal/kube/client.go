@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync"
 	"time"
@@ -20,6 +21,17 @@ func Unthrottled(rc *rest.Config) *rest.Config {
 	rc.QPS = -1
 	rc.RateLimiter = nil
 	return rc
+}
+
+// ClientConfig is the config of aisa's Kubernetes clients: unthrottled, with client-go's
+// metrics registered through register and in use.
+func ClientConfig(rc *rest.Config, register func(...prometheus.Collector) error) (*rest.Config, error) {
+	cm := NewClientMetrics()
+	if err := register(cm.Collectors()...); err != nil {
+		return nil, fmt.Errorf("kubernetes client metrics: %w", err)
+	}
+	cm.Install()
+	return Unthrottled(rc), nil
 }
 
 // ClientMetrics are the Kubernetes client's metrics, under the names client-go's own
