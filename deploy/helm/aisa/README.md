@@ -8,7 +8,7 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> -n aisa -
   --set global.consul.addr=consul-server.consul.svc:8500
 ```
 
-Applications call the proxy's Service, `aisa-apisix` for a release named `aisa`, at `http://aisa-apisix.aisa.svc/v1`, never aisa itself.
+Applications call the proxy's Service, `aisa-apisix` for a release named `aisa`, at `http://aisa-apisix.aisa.svc/v1`, never aisa itself. How an application gets its credential, finds the models and handles the errors is in [`client-integration.md`](../../../docs/features/client-integration.md).
 
 ## What it installs
 
