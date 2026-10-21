@@ -116,11 +116,15 @@ expect "a fail-open route for the long model name" "\"http_x_aisa_requested_mode
 route() { awk -v id="$1" '$0 == "  - id: " id { f = 1; next } /^  - id: / { f = 0 } f' "$RENDERED"; }
 expect_in_route() {
     local what=$1 id=$2 pattern=$3
-    route "$id" | grep -q -- "$pattern" || fail "$what"
+    route "$id" | grep -q -- "$pattern" || {
+        echo "route $id, in which '$pattern' was not found:" >&2
+        route "$id" | grep -v '^ *#' | head -n 60 >&2
+        fail "$what"
+    }
     echo "ok: $what"
 }
 expect_in_route "the default timeout of 300 s" '"model-qwen3"' '^        timeout: 300000$'
-expect_in_route "the budget header goes upstream from the decision" 'client' 'upstream_headers: \[X-Aisa-Consumer, X-Aisa-Model, X-Aisa-Budget-Remaining\]'
+expect_in_route "the budget header goes upstream from the decision" 'client' 'upstream_headers: .X-Aisa-Consumer, X-Aisa-Model, X-Aisa-Budget-Remaining.$'
 expect_in_route "the budget header is copied to the client's response" 'client' '^            X-Aisa-Budget-Remaining: \$http_x_aisa_budget_remaining$'
 expect_in_route "a fast failure is retried on another instance (S11)" '"model-qwen3"' '^        fallback_strategy: \[http_5xx\]$'
 expect_in_route "a slow failure is not retried (S11)" '"model-qwen3"' '^        retry_on_failure_within_ms: 5000$'

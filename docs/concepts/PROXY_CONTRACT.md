@@ -41,7 +41,8 @@ POST /v1/decide            (GET is accepted too, for gateways that cannot send a
        403 the consumer has no quota profile and aisa has no default (no_quota)
        413 no model in the header, and the body is larger than 16 MiB
        429 quota exhausted (rate_limit_exceeded), with Retry-After in seconds; or the monthly
-           budget exhausted on a priced model (budget_exhausted, type insufficient_quota),
+           budget exhausted on a priced model (budget_exhausted, type insufficient_quota), or
+           the budget of a provider account that serves the model (provider_budget_exhausted),
            without Retry-After: the month decides
        503 aisa cannot verify credentials: its consumers could not be read from Vault recently
            enough; or it cannot know the consumer's token quota or budget: its quota profile or
@@ -205,7 +206,7 @@ aisa exports its own normalized metrics, so the dashboards and alerts work with 
 | `aisa_cost_total` | consumer, model, currency |
 | `aisa_budget_limit`, `aisa_budget_spent` | consumer, period |
 | `aisa_latency_seconds`, `aisa_ttft_seconds` (histograms) | model, backend |
-| `aisa_decisions_total` | consumer, result (`allow`/`deny_auth`/`invalid`/`no_quota`/`unavailable`/`deny_quota`/`deny_budget`/`downgrade`); a rejected credential and a 503 before the credential is checked count under the consumer `unknown` |
+| `aisa_decisions_total` | consumer, result (`allow`/`deny_auth`/`invalid`/`no_quota`/`unavailable`/`deny_quota`/`deny_budget`/`deny_provider_budget`/`downgrade`); a rejected credential and a 503 before the credential is checked count under the consumer `unknown` |
 | `aisa_decide_duration_seconds` (histogram) | result, as in `aisa_decisions_total`: the time aisa took to answer `/v1/decide`, without the network to and from the gateway |
 | `aisa_decide_stage_duration_seconds` (histogram) | stage (`consumer`: finding the key's consumer, which waits for a reload from Vault only on an unknown key; `quota`: reading the token usage from Redis) |
 | `aisa_usage_events_total` | result (`accepted`/`duplicate`/`rejected`) |

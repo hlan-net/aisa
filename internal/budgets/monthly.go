@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/hlan-net/aisa/internal/consul"
 	"github.com/hlan-net/aisa/internal/metrics"
 )
@@ -57,9 +59,14 @@ type Verdict struct {
 	Soft bool
 	// OnExhausted and DowngradeTo are the budget's, for an Exhausted verdict.
 	OnExhausted, DowngradeTo string
+	// Provider is the key whose budget answered, for a verdict of the Ceiling.
+	Provider string
 	// Err says why the budget is Unavailable.
 	Err error
 }
+
+// errCatalogNotLoaded: the backends have not been read from Consul yet.
+var errCatalogNotLoaded = errors.New("backend catalog not loaded yet")
 
 // Pricer says whether a model has a price; pricing.Prices does.
 type Pricer interface {
@@ -77,6 +84,9 @@ type MonthlyOptions struct {
 	Persist time.Duration
 	// StatePrefix is where the totals are kept, such as "aisa/state/".
 	StatePrefix string
+	// Limit and Spent are the gauges of the budgets and their use, by name and period:
+	// aisa_budget_limit and aisa_budget_spent when nil, as for the consumers' budgets.
+	Limit, Spent *prometheus.GaugeVec
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
 }
@@ -114,6 +124,12 @@ func NewMonthly(b *Budgets, c Counter, kv KV, p Pricer, m *metrics.Metrics, log 
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	if opts.Limit == nil {
+		opts.Limit = m.BudgetLimit
+	}
+	if opts.Spent == nil {
+		opts.Spent = m.BudgetSpent
 	}
 	opts.StatePrefix = strings.TrimSuffix(opts.StatePrefix, "/") + "/"
 	return &Monthly{
@@ -192,7 +208,7 @@ func (mo *Monthly) Charge(ctx context.Context, consumer string, tokens int64, at
 	mo.mu.Lock()
 	mo.dirty[periodKey{consumer, period}] = true
 	mo.mu.Unlock()
-	mo.metrics.BudgetSpent.WithLabelValues(consumer, period).Set(float64(total))
+	mo.opts.Spent.WithLabelValues(consumer, period).Set(float64(total))
 	return nil
 }
 
@@ -241,8 +257,10 @@ func (mo *Monthly) load(ctx context.Context) {
 	defer mo.mu.Unlock()
 	n := 0
 	for _, p := range pairs {
+		// One level, <name>/<period>: a deeper key belongs to another set of budgets, such as
+		// the providers' under the consumers' prefix.
 		consumer, period, ok := strings.Cut(strings.TrimPrefix(p.Key, mo.opts.StatePrefix), "/")
-		if !ok || consumer == "" || period == "" {
+		if !ok || consumer == "" || period == "" || strings.Contains(period, "/") {
 			continue
 		}
 		var s state
@@ -312,8 +330,8 @@ func (mo *Monthly) observe(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		mo.metrics.BudgetLimit.WithLabelValues(consumer, period).Set(float64(bud.MonthlyTokens))
-		mo.metrics.BudgetSpent.WithLabelValues(consumer, period).Set(float64(mo.used(ctx, consumer, period)))
+		mo.opts.Limit.WithLabelValues(consumer, period).Set(float64(bud.MonthlyTokens))
+		mo.opts.Spent.WithLabelValues(consumer, period).Set(float64(mo.used(ctx, consumer, period)))
 	}
 }
 

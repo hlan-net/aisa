@@ -201,6 +201,41 @@ for _ in $(seq 1 30); do
 done
 expect "aisa: the budget restored, the priced model is served again" "200 batch-jobs cloud-large" "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')"
 
+echo "== aisa: a budget per provider account"
+# A backend with a key, registered for this run on the dev agent (no check: an agent
+# registration without one is passing): cloud-large then goes through the key "smoke".
+provider_backend="smoke-keyed-${smoke_run_id}"
+curl -fsS -o /dev/null -X PUT -H "$JSON" -d "{\"ID\":\"$provider_backend\",\"Name\":\"aisa-backend\",\"Address\":\"mock-cloud\",\"Port\":8080,\"Meta\":{\"provider\":\"openai-compatible\",\"models\":\"cloud-large\",\"key\":\"smoke\"}}" \
+    "$CONSUL/v1/agent/service/register"
+curl -fsS -o /dev/null -X PUT -d '{"monthly_tokens": 1}' "$CONSUL/v1/kv/aisa/budgets/providers/smoke"
+provider_metric() { # provider_metric <metric>: the key's gauge for this month
+    curl -fsS "$AISA/metrics" | awk -v n="$1" -v p="$period" '
+        $1 ~ "^" n "{" && $1 ~ "provider=\"smoke\"" && $1 ~ "period=\"" p "\"" { print $2 + 0 }' | head -n1
+}
+for _ in $(seq 1 30); do
+    [[ "$(provider_metric aisa_provider_budget_limit)" == 1 ]] && break
+    sleep 1
+done
+expect "aisa: the provider budget from Consul (aisa_provider_budget_limit)" "1" "$(provider_metric aisa_provider_budget_limit)"
+# aisa reads the catalog every 30 s: wait until the key is charged for a request through it.
+for _ in $(seq 1 40); do
+    send_usage "{\"request_id\":\"${smoke_run_id}-provider-$RANDOM\",\"consumer\":\"chat-ui\",\"model\":\"cloud-large\",\"backend\":\"$provider_backend\",\"status\":200,\"prompt_tokens\":1,\"completion_tokens\":1}" >/dev/null
+    [[ "$(provider_metric aisa_provider_budget_spent)" != "" && "$(provider_metric aisa_provider_budget_spent)" != 0 ]] && break
+    sleep 1
+done
+expect "aisa: a request through the key is charged to its budget" "1" \
+    "$(awk -v s="$(provider_metric aisa_provider_budget_spent)" 'BEGIN { print (s + 0 >= 2) }')"
+expect "aisa: past the provider budget, every consumer's requests to its models are refused" "429  " \
+    "$(decide dev-key-chat-ui '{"model":"cloud-large"}')"
+expect "aisa: a model the key does not serve is unaffected" "200 chat-ui qwen3" "$(decide dev-key-chat-ui "$QWEN")"
+curl -fsS -o /dev/null -X DELETE "$CONSUL/v1/kv/aisa/budgets/providers/smoke"
+curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/$provider_backend"
+for _ in $(seq 1 30); do
+    [[ "$(decide dev-key-chat-ui '{"model":"cloud-large"}')" == "200 chat-ui cloud-large" ]] && break
+    sleep 1
+done
+expect "aisa: the provider budget removed, the model is served again" "200 chat-ui cloud-large" "$(decide dev-key-chat-ui '{"model":"cloud-large"}')"
+
 echo "== aisa: token quotas"
 # A new consumer for each run, so a window left by an earlier run does not matter: declared in
 # Consul with the tiny profile, its key's hash in Vault.

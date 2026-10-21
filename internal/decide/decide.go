@@ -58,6 +58,12 @@ type BudgetChecker interface {
 	Check(ctx context.Context, consumer, model string) budgets.Verdict
 }
 
+// ProviderChecker checks the budgets of the provider keys that serve a model, the ceiling
+// above the consumers; budgets.Ceiling implements it.
+type ProviderChecker interface {
+	Check(ctx context.Context, model string) budgets.Verdict
+}
+
 // Options configure the decision handler.
 type Options struct {
 	// DefaultQuotaProfile is the quota profile of a consumer that names none
@@ -66,6 +72,8 @@ type Options struct {
 	DefaultQuotaProfile string
 	// Budget checks the consumer's monthly budget. Nil: budgets are not checked.
 	Budget BudgetChecker
+	// Provider checks the budgets of the provider keys that serve the model. Nil: none.
+	Provider ProviderChecker
 }
 
 // Handler answers /v1/decide.
@@ -73,6 +81,7 @@ type Handler struct {
 	consumers Lookup
 	quota     QuotaChecker
 	budget    BudgetChecker
+	provider  ProviderChecker
 	metrics   *metrics.Metrics
 	log       *slog.Logger
 	opts      Options
@@ -81,7 +90,7 @@ type Handler struct {
 // New returns the decision handler. With a nil quota, quotas are not checked; a consumer still
 // needs a quota profile, its own or the default.
 func New(c Lookup, q QuotaChecker, m *metrics.Metrics, log *slog.Logger, opts Options) *Handler {
-	return &Handler{consumers: c, quota: q, budget: opts.Budget, metrics: m, log: log, opts: opts}
+	return &Handler{consumers: c, quota: q, budget: opts.Budget, provider: opts.Provider, metrics: m, log: log, opts: opts}
 }
 
 // ServeHTTP answers POST and GET /v1/decide.
@@ -150,6 +159,9 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 		return h.deny(w, log, consumer.Name, d)
 	}
 	result := metrics.ResultAllow
+	// remaining is X-Aisa-Budget-Remaining, sent with an allowed request of a consumer that has
+	// a budget; a denial carries no header of the kind.
+	remaining := ""
 	if h.budget != nil {
 		v := h.budget.Check(r.Context(), consumer.Name, model)
 		switch v.Outcome {
@@ -174,12 +186,40 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 			model, result = v.DowngradeTo, metrics.ResultDowngrade
 		}
 		if v.Outcome != budgets.NoBudget {
-			w.Header().Set(HeaderBudgetRemaining, strconv.FormatInt(v.Remaining, 10))
+			remaining = strconv.FormatInt(v.Remaining, 10)
+		}
+	}
+	// The ceiling above the consumers (#33): the budgets of the provider keys that serve the
+	// model, the model the request goes to after a downgrade included. A downgrade here goes
+	// to the provider budget's model, and the consumer's remaining tokens stay as said: the
+	// holder's total is not the client's business.
+	if h.provider != nil {
+		v := h.provider.Check(r.Context(), model)
+		switch v.Outcome {
+		case budgets.Unavailable:
+			log.Error("cannot check the provider budget", "model", model, "provider", v.Provider, "error", v.Err)
+			return h.deny(w, log, consumer.Name, denial{
+				status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
+				typ: "server_error", code: "budget_unavailable", msg: "aisa cannot check the monthly budget at the moment",
+			})
+		case budgets.Exhausted:
+			if v.OnExhausted != budgets.Downgrade || v.DowngradeTo == "" || v.DowngradeTo == model {
+				return h.deny(w, log, consumer.Name, denial{
+					status: http.StatusTooManyRequests, result: metrics.ResultDenyProviderBudget,
+					typ: "insufficient_quota", code: "provider_budget_exhausted",
+					msg: fmt.Sprintf("the monthly budget of the provider account that serves %s is exhausted: %d of %d tokens used", model, v.Used, v.Limit),
+				})
+			}
+			log.Info("downgrade", "consumer", consumer.Name, "model", model, "to", v.DowngradeTo, "provider", v.Provider)
+			model, result = v.DowngradeTo, metrics.ResultDowngrade
 		}
 	}
 
 	w.Header().Set(HeaderConsumer, consumer.Name)
 	w.Header().Set(HeaderModel, model)
+	if remaining != "" {
+		w.Header().Set(HeaderBudgetRemaining, remaining)
+	}
 	w.WriteHeader(http.StatusOK)
 	h.metrics.Decisions.WithLabelValues(consumer.Name, result).Inc()
 	if result == metrics.ResultAllow {

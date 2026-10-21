@@ -640,3 +640,74 @@ func TestBudgetAfterQuota(t *testing.T) {
 	}
 	checkDenial(t, rec, "rate_limit_exceeded")
 }
+
+type fakeProvider struct {
+	verdict budgets.Verdict
+	checked []string
+}
+
+func (f *fakeProvider) Check(_ context.Context, model string) budgets.Verdict {
+	f.checked = append(f.checked, model)
+	return f.verdict
+}
+
+// The ceiling above the consumers: the budgets of the provider keys that serve the model.
+func TestProviderBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		consumer   budgets.Verdict
+		provider   budgets.Verdict
+		wantStatus int
+		wantModel  string
+		wantCode   string
+		wantResult string
+		wantRemain string
+		wantAsked  string
+	}{
+		{"no provider budget", budgets.Verdict{Outcome: budgets.NoBudget}, budgets.Verdict{Outcome: budgets.NoBudget},
+			200, "cloud-large", "", metrics.ResultAllow, "", "cloud-large"},
+		{"tokens left", budgets.Verdict{Outcome: budgets.NoBudget}, budgets.Verdict{Outcome: budgets.Allow, Applies: true, Provider: "cloud", Remaining: 5},
+			200, "cloud-large", "", metrics.ResultAllow, "", "cloud-large"},
+		{"exhausted, reject", budgets.Verdict{Outcome: budgets.Allow, Applies: true, Remaining: 60}, budgets.Verdict{Outcome: budgets.Exhausted, Applies: true, Provider: "cloud", OnExhausted: budgets.Reject, Used: 10, Limit: 10},
+			429, "", "provider_budget_exhausted", metrics.ResultDenyProviderBudget, "", "cloud-large"},
+		{"exhausted, downgrade", budgets.Verdict{Outcome: budgets.Allow, Applies: true, Remaining: 60}, budgets.Verdict{Outcome: budgets.Exhausted, Applies: true, Provider: "cloud", OnExhausted: budgets.Downgrade, DowngradeTo: "qwen3"},
+			200, "qwen3", "", metrics.ResultDowngrade, "60", "cloud-large"},
+		{"broken", budgets.Verdict{Outcome: budgets.NoBudget}, budgets.Verdict{Outcome: budgets.Unavailable, Provider: "cloud", Err: errors.New("monthly_tokens is missing")},
+			503, "", "budget_unavailable", metrics.ResultUnavailable, "", "cloud-large"},
+		// The consumer's downgrade comes first: the provider is asked about the model the
+		// request goes to.
+		{"after the consumer's downgrade", budgets.Verdict{Outcome: budgets.Exhausted, Applies: true, OnExhausted: budgets.Downgrade, DowngradeTo: "qwen3"}, budgets.Verdict{Outcome: budgets.NoBudget},
+			200, "qwen3", "", metrics.ResultDowngrade, "0", "qwen3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := metrics.New("test")
+			p := &fakeProvider{verdict: tc.provider}
+			b := &fakeBudget{verdict: tc.consumer}
+			q := &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Allow}}
+			l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}}}
+			h := New(l, q, m, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Budget: b, Provider: p})
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"cloud-large"}`))
+			req.Header.Set("Authorization", "Bearer key-chat")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.wantStatus, rec.Body)
+			}
+			if got := rec.Header().Get(HeaderModel); got != tc.wantModel {
+				t.Errorf("X-Aisa-Model = %q, want %q", got, tc.wantModel)
+			}
+			if got := rec.Header().Get(HeaderBudgetRemaining); got != tc.wantRemain {
+				t.Errorf("X-Aisa-Budget-Remaining = %q, want %q", got, tc.wantRemain)
+			}
+			checkDenial(t, rec, tc.wantCode)
+			if n := testutil.ToFloat64(m.Decisions.WithLabelValues("chat-ui", tc.wantResult)); n != 1 {
+				t.Errorf("aisa_decisions_total{chat-ui,%s} = %v, want 1", tc.wantResult, n)
+			}
+			if len(p.checked) != 1 || p.checked[0] != tc.wantAsked {
+				t.Errorf("provider asked about %v, want %s once", p.checked, tc.wantAsked)
+			}
+		})
+	}
+}

@@ -187,16 +187,23 @@ spec:
           annotations:
             summary: "{{ `{{ $labels.consumer }}` }} has used {{ `{{ $value | humanizePercentage }}` }} of its budget"
             description: "The consumer's budget for the {{ `{{ $labels.period }}` }} is over 80 % spent."
-        - alert: AisaBudgetExhausted
-          expr: sum by (consumer) (rate(aisa_decisions_total{result=~"deny_budget|downgrade"}[5m])) > 0
+        - alert: AisaProviderBudgetSoftLimit
+          expr: aisa_provider_budget_spent / aisa_provider_budget_limit > 0.8
           labels:
             severity: warning
           annotations:
-            summary: "{{ `{{ $labels.consumer }}` }} is denied or downgraded, its budget is used up"
-            description: "The consumer's requests are answered 429 or routed to a cheaper model."
+            summary: "the provider account {{ `{{ $labels.provider }}` }} has used {{ `{{ $value | humanizePercentage }}` }} of its budget"
+            description: "The budget of the provider key for the {{ `{{ $labels.period }}` }} is over 80 % spent; past it, every consumer's requests to its models are denied or downgraded."
+        - alert: AisaBudgetExhausted
+          expr: sum by (consumer) (rate(aisa_decisions_total{result=~"deny_budget|deny_provider_budget|downgrade"}[5m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $labels.consumer }}` }} is denied or downgraded, a budget is used up"
+            description: "The consumer's requests are answered 429 or routed to a cheaper model: its own budget, or that of a provider account serving the model, is used up."
 {{- if .Values.quotas.enabled }}
         - alert: AisaBudgetInvalid
-          expr: aisa_budgets_invalid > 0
+          expr: aisa_budgets_invalid > 0 or aisa_provider_budgets_invalid > 0
           for: 1m
           labels:
             severity: warning
@@ -204,7 +211,8 @@ spec:
             summary: "{{ `{{ $value }}` }} budget(s) in Consul cannot be parsed"
             description: >-
               The consumer of a broken budget under aisa/budgets/ in Consul KV is answered 503 on
-              priced models. aisa's log names the consumer.
+              priced models; the models of a key with a broken budget under aisa/budgets/providers/
+              are answered 503 for everyone. aisa's log names the budget.
         - alert: AisaBudgetCountersFailing
           expr: sum by (op) (rate(aisa_budget_errors_total[5m])) > 0
           for: 5m

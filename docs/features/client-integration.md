@@ -367,6 +367,7 @@ Every error is an OpenAI-style body, `{"error": {"message": …, "type": …, "c
 | **413** | `invalid_request_error` / `request_too_large` | aisa | The body is too large for aisa to find the model in it (the proxy normally spares aisa the body) | Make the request smaller |
 | **429** | `tokens` / `rate_limit_exceeded` | aisa | The consumer's hourly token quota is used up | Wait for `Retry-After` seconds; or ask for a larger quota profile |
 | **429** | `insufficient_quota` / `budget_exhausted` | aisa | The consumer's monthly token budget on priced models is used up, and its budget says `reject` | Use a free model, or wait for the next month; ask the holder for a larger budget or a downgrade |
+| **429** | `insufficient_quota` / `provider_budget_exhausted` | aisa | The holder's monthly budget for the provider account that serves the model is used up, for every consumer | Use a model of another provider or a local one; the holder decides |
 | **429** | `provider_rate_limited` | proxy | The provider limits the gateway's account | Back off with jitter and retry |
 | **431** | `invalid_request_error` | proxy | The request has more headers than the proxy reads | Send fewer headers |
 | **4xx** | `invalid_request_error` | proxy | The provider rejected the request (its own text is not passed on) | Check the request against the model's limits, such as its context length |
