@@ -115,10 +115,13 @@ expect "a fail-open route for the long model name" "\"http_x_aisa_requested_mode
 # Timeouts (#14, #18): the default, the cap, and a backend left out for a value that is not seconds.
 route() { awk -v id="$1" '$0 == "  - id: " id { f = 1; next } /^  - id: / { f = 0 } f' "$RENDERED"; }
 expect_in_route() {
-    local what=$1 id=$2 pattern=$3
-    route "$id" | grep -q -- "$pattern" || {
+    local what=$1 id=$2 pattern=$3 text
+    # Read whole, not piped into grep -q: with pipefail, grep's early exit on a match near the
+    # start of a long route would fail the pipe (awk gets SIGPIPE).
+    text=$(route "$id")
+    grep -q -- "$pattern" <<<"$text" || {
         echo "route $id, in which '$pattern' was not found:" >&2
-        route "$id" | grep -v '^ *#' | head -n 60 >&2
+        grep -v '^ *#' <<<"$text" | head -n 60 >&2
         fail "$what"
     }
     echo "ok: $what"
