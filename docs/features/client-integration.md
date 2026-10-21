@@ -366,12 +366,13 @@ Every error is an OpenAI-style body, `{"error": {"message": …, "type": …, "c
 | **403** | `invalid_request_error` / `no_quota` | aisa | The consumer has no quota profile, and the holder has set no default | Ask the holder to give the consumer a `quota_profile` |
 | **413** | `invalid_request_error` / `request_too_large` | aisa | The body is too large for aisa to find the model in it (the proxy normally spares aisa the body) | Make the request smaller |
 | **429** | `tokens` / `rate_limit_exceeded` | aisa | The consumer's hourly token quota is used up | Wait for `Retry-After` seconds; or ask for a larger quota profile |
+| **429** | `insufficient_quota` / `budget_exhausted` | aisa | The consumer's monthly token budget on priced models is used up, and its budget says `reject` | Use a free model, or wait for the next month; ask the holder for a larger budget or a downgrade |
 | **429** | `provider_rate_limited` | proxy | The provider limits the gateway's account | Back off with jitter and retry |
 | **431** | `invalid_request_error` | proxy | The request has more headers than the proxy reads | Send fewer headers |
 | **4xx** | `invalid_request_error` | proxy | The provider rejected the request (its own text is not passed on) | Check the request against the model's limits, such as its context length |
 | **502** | `provider_error` | proxy | The provider failed, or refused the gateway's credentials; or every backend of the model failed in a row (a fast failure is retried on another backend, when there is one) | Retry later; the holder sees the cause in the gateway's log |
 | **5xx** | `gateway_error` | proxy | The gateway could not reach a provider | Retry later |
-| **503** | `server_error` / `consumers_unavailable` or `quota_unavailable` | aisa | aisa cannot verify keys or the consumer's quota at the moment, and refuses rather than guesses | Retry with backoff |
+| **503** | `server_error` / `consumers_unavailable`, `quota_unavailable` or `budget_unavailable` | aisa | aisa cannot verify keys, or the consumer's quota or budget, at the moment, and refuses rather than guesses | Retry with backoff |
 | **503** | `aisa_unreachable` | proxy | aisa is down and this model's backends do not serve without it | Retry with backoff, or use a local model that fails open |
 | **503** | `no_backend` | proxy | No healthy backend serves the model | Check the name in `GET /v1/models`; the model may be on a machine that is asleep |
 
@@ -387,7 +388,7 @@ Sample 429 quota error response, with `Retry-After: 142`:
 }
 ```
 
-Budgets, and the downgrade to a cheaper model when one is used up, come in v0.3.0. Until then no version sends `X-Aisa-Budget-Remaining`, and a request is never answered by another model than the one it names.
+A consumer with a monthly budget sees `X-Aisa-Budget-Remaining` on every answer: the tokens it may still use this month on priced models, 0 when none are left. The budget bounds priced models only; a free local model is always served, subject to the hourly quota. When the budget is used up, the holder's choice for the consumer decides: `reject`, a 429 as above, or `downgrade`, in which case the request is served by the budget's local model instead, and the answer's `model` field names it. An application that must know which model answered reads that field, not the one it asked for.
 
 ### Timeouts & Streaming (`stream: true`)
 

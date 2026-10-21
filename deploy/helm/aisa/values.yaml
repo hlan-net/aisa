@@ -24,6 +24,9 @@ image:
 # debug, info, warn or error.
 logLevel: info
 
+# The time zone of the budgets' calendar month, an IANA name such as Europe/Helsinki. Empty: UTC.
+timezone: ""
+
 # One replica: the usage ledger deduplicates events in memory, so a second replica would count
 # an event that a log sink retries to the other one twice.
 replicas: 1

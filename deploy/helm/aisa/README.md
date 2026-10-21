@@ -47,6 +47,7 @@ The full list with comments is in [`values.yaml`](./values.yaml). The ones an in
 | `vault.auth.role`, `vault.auth.mount`, `vault.auth.audience` | `aisa`, `kubernetes`, `vault` | aisa's login; the Vault role binds the audience (`audience=vault`), which is required with `kubernetes.enabled`, so that the token in the Vault Agent is not valid against the Kubernetes API |
 | `consul.token.fromVault`, `consul.token.path` | `true`, `consul/creds/aisa` | aisa's Consul token |
 | `quotas.enabled` | `true` | Off: no Redis for aisa, and no quota is enforced; Consul is always read, the consumers are declared there |
+| `timezone` | UTC | The time zone of the budgets' calendar month, an IANA name such as `Europe/Helsinki` |
 | `quotas.defaultProfile` | none | The profile of a consumer whose declaration names none; without it such a consumer is denied (403 `no_quota`). It must be in Consul: aisa is not ready until it has read it, and `aisa_quota_profiles_missing` counts it absent later ([#82](https://github.com/hlan-net/aisa/issues/82)) |
 | `redis.enabled`, `redis.addr` | `true`, none | Off: an external Redis at `redis.addr` |
 | `kubernetes.enabled` | `true` | aisa issues the keys of the consumers whose declaration names a namespace and a Secret, writes them into those Secrets, and writes a `Model` per model ([`KUBERNETES_OBJECTS.md`](../../../docs/concepts/KUBERNETES_OBJECTS.md)) |

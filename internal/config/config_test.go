@@ -73,6 +73,7 @@ func TestFromEnv(t *testing.T) {
 		"AISA_SHUTDOWN_TIMEOUT": "30s",
 
 		"AISA_DEFAULT_QUOTA_PROFILE": " batch ",
+		"AISA_TIMEZONE":              " Europe/Helsinki ",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +82,7 @@ func TestFromEnv(t *testing.T) {
 	want.Addr, want.LogLevel, want.ShutdownTimeout = "127.0.0.1:9000", slog.LevelDebug, 30*time.Second
 	want.MetricsAddr = ":9090"
 	want.DefaultQuotaProfile = "batch"
+	want.Timezone = "Europe/Helsinki"
 	want.Vault.Addr = "http://vault:8200"
 	want.Consul.Addr = "consul:8500"
 	if cfg != want {
@@ -136,6 +138,7 @@ func TestFromEnvRejects(t *testing.T) {
 		"estimate negative":       {"AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS": "-1"},
 		"redis without consul":    {"CONSUL_HTTP_ADDR": "", "AISA_REDIS_ADDR": "redis:6379"},
 		"redis without a port":    {"CONSUL_HTTP_ADDR": "consul:8500", "AISA_REDIS_ADDR": "redis"},
+		"unknown time zone":       {"CONSUL_HTTP_ADDR": "consul:8500", "AISA_TIMEZONE": "Mars/Olympus"},
 		"consul token twice": {"CONSUL_HTTP_ADDR": "consul:8500", "AISA_REDIS_ADDR": "redis:6379",
 			"CONSUL_HTTP_TOKEN": "a", "CONSUL_HTTP_TOKEN_FILE": "/b"},
 		"consul prefix of slashes only": {"AISA_CONSUL_PREFIX": "/"},

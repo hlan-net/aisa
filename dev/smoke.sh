@@ -144,11 +144,62 @@ cost_metric() {
 }
 cost_before=$(cost_metric chat-ui cloud-large EUR)
 cost_before=${cost_before:-0.000000}
+# The budgets count the calendar month in aisa's time zone, UTC in the dev stack.
+period=$(date -u +%Y-%m)
+budget_metric() { # budget_metric <metric> <consumer>: the consumer's gauge for this month
+    curl -fsS "$AISA/metrics" | awk -v n="$1" -v c="$2" -v p="$period" '
+        $1 ~ "^" n "{" && $1 ~ "consumer=\"" c "\"" && $1 ~ "period=\"" p "\"" { print $2 + 0 }' | head -n1
+}
+spent_before=$(budget_metric aisa_budget_spent chat-ui)
+spent_before=${spent_before:-0}
 expect "aisa: usage of a priced model accepted" "200" \
     "$(send_usage "{\"request_id\":\"${smoke_run_id}-cost\",\"consumer\":\"chat-ui\",\"model\":\"cloud-large\",\"backend\":\"mock-cloud\",\"status\":200,\"prompt_tokens\":1000,\"completion_tokens\":2000}")"
 expect "aisa: cost metric incremented (0.033 EUR)" \
     "$(awk -v b="$cost_before" 'BEGIN { printf "%.6f", b + 0.033 }')" \
     "$(cost_metric chat-ui cloud-large EUR)"
+
+echo "== aisa: monthly budgets"
+expect "aisa: chat-ui's budget from Consul (aisa_budget_limit)" "20000000" "$(budget_metric aisa_budget_limit chat-ui)"
+expect "aisa: the priced tokens count towards the budget, the free ones above did not" \
+    "$((spent_before + 3000))" "$(budget_metric aisa_budget_spent chat-ui)"
+# decide_remaining <key> <json body>: the X-Aisa-Budget-Remaining of the decision
+decide_remaining() {
+    curl -sS -o /dev/null -D - -H "Authorization: Bearer $1" -H "$JSON" -d "$2" "$AISA/v1/decide" |
+        tr -d '\r' | awk -F': ' 'tolower($1) == "x-aisa-budget-remaining" { print $2 }'
+}
+expect "aisa: the decision says what remains of the budget" \
+    "$((20000000 - spent_before - 3000))" "$(decide_remaining dev-key-chat-ui "$QWEN")"
+expect "aisa: a consumer without a budget gets no such header" "" \
+    "$(decide_remaining dev-key-nobody "$QWEN")"
+# batch-jobs' budget is turned down to one token: its priced requests are downgraded to qwen3,
+# its free ones served, and with on_exhausted reject the priced ones are refused. aisa follows
+# aisa/budgets/ with a blocking query, so a change applies within seconds.
+batch_budget=$(curl -fsS "$CONSUL/v1/kv/aisa/budgets/batch-jobs?raw")
+budget_put() { curl -fsS -o /dev/null -X PUT -d "$1" "$CONSUL/v1/kv/aisa/budgets/batch-jobs"; }
+budget_put '{"monthly_tokens": 1, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}'
+expect "aisa: usage of a priced model by batch-jobs accepted" "200" \
+    "$(send_usage "{\"request_id\":\"${smoke_run_id}-budget\",\"consumer\":\"batch-jobs\",\"model\":\"cloud-large\",\"backend\":\"mock-cloud\",\"status\":200,\"prompt_tokens\":5,\"completion_tokens\":5}")"
+for _ in $(seq 1 30); do
+    [[ "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')" == "200 batch-jobs qwen3" ]] && break
+    sleep 1
+done
+expect "aisa: a priced model past the budget is downgraded" "200 batch-jobs qwen3" "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')"
+expect "aisa: a free model is served past the budget" "200 batch-jobs llama3.2" "$(decide dev-key-batch-jobs '{"model":"llama3.2"}')"
+expect "aisa: nothing remains of the budget" "0" "$(decide_remaining dev-key-batch-jobs '{"model":"llama3.2"}')"
+budget_put '{"monthly_tokens": 1, "on_exhausted": "reject"}'
+for _ in $(seq 1 30); do
+    [[ "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')" == "429  " ]] && break
+    sleep 1
+done
+expect "aisa: a priced model past a reject budget is refused" "429  " "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')"
+expect "aisa: budget denials counted (at least one)" "1" \
+    "$(curl -fsS "$AISA/metrics" | awk '$1 == "aisa_decisions_total{consumer=\"batch-jobs\",result=\"deny_budget\"}" { n = $2 } END { print (n + 0 >= 1) }')"
+budget_put "$batch_budget"
+for _ in $(seq 1 30); do
+    [[ "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')" == "200 batch-jobs cloud-large" ]] && break
+    sleep 1
+done
+expect "aisa: the budget restored, the priced model is served again" "200 batch-jobs cloud-large" "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')"
 
 echo "== aisa: token quotas"
 # A new consumer for each run, so a window left by an earlier run does not matter: declared in

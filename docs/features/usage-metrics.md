@@ -37,6 +37,9 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_quota_profiles_missing{source}` | Quota profiles that are named and not in Consul: by the default profile (`default`, 0 or 1) or by the consumers' declarations (`consumer`, one per consumer); their consumers get 503 |
 | `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
 | `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
+| `aisa_budgets`, `aisa_budgets_invalid` | Consumers with a valid budget in Consul KV, and budgets that could not be parsed (their consumers get 503 on priced models) |
+| `aisa_budget_loads_total{result}` | Reads of the budgets from Consul, `ok` or `error` |
+| `aisa_budget_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the budget counters in Redis, and of their copies in Consul KV (`persist`); while they fail, the budgets are enforced on the copies |
 | `aisa_model_prices`, `aisa_model_prices_invalid` | Models with a valid price in Consul KV, and price entries that could not be parsed |
 | `aisa_model_price_loads_total{result}` | Reads of the model prices from Consul, `ok` or `error` |
 | `aisa_kube_leader` | 1 on the replica that holds the leader's Lease and writes the Kubernetes objects ([`KUBERNETES_OBJECTS.md`](../concepts/KUBERNETES_OBJECTS.md)) |
@@ -77,6 +80,8 @@ aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `promet
 |---|---|
 | `AisaBudgetSoftLimit` | `aisa_budget_spent / aisa_budget_limit > 0.8` |
 | `AisaBudgetExhausted` | a consumer is being denied or downgraded because its budget is used up |
+| `AisaBudgetInvalid` | `aisa_budgets_invalid > 0`: the consumer of a broken budget gets 503 on priced models |
+| `AisaBudgetCountersFailing` | `aisa_budget_errors_total` increases for 5 min: Redis or Consul cannot be reached for the budgets, which are enforced on the copies last persisted |
 | `AisaBackendDown` | Consul health check for an `aisa-backend` is critical for more than 10 min. Not in the chart: it reads Consul's health, not aisa's metrics; `AisaModelUnavailable` is aisa's view of the same |
 | `AisaModelUnavailable` | `aisa_models - aisa_models_available > 0` for 10 min: a model on offer has no backend whose health check passes (with `kubernetes.enabled`) |
 | `AisaConfigRenderRejected` | `aisa_config_renders_total{result="rejected"}` increases: a value in Consul or Vault renders a config the gateway cannot load in full; the gateway keeps the previous one until it is fixed |

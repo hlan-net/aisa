@@ -125,6 +125,10 @@ spec:
             - name: AISA_DEFAULT_QUOTA_PROFILE
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.timezone }}
+            - name: AISA_TIMEZONE
+              value: {{ . | quote }}
+            {{- end }}
             {{- if and (hasKey .Values "admin") .Values.admin.enabled }}
             - name: AISA_ADMIN_ENABLED
               value: "true"

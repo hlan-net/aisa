@@ -1,8 +1,9 @@
 // Package decide is the decision API, contract 1 in docs/concepts/PROXY_CONTRACT.md: the
 // gateway asks POST /v1/decide before it proxies a request, and applies the answer.
 //
-// This version authenticates the consumer, denies a consumer without a quota profile, checks
-// its token quota and passes the requested model through. Budgets, which can deny a request or rewrite its model, come in a later version.
+// It authenticates the consumer, denies a consumer without a quota profile, checks its token
+// quota and its monthly budget, and answers with the model the request is to be sent to: the
+// requested one, or the budget's downgrade when the budget is used up.
 package decide
 
 import (
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hlan-net/aisa/internal/budgets"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/quotas"
@@ -26,10 +28,11 @@ import (
 
 // Headers of the contract.
 const (
-	HeaderRequestedModel = "X-Aisa-Requested-Model"
-	HeaderConsumer       = "X-Aisa-Consumer"
-	HeaderModel          = "X-Aisa-Model"
-	HeaderRequestID      = "X-Request-Id"
+	HeaderRequestedModel  = "X-Aisa-Requested-Model"
+	HeaderConsumer        = "X-Aisa-Consumer"
+	HeaderModel           = "X-Aisa-Model"
+	HeaderBudgetRemaining = "X-Aisa-Budget-Remaining"
+	HeaderRequestID       = "X-Request-Id"
 )
 
 // maxBody bounds the request body aisa reads to find the model. The gateway may forward the
@@ -50,18 +53,26 @@ type QuotaChecker interface {
 	Check(ctx context.Context, c consumers.Consumer) quotas.Verdict
 }
 
+// BudgetChecker checks a consumer's monthly budget for a model; budgets.Monthly implements it.
+type BudgetChecker interface {
+	Check(ctx context.Context, consumer, model string) budgets.Verdict
+}
+
 // Options configure the decision handler.
 type Options struct {
 	// DefaultQuotaProfile is the quota profile of a consumer that names none
 	// (AISA_DEFAULT_QUOTA_PROFILE). Empty: such a consumer is denied with 403 no_quota, so no
 	// consumer is served without a limit the holder set (#33).
 	DefaultQuotaProfile string
+	// Budget checks the consumer's monthly budget. Nil: budgets are not checked.
+	Budget BudgetChecker
 }
 
 // Handler answers /v1/decide.
 type Handler struct {
 	consumers Lookup
 	quota     QuotaChecker
+	budget    BudgetChecker
 	metrics   *metrics.Metrics
 	log       *slog.Logger
 	opts      Options
@@ -70,7 +81,7 @@ type Handler struct {
 // New returns the decision handler. With a nil quota, quotas are not checked; a consumer still
 // needs a quota profile, its own or the default.
 func New(c Lookup, q QuotaChecker, m *metrics.Metrics, log *slog.Logger, opts Options) *Handler {
-	return &Handler{consumers: c, quota: q, metrics: m, log: log, opts: opts}
+	return &Handler{consumers: c, quota: q, budget: opts.Budget, metrics: m, log: log, opts: opts}
 }
 
 // ServeHTTP answers POST and GET /v1/decide.
@@ -138,13 +149,43 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 	if d, denied := h.checkQuota(r.Context(), log, consumer); denied {
 		return h.deny(w, log, consumer.Name, d)
 	}
+	result := metrics.ResultAllow
+	if h.budget != nil {
+		v := h.budget.Check(r.Context(), consumer.Name, model)
+		switch v.Outcome {
+		case budgets.Unavailable:
+			// Fail closed: a broken budget must not lift the limit unnoticed.
+			log.Error("cannot check the budget", "consumer", consumer.Name, "error", v.Err)
+			return h.deny(w, log, consumer.Name, denial{
+				status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
+				typ: "server_error", code: "budget_unavailable", msg: "aisa cannot check the monthly budget at the moment",
+			})
+		case budgets.Exhausted:
+			if v.OnExhausted != budgets.Downgrade || v.DowngradeTo == "" || v.DowngradeTo == model {
+				return h.deny(w, log, consumer.Name, denial{
+					status: http.StatusTooManyRequests, result: metrics.ResultDenyBudget,
+					typ: "insufficient_quota", code: "budget_exhausted",
+					msg: fmt.Sprintf("monthly budget exhausted: %d of %d tokens used on priced models", v.Used, v.Limit),
+				})
+			}
+			// The request goes on, to the budget's downgrade model instead; the proxy routes
+			// by X-Aisa-Model and forwards the request with that model (proxy rule 3).
+			log.Info("downgrade", "consumer", consumer.Name, "model", model, "to", v.DowngradeTo)
+			model, result = v.DowngradeTo, metrics.ResultDowngrade
+		}
+		if v.Outcome != budgets.NoBudget {
+			w.Header().Set(HeaderBudgetRemaining, strconv.FormatInt(v.Remaining, 10))
+		}
+	}
 
 	w.Header().Set(HeaderConsumer, consumer.Name)
 	w.Header().Set(HeaderModel, model)
 	w.WriteHeader(http.StatusOK)
-	h.metrics.Decisions.WithLabelValues(consumer.Name, metrics.ResultAllow).Inc()
-	log.Debug("allow", "consumer", consumer.Name, "model", model)
-	return metrics.ResultAllow
+	h.metrics.Decisions.WithLabelValues(consumer.Name, result).Inc()
+	if result == metrics.ResultAllow {
+		log.Debug("allow", "consumer", consumer.Name, "model", model)
+	}
+	return result
 }
 
 // checkQuota returns the denial of a consumer whose quota is exhausted or cannot be known.

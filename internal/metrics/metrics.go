@@ -42,6 +42,13 @@ const (
 	EventRejected  = "rejected"
 )
 
+// Values of the op label of aisa_budget_errors_total.
+const (
+	BudgetOpCheck   = "check"   // reading a consumer's month for a decision
+	BudgetOpCharge  = "charge"  // adding the tokens of a usage event
+	BudgetOpPersist = "persist" // copying a month's total to Consul KV, or reading the copies
+)
+
 // Values of the op label of aisa_quota_errors_total.
 const (
 	QuotaOpCheck  = "check"  // reading a consumer's usage for a decision
@@ -128,6 +135,15 @@ type Metrics struct {
 	// QuotaErrors counts failed calls to the quota counters in Redis, by op.
 	QuotaErrors *prometheus.CounterVec
 
+	// Budgets and BudgetsInvalid count the consumers' budgets read from Consul that could and
+	// could not be parsed.
+	Budgets        prometheus.Gauge
+	BudgetsInvalid prometheus.Gauge
+	// BudgetLoads counts the loads of the budgets by result, LoadOK or LoadError.
+	BudgetLoads *prometheus.CounterVec
+	// BudgetErrors counts failed calls to the budget counters in Redis and to Consul KV, by op.
+	BudgetErrors *prometheus.CounterVec
+
 	// ModelPrices and ModelPricesInvalid count the model prices in Consul whose entries could
 	// and could not be read.
 	ModelPrices        prometheus.Gauge
@@ -206,11 +222,11 @@ func New(version string) *Metrics {
 		}, []string{"consumer", "model", "currency"}),
 		BudgetLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "aisa_budget_limit",
-			Help: "Budget of a consumer for the period.",
+			Help: "Budget of a consumer for the period, in tokens on priced models.",
 		}, []string{"consumer", "period"}),
 		BudgetSpent: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "aisa_budget_spent",
-			Help: "What a consumer has spent of its budget in the period.",
+			Help: "Tokens a consumer has used on priced models in the period.",
 		}, []string{"consumer", "period"}),
 		Latency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "aisa_latency_seconds",
@@ -302,6 +318,22 @@ func New(version string) *Metrics {
 			Name: "aisa_quota_errors_total",
 			Help: "Failed reads and writes of the quota counters in Redis.",
 		}, []string{"op"}),
+		Budgets: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_budgets",
+			Help: "Consumers with a valid budget in Consul KV.",
+		}),
+		BudgetsInvalid: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_budgets_invalid",
+			Help: "Budgets in Consul KV that cannot be read; their consumers are answered 503 on priced models.",
+		}),
+		BudgetLoads: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_budget_loads_total",
+			Help: "Reads of the budgets from Consul KV.",
+		}, []string{"result"}),
+		BudgetErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_budget_errors_total",
+			Help: "Failed reads and writes of the budget counters in Redis (check, charge) and of their copies in Consul KV (persist).",
+		}, []string{"op"}),
 		ModelPrices: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "aisa_model_prices",
 			Help: "Models with a valid price in Consul KV.",
@@ -381,6 +413,7 @@ func New(version string) *Metrics {
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 		m.ConsumerDeclarations, m.ConsumerDeclarationsInvalid, m.ConsumerDeclarationLoads,
 		m.QuotaProfiles, m.QuotaProfilesInvalid, m.QuotaProfileLoads, m.QuotaErrors,
+		m.Budgets, m.BudgetsInvalid, m.BudgetLoads, m.BudgetErrors,
 		m.ModelPrices, m.ModelPricesInvalid, m.ModelPriceLoads,
 		m.KubeLeader, m.KubePasses, m.ConsumerSecrets, m.ConsumerKeysIssued,
 		m.Models, m.ModelsAvailable, m.ModelConflicts, m.ModelDescriptionsInvalid,

@@ -39,6 +39,7 @@ type Handler struct {
 	metrics   *metrics.Metrics
 	dedup     *Dedup
 	charger   Charger
+	budget    Charger
 	pricer    Pricer
 	estimator *Estimator
 	log       *slog.Logger
@@ -51,8 +52,12 @@ type Options struct {
 	// counts when nothing is known yet of its consumer and model (AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS).
 	// Zero charges nothing in that case.
 	EstimateDefaultTokens int64
-	// Pricer looks up model prices for aisa_cost_total. When nil, cost is not computed.
+	// Pricer looks up model prices for aisa_cost_total, and says which models the budgets
+	// bound. When nil, cost is not computed and nothing is charged to the budgets.
 	Pricer Pricer
+	// Budget counts the tokens used on priced models towards the consumer's monthly budget;
+	// budgets.Monthly implements it. When nil, budgets are not charged.
+	Budget Charger
 }
 
 // New returns a usage handler. With a nil charger, tokens are not counted towards quotas.
@@ -61,6 +66,7 @@ func New(m *metrics.Metrics, dedup *Dedup, charger Charger, log *slog.Logger, op
 		metrics:   m,
 		dedup:     dedup,
 		charger:   charger,
+		budget:    opts.Budget,
 		pricer:    opts.Pricer,
 		estimator: NewEstimator(opts.EstimateDefaultTokens),
 		log:       log,
@@ -111,6 +117,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	accepted, rejected := 0, 0
 	charges := map[charge]int64{}
+	// The budgets bound the use of priced models only: their tokens are charged to both.
+	budgetCharges := map[charge]int64{}
 	var firstErr error
 	firstIndex := -1
 	for i, p := range events {
@@ -138,10 +146,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if tokens := h.recordEvent(ev); tokens > 0 && ev.Consumer != "" {
 			key := charge{ev.Consumer, h.eventTime(ev).UTC().Truncate(time.Minute)}
 			charges[key] = quotas.AddTokens(charges[key], tokens)
+			if h.paid(ev.Model) {
+				budgetCharges[key] = quotas.AddTokens(budgetCharges[key], tokens)
+			}
 		}
 		accepted++
 	}
-	h.chargeAll(r.Context(), charges)
+	h.chargeAll(r.Context(), h.charger, charges, "quota")
+	h.chargeAll(r.Context(), h.budget, budgetCharges, "budget")
 
 	if rejected > 0 {
 		// One line per request, not per event: a sink with a systematic mistake sends every event
@@ -163,10 +175,19 @@ func (h *Handler) eventTime(ev Event) time.Time {
 	return now
 }
 
-// chargeAll counts the tokens of a batch towards the quotas. It is not cancelled when the log
-// sink goes away: the events are accepted, so their tokens count.
-func (h *Handler) chargeAll(ctx context.Context, charges map[charge]int64) {
-	if h.charger == nil {
+// paid reports whether the budgets bound the use of a model: it has a price above zero.
+func (h *Handler) paid(model string) bool {
+	if h.pricer == nil {
+		return false
+	}
+	price, ok := h.pricer.Lookup(model)
+	return ok && price.Paid()
+}
+
+// chargeAll counts the tokens of a batch towards the quotas, or the budgets, with charger. It
+// is not cancelled when the log sink goes away: the events are accepted, so their tokens count.
+func (h *Handler) chargeAll(ctx context.Context, charger Charger, charges map[charge]int64, what string) {
+	if charger == nil || len(charges) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chargeTimeout)
@@ -174,13 +195,13 @@ func (h *Handler) chargeAll(ctx context.Context, charges map[charge]int64) {
 	done := 0
 	for c, tokens := range charges {
 		if ctx.Err() != nil {
-			h.log.Warn("quota charges of a batch timed out; the rest are not counted",
+			h.log.Warn(what+" charges of a batch timed out; the rest are not counted",
 				"charged", done, "skipped", len(charges)-done)
 			return
 		}
 		// The charger logs and counts its errors; the events stay accepted, since a retry
 		// would be dropped as a duplicate anyway.
-		_ = h.charger.Charge(ctx, c.consumer, tokens, c.minute)
+		_ = charger.Charge(ctx, c.consumer, tokens, c.minute)
 		done++
 	}
 }
