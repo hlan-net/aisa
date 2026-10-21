@@ -120,6 +120,8 @@ expect_in_route() {
     echo "ok: $what"
 }
 expect_in_route "the default timeout of 300 s" '"model-qwen3"' '^        timeout: 300000$'
+expect_in_route "the budget header goes upstream from the decision" 'client' 'upstream_headers: \[X-Aisa-Consumer, X-Aisa-Model, X-Aisa-Budget-Remaining\]'
+expect_in_route "the budget header is copied to the client's response" 'client' '^            X-Aisa-Budget-Remaining: \$http_x_aisa_budget_remaining$'
 expect_in_route "a fast failure is retried on another instance (S11)" '"model-qwen3"' '^        fallback_strategy: \[http_5xx\]$'
 expect_in_route "a slow failure is not retried (S11)" '"model-qwen3"' '^        retry_on_failure_within_ms: 5000$'
 expect_in_route "a chat route calls the backend's chat path" '"model-qwen3"' 'endpoint: "http://mock-local:8080/v1/chat/completions"'

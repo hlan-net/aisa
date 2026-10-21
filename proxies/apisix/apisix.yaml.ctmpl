@@ -181,7 +181,7 @@ routes:
         uri: {{ or (env "AISA_DECIDE_URI") "http://aisa:8080/v1/decide" }}
         request_method: GET
         request_headers: [Authorization, X-Aisa-Requested-Model]
-        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model]
+        upstream_headers: [X-Aisa-Consumer, X-Aisa-Model, X-Aisa-Budget-Remaining]
         client_headers: [Content-Type, Retry-After]
         extra_headers:
           X-Request-Id: $apisix_request_id
@@ -190,6 +190,14 @@ routes:
         # (400, 401, 403, 413, 429, 503) are passed directly to the client.
         allow_degradation: true
         status_on_error: 503
+      # What aisa said of the consumer's budget goes to the client with the answer (contract 1,
+      # proxy rule 6): forward-auth put it on the request above, and only aisa can, since the
+      # client's own X-Aisa-* headers are removed first. Nothing is set when aisa sent none.
+      response-rewrite:
+        vars: [["http_x_aisa_budget_remaining", "~~", "."]]
+        headers:
+          set:
+            X-Aisa-Budget-Remaining: $http_x_aisa_budget_remaining
       # Runs after forward-auth, and only when forward-auth let the request through: aisa allowed
       # it, or could not be asked. The request then goes on to the internal hop, whose route
       # reports it. Its priority puts it between forward-auth (2002) and http-logger (410), whose
