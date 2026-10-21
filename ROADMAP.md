@@ -9,19 +9,19 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 
 ---
 
-## Current state: v0.2.1 released
+## Current state: v0.3.0 released
 
 - Architecture and the three aisa ↔ proxy contracts are written down ([docs/concepts/](docs/concepts/)), with the Kubernetes objects applications see ([docs/concepts/KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md))
 - Quotas, budgets (in tokens) and usage metrics are specified ([docs/features/](docs/features/))
 - The spikes of v0.1.0 are answered ([docs/process/SPIKES.md](docs/process/SPIKES.md)); S2 in part ([#12](https://github.com/hlan-net/aisa/issues/12))
 - Local dev stack with a mock backend and a stub aisa ([dev/](dev/)), and aisa on a laptop's cluster with the machine's Ollama ([deploy/helm/local/](deploy/helm/local/))
-- aisa authenticates consumers, declared in Consul with their keys' hashes in Vault, with `/v1/decide`, ingests usage events at `/v1/usage`, enforces token quotas from Consul with counters in Redis and exports its metrics; it does not enforce budgets yet ([cmd/aisa/](cmd/aisa/))
+- aisa authenticates consumers, declared in Consul with their keys' hashes in Vault, with `/v1/decide`, ingests usage events at `/v1/usage`, enforces token quotas and monthly token budgets per consumer and per provider account from Consul with counters in Redis, downgrades to a local model when a budget is used up, and exports its metrics ([docs/features/quotas-and-budgets.md](docs/features/quotas-and-budgets.md)) yet ([cmd/aisa/](cmd/aisa/))
 - aisa issues each consumer's key into a Secret in its application's namespace, as `OPENAI_*` and `AISA_*`, and publishes the models on offer as `Model` objects ([internal/kube/](internal/kube/)); application developers have a guide ([docs/features/client-integration.md](docs/features/client-integration.md))
 - The holder can manage consumers, quota profiles, backends and models through aisa's admin interface (`/admin`, off by default; [docs/features/admin-interface.md](docs/features/admin-interface.md))
 - The APISIX proxy renders its routes from Consul and Vault, reports each render to aisa, and lets nothing of a provider's account through to the application ([proxies/apisix/](proxies/apisix/), [#35](https://github.com/hlan-net/aisa/issues/35))
 - aisa's Helm chart installs aisa, Redis and the proxy in one release, with the alerts as a `PrometheusRule` ([deploy/helm/aisa/](deploy/helm/aisa/)); CI installs it in kind on amd64 and arm64
 - Each `v*` tag publishes a GitHub release, a multi-arch image on GHCR (`ghcr.io/hlan-net/aisa`) and both charts as OCI artifacts (`oci://ghcr.io/hlan-net/charts/aisa`, `oci://ghcr.io/hlan-net/charts/aisa-proxy-apisix`)
-- Open from v0.2.0: the Terraform module (PR 6) and the Grafana dashboard (PR 7); they land in v0.2.x
+- Open from v0.2.0: the Terraform module (PR 6) and the Grafana dashboard (PR 7); they land in v0.3.x, with the budgets in the admin interface ([#86](https://github.com/hlan-net/aisa/issues/86))
 
 ---
 
