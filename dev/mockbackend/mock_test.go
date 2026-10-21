@@ -368,6 +368,7 @@ func TestEmbeddings(t *testing.T) {
 		{"one input", `{"model":"nomic-embed","input":"hello there world"}`, 200, 1, 3},
 		{"several inputs", `{"model":"nomic-embed","input":["hello there","world"]}`, 200, 2, 3},
 		{"no input", `{"model":"nomic-embed","input":[]}`, 400, 0, 0},
+		{"an empty input", `{"model":"nomic-embed","input":["hello", " "]}`, 400, 0, 0},
 		{"another model", `{"model":"qwen3","input":"hello"}`, 404, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

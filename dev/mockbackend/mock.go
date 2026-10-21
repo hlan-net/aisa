@@ -55,11 +55,11 @@ type server struct {
 // and an error body that names the account and the key, as a provider's can: "mock:error:401".
 const errorTrigger = "mock:error:"
 
-// accountHeaders are what a provider says about the account in its response headers, as
-// OpenAI does; a gateway must not pass them on.
 // headerBackend names the backend that answered, for tests that look past the gateway.
 const headerBackend = "X-Mock-Backend"
 
+// accountHeaders are what a provider says about the account in its response headers, as
+// OpenAI does; a gateway must not pass them on.
 var accountHeaders = map[string]string{
 	"Openai-Organization":            "org-mock",
 	"Openai-Processing-Ms":           "1",
@@ -137,7 +137,10 @@ func (s *server) models(w http.ResponseWriter, _ *http.Request) {
 	devutil.WriteJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
-func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+// answering begins the answer of an OpenAI-compatible endpoint: it keeps the request's headers
+// for GET /debug/last-request and sets the response headers a provider sets, the backend's
+// name and the account headers a gateway must strip, whatever the endpoint.
+func (s *server) answering(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.last = r.Header.Clone()
 	s.mu.Unlock()
@@ -145,6 +148,10 @@ func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	for k, v := range accountHeaders {
 		w.Header().Set(k, v)
 	}
+}
+
+func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
+	s.answering(w, r)
 
 	var req chatRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&req); err != nil {
@@ -227,10 +234,7 @@ var embeddingVector = []float64{0.1, 0.2, 0.3, 0.4}
 // embeddings answers POST /v1/embeddings with one vector per input, a string or an array of
 // strings, and prompt tokens counted as words, as for a chat; an embedding has no completion.
 func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	s.last = r.Header.Clone()
-	s.mu.Unlock()
-	w.Header().Set(headerBackend, s.cfg.Name)
+	s.answering(w, r)
 
 	var req struct {
 		Model string          `json:"model"`
@@ -257,6 +261,13 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 	} else if err := json.Unmarshal(req.Input, &inputs); err != nil || len(inputs) == 0 {
 		devutil.WriteOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_input",
 			"input must be a string or a non-empty array of strings")
+		return
+	}
+	// An empty input is refused, as OpenAI refuses it: answered 200 with no tokens, it would be
+	// a success without usage to aisa, which charges such a request by estimate.
+	if slices.ContainsFunc(inputs, func(in string) bool { return strings.TrimSpace(in) == "" }) {
+		devutil.WriteOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_input",
+			"input must not be empty")
 		return
 	}
 	data := make([]map[string]any, 0, len(inputs))
