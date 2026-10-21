@@ -611,3 +611,45 @@ func TestHandlerChargesBudget(t *testing.T) {
 		t.Errorf("budget charges = %v, want %v", budget.charges, wantBudget)
 	}
 }
+
+type fakeProviderCharger struct {
+	charges map[string]int64 // "model@backend@minute" → tokens
+}
+
+func (f *fakeProviderCharger) Charge(_ context.Context, model, backend string, tokens int64, at time.Time) error {
+	f.charges[model+"@"+backend+"@"+at.UTC().Format("15:04:05")] += tokens
+	return nil
+}
+
+// Every request's tokens go to the provider budgets by model and backend, a fail-open request
+// without a consumer included; the quota and the consumer's budget see only named consumers.
+func TestHandlerChargesProviders(t *testing.T) {
+	m := metrics.New("test")
+	quota := &fakeCharger{charges: map[string]int64{}}
+	provider := &fakeProviderCharger{charges: map[string]int64{}}
+	h := New(m, NewDedup(100, 5*time.Minute), quota, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Options{Pricer: pricedModels{}, Provider: provider})
+	h.now = func() time.Time { return time.Date(2026, 10, 21, 12, 30, 20, 0, time.UTC) }
+
+	body := `[
+		{"request_id": "a", "consumer": "chat-ui", "model": "cloud-large", "backend": "cloud-1", "status": 200, "prompt_tokens": 10, "completion_tokens": 5, "ts": "2026-10-21T12:00:10Z"},
+		{"request_id": "b", "consumer": "chat-ui", "model": "cloud-large", "backend": "cloud-1", "status": 200, "prompt_tokens": 1, "ts": "2026-10-21T12:00:40Z"},
+		{"request_id": "c", "consumer": "", "model": "qwen3", "backend": "local-1", "status": 200, "prompt_tokens": 7, "ts": "2026-10-21T12:01:00Z"},
+		{"request_id": "d", "consumer": "chat-ui", "model": "cloud-large", "backend": "cloud-2", "status": 500, "prompt_tokens": 0, "completion_tokens": 0, "ts": "2026-10-21T12:01:00Z"}
+	]`
+	req := httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+	}
+	// d failed without usage: nothing to charge.
+	wantProvider := map[string]int64{"cloud-large@cloud-1@12:00:00": 16, "qwen3@local-1@12:01:00": 7}
+	if !maps.Equal(provider.charges, wantProvider) {
+		t.Errorf("provider charges = %v, want %v", provider.charges, wantProvider)
+	}
+	wantQuota := map[string]int64{"chat-ui@12:00:00": 16}
+	if !maps.Equal(quota.charges, wantQuota) {
+		t.Errorf("quota charges = %v, want %v", quota.charges, wantQuota)
+	}
+}

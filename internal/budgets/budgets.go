@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -137,8 +138,12 @@ func (b *Budgets) Run(ctx context.Context) {
 	})
 }
 
-// apply replaces the budgets with those read.
+// apply replaces the budgets with those read. An entry below a folder, such as the providers'
+// budgets under the consumers' prefix, is not one of these.
 func (b *Budgets) apply(pairs []consul.Pair) {
+	pairs = slices.DeleteFunc(slices.Clone(pairs), func(p consul.Pair) bool {
+		return strings.Contains(strings.TrimSuffix(p.Key, "/"), "/")
+	})
 	valid, invalid, names := consul.ParseEntries(pairs, parseBudget)
 	for _, name := range names {
 		// The consumer is denied with 503 on priced models until the budget is fixed.

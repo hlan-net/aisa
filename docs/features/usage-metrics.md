@@ -9,11 +9,11 @@ aisa keeps the books: every request is accounted per consumer, model and backend
 Full list in [`PROXY_CONTRACT.md`](../concepts/PROXY_CONTRACT.md#4-metrics-output-of-aisa):
 
 - `aisa_requests_total`, `aisa_tokens_total{direction}`, `aisa_cost_total`
-- `aisa_budget_limit`, `aisa_budget_spent`, in tokens
+- `aisa_budget_limit`, `aisa_budget_spent`, in tokens; `aisa_provider_budget_limit`, `aisa_provider_budget_spent` for the ceiling per provider key
 - `aisa_latency_seconds`, `aisa_ttft_seconds`
 - `aisa_usage_events_total{result}` (`accepted`, `duplicate`, `rejected`) and `aisa_usage_requests_rejected_total{reason}` for usage requests rejected as a whole (`malformed`, `too_large`, `unreadable`)
 - `aisa_usage_missing_total{consumer,model,backend}`: successful requests whose event has no token counts, because the backend did not stream usage or the client disconnected mid-stream. aisa charges them to the quota by estimate: the consumer's recent average for the model, else the model's across consumers, else `AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS` (0: nothing). The estimates are in `aisa_tokens_estimated_total{consumer,model,backend}`, apart from the exact `aisa_tokens_total`, so a dashboard shows how much of the usage is a guess ([#12](https://github.com/hlan-net/aisa/issues/12))
-- `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `no_quota` (the consumer has no quota profile and there is no default, 403), `unavailable` (aisa cannot verify credentials, under the consumer `unknown`, or cannot know a consumer's token quota, and answers 503), `deny_quota`, `deny_budget`, `downgrade`
+- `aisa_decisions_total{result}`: `allow`, `deny_auth` (unknown key, under the consumer `unknown`), `invalid` (no model), `no_quota` (the consumer has no quota profile and there is no default, 403), `unavailable` (aisa cannot verify credentials, under the consumer `unknown`, or cannot know a consumer's token quota, and answers 503), `deny_quota`, `deny_budget`, `deny_provider_budget` (the budget of a provider key that serves the model), `downgrade`
 - `aisa_decide_duration_seconds{result}`: how long aisa took to answer `/v1/decide`, by the same results, and `aisa_decide_stage_duration_seconds{stage}` for the part of it spent finding the consumer (`consumer`; in memory, except for an unknown key, which waits for a reload from Vault) and reading its token usage from Redis (`quota`). This is aisa's share of the gateway's overhead, measured the same way whatever the proxy; whether a gateway-side decision cache would help is read from it. A rising p95 with a flat `consumer` stage points at Redis ([#71](https://github.com/hlan-net/aisa/issues/71))
 - `aisa_config_renders_total{result}`: the proxy's renders of the gateway config, as it reports them: `promoted`, `rejected` (the check failed; the previous config stays) or `held` (a config without model routes waits for the grace period)
 - `aisa_config_rendered_timestamp_seconds`, `aisa_config_backends`, `aisa_config_models`: when the proxy last promoted a rendered config, and the backends and the models with a route in it. Absent until the first promoted report since aisa started: a restart forgets the config, and an absent gauge says so where a zero would claim an empty one; the proxy's pod sends a report aisa did not take again, every 30 s
@@ -39,6 +39,7 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
 | `aisa_budgets`, `aisa_budgets_invalid` | Consumers with a valid budget in Consul KV, and budgets that could not be parsed (their consumers get 503 on priced models) |
 | `aisa_budget_loads_total{result}` | Reads of the budgets from Consul, `ok` or `error` |
+| `aisa_provider_budgets`, `aisa_provider_budgets_invalid`, `aisa_provider_budget_loads_total{result}` | The same for the provider budgets, `aisa/budgets/providers/` |
 | `aisa_budget_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the budget counters in Redis, and of their copies in Consul KV (`persist`); while they fail, the budgets are enforced on the copies |
 | `aisa_model_prices`, `aisa_model_prices_invalid` | Models with a valid price in Consul KV, and price entries that could not be parsed |
 | `aisa_model_price_loads_total{result}` | Reads of the model prices from Consul, `ok` or `error` |
@@ -79,8 +80,9 @@ aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `promet
 | Alert | Condition |
 |---|---|
 | `AisaBudgetSoftLimit` | `aisa_budget_spent / aisa_budget_limit > 0.8` |
-| `AisaBudgetExhausted` | a consumer is being denied or downgraded because its budget is used up |
-| `AisaBudgetInvalid` | `aisa_budgets_invalid > 0`: the consumer of a broken budget gets 503 on priced models |
+| `AisaProviderBudgetSoftLimit` | `aisa_provider_budget_spent / aisa_provider_budget_limit > 0.8`: a provider account's month is over 80 % used |
+| `AisaBudgetExhausted` | a consumer is being denied or downgraded because its budget, or a provider account's, is used up |
+| `AisaBudgetInvalid` | `aisa_budgets_invalid > 0` or `aisa_provider_budgets_invalid > 0`: the consumer of a broken budget gets 503 on priced models, the models of a broken provider budget's key get 503 |
 | `AisaBudgetCountersFailing` | `aisa_budget_errors_total` increases for 5 min: Redis or Consul cannot be reached for the budgets, which are enforced on the copies last persisted |
 | `AisaBackendDown` | Consul health check for an `aisa-backend` is critical for more than 10 min. Not in the chart: it reads Consul's health, not aisa's metrics; `AisaModelUnavailable` is aisa's view of the same |
 | `AisaModelUnavailable` | `aisa_models - aisa_models_available > 0` for 10 min: a model on offer has no backend whose health check passes (with `kubernetes.enabled`) |

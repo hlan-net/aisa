@@ -67,7 +67,7 @@ Budgets are enforced in tokens, like quotas. Prices turn tokens into currency fo
 | Pricing | Prices per model in Consul KV, `aisa_cost_total`, for display | Done |
 | Monthly budgets | Calendar-month token budgets, soft limit, persisted totals | Done |
 | Downgrade | `on_exhausted: downgrade` → local model via `X-Aisa-Model` | Done |
-| Safe defaults and a ceiling | A consumer without limits cannot use a backend with a key; a budget per provider account above the consumers ([#33](https://github.com/hlan-net/aisa/issues/33), US-1) | — |
+| Safe defaults and a ceiling | A consumer without limits cannot use a backend with a key; a budget per provider account above the consumers ([#33](https://github.com/hlan-net/aisa/issues/33), US-1) | Done: a consumer without a quota profile is denied, and `aisa/budgets/providers/<key>` caps every key |
 
 ## Direction: decided, not scheduled
 

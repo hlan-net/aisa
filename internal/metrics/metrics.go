@@ -25,8 +25,10 @@ const (
 	ResultUnavailable = "unavailable" // aisa cannot verify credentials and fails closed (503)
 	ResultNoQuota     = "no_quota"    // the consumer has no quota profile and there is no default (403)
 	ResultDenyQuota   = "deny_quota"  // quota exhausted (429)
-	ResultDenyBudget  = "deny_budget" // budget exhausted (429)
-	ResultDowngrade   = "downgrade"
+	ResultDenyBudget  = "deny_budget" // the consumer's budget exhausted (429)
+	// ResultDenyProviderBudget: the budget of a provider key that serves the model is exhausted (429).
+	ResultDenyProviderBudget = "deny_provider_budget"
+	ResultDowngrade          = "downgrade"
 )
 
 // Values of the stage label of aisa_decide_stage_duration_seconds.
@@ -141,6 +143,14 @@ type Metrics struct {
 	BudgetsInvalid prometheus.Gauge
 	// BudgetLoads counts the loads of the budgets by result, LoadOK or LoadError.
 	BudgetLoads *prometheus.CounterVec
+	// ProviderBudgetLimit and ProviderBudgetSpent are the budget of a provider key and what
+	// is used of it, by key and period; ProviderBudgets, ProviderBudgetsInvalid and
+	// ProviderBudgetLoads are the provider budgets' counterparts of the consumers' above.
+	ProviderBudgetLimit    *prometheus.GaugeVec
+	ProviderBudgetSpent    *prometheus.GaugeVec
+	ProviderBudgets        prometheus.Gauge
+	ProviderBudgetsInvalid prometheus.Gauge
+	ProviderBudgetLoads    *prometheus.CounterVec
 	// BudgetErrors counts failed calls to the budget counters in Redis and to Consul KV, by op.
 	BudgetErrors *prometheus.CounterVec
 
@@ -330,6 +340,26 @@ func New(version string) *Metrics {
 			Name: "aisa_budget_loads_total",
 			Help: "Reads of the budgets from Consul KV.",
 		}, []string{"result"}),
+		ProviderBudgetLimit: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "aisa_provider_budget_limit",
+			Help: "Budget of a provider key for the period, in tokens, above the consumers.",
+		}, []string{"provider", "period"}),
+		ProviderBudgetSpent: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "aisa_provider_budget_spent",
+			Help: "Tokens used through a provider key in the period.",
+		}, []string{"provider", "period"}),
+		ProviderBudgets: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_provider_budgets",
+			Help: "Provider keys with a valid budget in Consul KV.",
+		}),
+		ProviderBudgetsInvalid: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_provider_budgets_invalid",
+			Help: "Provider budgets in Consul KV that cannot be read; the models of their keys are answered 503.",
+		}),
+		ProviderBudgetLoads: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_provider_budget_loads_total",
+			Help: "Reads of the provider budgets from Consul KV.",
+		}, []string{"result"}),
 		BudgetErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "aisa_budget_errors_total",
 			Help: "Failed reads and writes of the budget counters in Redis (check, charge) and of their copies in Consul KV (persist).",
@@ -414,6 +444,7 @@ func New(version string) *Metrics {
 		m.ConsumerDeclarations, m.ConsumerDeclarationsInvalid, m.ConsumerDeclarationLoads,
 		m.QuotaProfiles, m.QuotaProfilesInvalid, m.QuotaProfileLoads, m.QuotaErrors,
 		m.Budgets, m.BudgetsInvalid, m.BudgetLoads, m.BudgetErrors,
+		m.ProviderBudgetLimit, m.ProviderBudgetSpent, m.ProviderBudgets, m.ProviderBudgetsInvalid, m.ProviderBudgetLoads,
 		m.ModelPrices, m.ModelPricesInvalid, m.ModelPriceLoads,
 		m.KubeLeader, m.KubePasses, m.ConsumerSecrets, m.ConsumerKeysIssued,
 		m.Models, m.ModelsAvailable, m.ModelConflicts, m.ModelDescriptionsInvalid,

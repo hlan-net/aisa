@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/hlan-net/aisa/internal/consul"
 	"github.com/hlan-net/aisa/internal/metrics"
 )
@@ -57,9 +59,14 @@ type Verdict struct {
 	Soft bool
 	// OnExhausted and DowngradeTo are the budget's, for an Exhausted verdict.
 	OnExhausted, DowngradeTo string
+	// Provider is the key whose budget answered, for a verdict of the Ceiling.
+	Provider string
 	// Err says why the budget is Unavailable.
 	Err error
 }
+
+// errCatalogNotLoaded: the backends have not been read from Consul yet.
+var errCatalogNotLoaded = errors.New("backend catalog not loaded yet")
 
 // Pricer says whether a model has a price; pricing.Prices does.
 type Pricer interface {
@@ -77,6 +84,11 @@ type MonthlyOptions struct {
 	Persist time.Duration
 	// StatePrefix is where the totals are kept, such as "aisa/state/".
 	StatePrefix string
+	// Limit and Spent are the gauges of the budgets and their use, by name and period:
+	// aisa_budget_limit and aisa_budget_spent when nil, as for the consumers' budgets. Label
+	// is the name of their first label, "consumer" when empty.
+	Limit, Spent *prometheus.GaugeVec
+	Label        string
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
 }
@@ -96,6 +108,13 @@ type Monthly struct {
 	persisted map[string]map[string]int64
 	// dirty are the consumers and periods charged since the last persist.
 	dirty map[periodKey]bool
+	// observed are the names whose gauges observe set last, so that a budget that is gone
+	// takes its series with it.
+	observed map[string]bool
+	// counterFailed is when the counter last failed; for a second after it, the persisted
+	// total is used without asking, so a Redis that is down costs one timeout a second, not one
+	// per request.
+	counterFailed time.Time
 }
 
 type periodKey struct{ consumer, period string }
@@ -115,10 +134,20 @@ func NewMonthly(b *Budgets, c Counter, kv KV, p Pricer, m *metrics.Metrics, log 
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.Limit == nil {
+		opts.Limit = m.BudgetLimit
+	}
+	if opts.Spent == nil {
+		opts.Spent = m.BudgetSpent
+	}
+	if opts.Label == "" {
+		opts.Label = "consumer"
+	}
 	opts.StatePrefix = strings.TrimSuffix(opts.StatePrefix, "/") + "/"
 	return &Monthly{
 		budgets: b, counter: c, kv: kv, pricer: p, metrics: m, log: log, opts: opts,
 		persisted: make(map[string]map[string]int64), dirty: make(map[periodKey]bool),
+		observed: make(map[string]bool),
 	}
 }
 
@@ -133,20 +162,25 @@ func (mo *Monthly) Period(t time.Time) (string, time.Time) {
 // requests to models with a price; a request's own tokens are known only after the response,
 // so the last request of a month can take a consumer past the budget. When the usage cannot
 // be read from Redis, the total last persisted to Consul stands in for it: a budget is a
-// bound on spend, and the persisted total is a lower bound on it.
+// bound on spend, and the persisted total is a lower bound on it. A budget that is broken, or
+// not read yet, is Unavailable for a priced model and Allow, with its Err and no numbers, for
+// a free one: the budget does not bound that request, so its state cannot deny it.
 func (mo *Monthly) Check(ctx context.Context, consumer, model string) Verdict {
+	applies := mo.pricer != nil && mo.pricer.Paid(model)
 	bud, err := mo.budgets.Get(consumer)
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrNoBudget):
 		return Verdict{Outcome: NoBudget}
+	case applies:
+		return Verdict{Outcome: Unavailable, Applies: true, Err: err}
 	default:
-		return Verdict{Outcome: Unavailable, Err: err}
+		return Verdict{Outcome: Allow, Err: err}
 	}
 	period, _ := mo.Period(mo.opts.Now())
 	used := mo.used(ctx, consumer, period)
 	v := Verdict{
-		Outcome: Allow, Applies: mo.pricer != nil && mo.pricer.Paid(model),
+		Outcome: Allow, Applies: applies,
 		Limit: bud.MonthlyTokens, Used: used, Remaining: max(bud.MonthlyTokens-used, 0),
 		OnExhausted: bud.OnExhausted, DowngradeTo: bud.DowngradeTo,
 	}
@@ -158,17 +192,31 @@ func (mo *Monthly) Check(ctx context.Context, consumer, model string) Verdict {
 }
 
 // used is the greater of the counter's total and the persisted one: a counter Redis lost
-// since the last persist reads 0, and must not lift the budget.
+// since the last persist reads 0, and must not lift the budget. For a second after the counter
+// has failed, the persisted one is used without asking again.
 func (mo *Monthly) used(ctx context.Context, consumer, period string) int64 {
+	mo.mu.Lock()
+	failedLately := mo.opts.Now().Sub(mo.counterFailed) < counterBackoff
+	mo.mu.Unlock()
+	if failedLately {
+		return mo.floor(consumer, period)
+	}
 	ctx, cancel := context.WithTimeout(ctx, mo.opts.Timeout)
 	defer cancel()
 	total, err := mo.counter.Total(ctx, consumer, period)
 	if err != nil {
 		mo.metrics.BudgetErrors.WithLabelValues(metrics.BudgetOpCheck).Inc()
 		mo.log.Warn("cannot read budget usage; using the persisted total", "consumer", consumer, "period", period, "error", err)
+		mo.mu.Lock()
+		mo.counterFailed = mo.opts.Now()
+		mo.mu.Unlock()
 	}
 	return max(total, mo.floor(consumer, period))
 }
+
+// counterBackoff is how long after a failed read of the counter the persisted total is used
+// without asking again.
+const counterBackoff = time.Second
 
 // Charge counts tokens that a consumer used on priced models at a time. A time in the future is
 // taken as now. An error is logged and counted in aisa_budget_errors_total, and returned.
@@ -192,7 +240,7 @@ func (mo *Monthly) Charge(ctx context.Context, consumer string, tokens int64, at
 	mo.mu.Lock()
 	mo.dirty[periodKey{consumer, period}] = true
 	mo.mu.Unlock()
-	mo.metrics.BudgetSpent.WithLabelValues(consumer, period).Set(float64(total))
+	mo.opts.Spent.WithLabelValues(consumer, period).Set(float64(total))
 	return nil
 }
 
@@ -241,8 +289,10 @@ func (mo *Monthly) load(ctx context.Context) {
 	defer mo.mu.Unlock()
 	n := 0
 	for _, p := range pairs {
+		// One level, <name>/<period>: a deeper key belongs to another set of budgets, such as
+		// the providers' under the consumers' prefix.
 		consumer, period, ok := strings.Cut(strings.TrimPrefix(p.Key, mo.opts.StatePrefix), "/")
-		if !ok || consumer == "" || period == "" {
+		if !ok || consumer == "" || period == "" || strings.Contains(period, "/") {
 			continue
 		}
 		var s state
@@ -304,16 +354,33 @@ func (mo *Monthly) markDirty(k periodKey) {
 }
 
 // observe sets aisa_budget_limit and aisa_budget_spent for the current month of every consumer
-// with a budget, so the gauges exist before the first charge of the month and after a restart.
+// with a budget, so the gauges exist before the first charge of the month and after a restart,
+// and removes the series of a budget that is gone, so that an alert on its share does not
+// outlive it.
 func (mo *Monthly) observe(ctx context.Context) {
 	period, _ := mo.Period(mo.opts.Now())
+	current := make(map[string]bool)
 	for _, consumer := range mo.budgets.Names() {
 		bud, err := mo.budgets.Get(consumer)
 		if err != nil {
 			continue
 		}
-		mo.metrics.BudgetLimit.WithLabelValues(consumer, period).Set(float64(bud.MonthlyTokens))
-		mo.metrics.BudgetSpent.WithLabelValues(consumer, period).Set(float64(mo.used(ctx, consumer, period)))
+		current[consumer] = true
+		mo.opts.Limit.WithLabelValues(consumer, period).Set(float64(bud.MonthlyTokens))
+		mo.opts.Spent.WithLabelValues(consumer, period).Set(float64(mo.used(ctx, consumer, period)))
+	}
+	mo.mu.Lock()
+	var gone []string
+	for name := range mo.observed {
+		if !current[name] {
+			gone = append(gone, name)
+		}
+	}
+	mo.observed = current
+	mo.mu.Unlock()
+	for _, name := range gone {
+		mo.opts.Limit.DeletePartialMatch(prometheus.Labels{mo.opts.Label: name})
+		mo.opts.Spent.DeletePartialMatch(prometheus.Labels{mo.opts.Label: name})
 	}
 }
 

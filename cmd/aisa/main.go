@@ -168,10 +168,12 @@ func run(args []string) error {
 	}
 	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
 	var (
-		quota         decide.QuotaChecker
-		charger       ledger.Charger
-		budget        decide.BudgetChecker
-		budgetCharger ledger.Charger
+		quota           decide.QuotaChecker
+		charger         ledger.Charger
+		budget          decide.BudgetChecker
+		budgetCharger   ledger.Charger
+		provider        decide.ProviderChecker
+		providerCharger ledger.ProviderCharger
 	)
 	if cfg.QuotasEnabled() {
 		q, profiles, rdb, closeQuotas := newQuotas(cfg, cc, declarations, m, log.With("component", "quotas"))
@@ -190,6 +192,15 @@ func run(args []string) error {
 		go monthly.Run(ctx)
 		budget, budgetCharger = monthly, monthly
 		checks = append(checks, server.Check{Name: "budgets", Probe: budgetSet.Ready})
+
+		// The ceiling above the consumers (#33): a budget per provider key, applied through
+		// the catalog, which says which keys serve a model.
+		ceiling, providerSet, providerMonthly, catalog := newCeiling(cfg, cc, rdb, m, log.With("component", "budgets"))
+		go providerSet.Run(ctx)
+		go providerMonthly.Run(ctx)
+		go catalog.Run(ctx)
+		provider, providerCharger = ceiling, ceiling
+		checks = append(checks, server.Check{Name: "provider_budgets", Probe: ceiling.Ready})
 	} else {
 		log.Warn("token quotas and budgets are off: set AISA_REDIS_ADDR to turn them on")
 	}
@@ -213,9 +224,9 @@ func run(args []string) error {
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide"),
-			decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile, Budget: budget}),
+			decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile, Budget: budget, Provider: provider}),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
-			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens, Pricer: prices, Budget: budgetCharger}),
+			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens, Pricer: prices, Budget: budgetCharger, Provider: providerCharger}),
 		render.New(m, log.With("component", "render")),
 		adminHandler)
 	if err := srv.Run(ctx, cfg.Addr, cfg.MetricsAddr); err != nil {
@@ -266,6 +277,39 @@ func newBudgets(cfg config.Config, cc *consul.Client, rdb *redis.Client, prices 
 	monthly = budgets.NewMonthly(set, budgets.NewMonths(rdb, "aisa:"), cc, prices, m, log,
 		budgets.MonthlyOptions{Location: loc, StatePrefix: cfg.Consul.Prefix + "/state/"})
 	return monthly, set
+}
+
+// newCeiling returns the ceiling of the provider budgets, aisa/budgets/providers/<key>, with
+// the budgets themselves, their counters (in Redis, persisted under aisa/state/providers/) and
+// the catalog that says which keys serve a model; the caller runs the last three.
+func newCeiling(cfg config.Config, cc *consul.Client, rdb *redis.Client, m *metrics.Metrics, log *slog.Logger) (*budgets.Ceiling, *budgets.Budgets, *budgets.Monthly, *budgets.Catalog) {
+	loc, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	var monthly *budgets.Monthly
+	set := budgets.NewBudgets(
+		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/budgets/providers/", What: "provider budgets"},
+		log,
+		budgets.Options{OnLoad: func(s budgets.LoadStats) {
+			if s.Err != nil {
+				m.ProviderBudgetLoads.WithLabelValues(metrics.LoadError).Inc()
+				return
+			}
+			m.ProviderBudgetLoads.WithLabelValues(metrics.LoadOK).Inc()
+			m.ProviderBudgets.Set(float64(s.Valid))
+			m.ProviderBudgetsInvalid.Set(float64(s.Invalid))
+			if monthly != nil {
+				monthly.Observe(context.Background())
+			}
+		}})
+	monthly = budgets.NewMonthly(set, budgets.NewMonths(rdb, "aisa:provider-"), cc, budgets.Always{}, m, log,
+		budgets.MonthlyOptions{
+			Location: loc, StatePrefix: cfg.Consul.Prefix + "/state/providers/",
+			Limit: m.ProviderBudgetLimit, Spent: m.ProviderBudgetSpent, Label: "provider",
+		})
+	catalog := budgets.NewCatalog(cc, log, budgets.CatalogOptions{Service: "aisa-backend"})
+	return budgets.NewCeiling(catalog, monthly, log), set, monthly, catalog
 }
 
 // observeBudgets puts the result of a load of the budgets into the metrics.

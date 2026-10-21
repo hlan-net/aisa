@@ -40,6 +40,7 @@ type Handler struct {
 	dedup     *Dedup
 	charger   Charger
 	budget    Charger
+	provider  ProviderCharger
 	pricer    Pricer
 	estimator *Estimator
 	log       *slog.Logger
@@ -58,6 +59,15 @@ type Options struct {
 	// Budget counts the tokens used on priced models towards the consumer's monthly budget;
 	// budgets.Monthly implements it. When nil, budgets are not charged.
 	Budget Charger
+	// Provider counts every request's tokens towards the budget of the provider key that
+	// served it; budgets.Ceiling implements it. When nil, provider budgets are not charged.
+	Provider ProviderCharger
+}
+
+// ProviderCharger counts the tokens of a request to a model, answered by a backend, towards
+// the budget of the backend's provider key.
+type ProviderCharger interface {
+	Charge(ctx context.Context, model, backend string, tokens int64, at time.Time) error
 }
 
 // New returns a usage handler. With a nil charger, tokens are not counted towards quotas.
@@ -67,6 +77,7 @@ func New(m *metrics.Metrics, dedup *Dedup, charger Charger, log *slog.Logger, op
 		dedup:     dedup,
 		charger:   charger,
 		budget:    opts.Budget,
+		provider:  opts.Provider,
 		pricer:    opts.Pricer,
 		estimator: NewEstimator(opts.EstimateDefaultTokens),
 		log:       log,
@@ -82,6 +93,12 @@ const chargeTimeout = 5 * time.Second
 type charge struct {
 	consumer string
 	minute   time.Time
+}
+
+// providerCharge is the tokens of one model and backend in one minute of a batch.
+type providerCharge struct {
+	model, backend string
+	minute         time.Time
 }
 
 // ServeHTTP answers POST /v1/usage.
@@ -119,6 +136,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	charges := map[charge]int64{}
 	// The budgets bound the use of priced models only: their tokens are charged to both.
 	budgetCharges := map[charge]int64{}
+	// The provider budgets count every request through a key, by the model and the backend
+	// that answered; a fail-open request, without a consumer, went through a key too.
+	providerCharges := map[providerCharge]int64{}
 	var firstErr error
 	firstIndex := -1
 	for i, p := range events {
@@ -143,17 +163,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		h.metrics.UsageEvents.WithLabelValues(metrics.EventAccepted).Inc()
-		if tokens := h.recordEvent(ev); tokens > 0 && ev.Consumer != "" {
-			key := charge{ev.Consumer, h.eventTime(ev).UTC().Truncate(time.Minute)}
-			charges[key] = quotas.AddTokens(charges[key], tokens)
-			if h.paid(ev.Model) {
-				budgetCharges[key] = quotas.AddTokens(budgetCharges[key], tokens)
+		if tokens := h.recordEvent(ev); tokens > 0 {
+			minute := h.eventTime(ev).UTC().Truncate(time.Minute)
+			if ev.Consumer != "" {
+				key := charge{ev.Consumer, minute}
+				charges[key] = quotas.AddTokens(charges[key], tokens)
+				if h.paid(ev.Model) {
+					budgetCharges[key] = quotas.AddTokens(budgetCharges[key], tokens)
+				}
+			}
+			if h.provider != nil {
+				key := providerCharge{ev.Model, ev.Backend, minute}
+				providerCharges[key] = quotas.AddTokens(providerCharges[key], tokens)
 			}
 		}
 		accepted++
 	}
 	h.chargeAll(r.Context(), h.charger, charges, "quota")
 	h.chargeAll(r.Context(), h.budget, budgetCharges, "budget")
+	h.chargeProviders(r.Context(), providerCharges)
 
 	if rejected > 0 {
 		// One line per request, not per event: a sink with a systematic mistake sends every event
@@ -173,6 +201,26 @@ func (h *Handler) eventTime(ev Event) time.Time {
 		return t
 	}
 	return now
+}
+
+// chargeProviders counts the tokens of a batch towards the provider budgets, as chargeAll does
+// towards the quotas.
+func (h *Handler) chargeProviders(ctx context.Context, charges map[providerCharge]int64) {
+	if h.provider == nil || len(charges) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chargeTimeout)
+	defer cancel()
+	done := 0
+	for c, tokens := range charges {
+		if ctx.Err() != nil {
+			h.log.Warn("provider budget charges of a batch timed out; the rest are not counted",
+				"charged", done, "skipped", len(charges)-done)
+			return
+		}
+		_ = h.provider.Charge(ctx, c.model, c.backend, tokens, c.minute)
+		done++
+	}
 }
 
 // paid reports whether the budgets bound the use of a model: it has a price above zero.
