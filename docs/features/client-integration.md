@@ -369,7 +369,7 @@ Every error is an OpenAI-style body, `{"error": {"message": …, "type": …, "c
 | **429** | `provider_rate_limited` | proxy | The provider limits the gateway's account | Back off with jitter and retry |
 | **431** | `invalid_request_error` | proxy | The request has more headers than the proxy reads | Send fewer headers |
 | **4xx** | `invalid_request_error` | proxy | The provider rejected the request (its own text is not passed on) | Check the request against the model's limits, such as its context length |
-| **502** | `provider_error` | proxy | The provider failed, or refused the gateway's credentials | Retry later; the holder sees the cause in the gateway's log |
+| **502** | `provider_error` | proxy | The provider failed, or refused the gateway's credentials; or every backend of the model failed in a row (a fast failure is retried on another backend, when there is one) | Retry later; the holder sees the cause in the gateway's log |
 | **5xx** | `gateway_error` | proxy | The gateway could not reach a provider | Retry later |
 | **503** | `server_error` / `consumers_unavailable` or `quota_unavailable` | aisa | aisa cannot verify keys or the consumer's quota at the moment, and refuses rather than guesses | Retry with backoff |
 | **503** | `aisa_unreachable` | proxy | aisa is down and this model's backends do not serve without it | Retry with backoff, or use a local model that fails open |

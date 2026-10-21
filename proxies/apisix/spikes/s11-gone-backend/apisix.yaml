@@ -1,0 +1,412 @@
+# Spike S11: a backend that is gone. Every route proxies to two instances of the same model,
+# one that answers (mock-local) and one that is gone in one of three ways, with the plugin
+# options that might shorten the wait. run.sh sends requests to each and times them.
+# timeout is 8 s here, not the 300 s of the template, so that a run takes minutes.
+routes:
+  - id: unroutable-plain
+    uri: /unroutable/plain/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://192.0.2.1:8080/v1/chat/completions
+  - id: unroutable-retry
+    uri: /unroutable/retry/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        fallback_strategy: [http_5xx]
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://192.0.2.1:8080/v1/chat/completions
+  - id: unroutable-retry-fast
+    uri: /unroutable/retry-fast/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        fallback_strategy: [http_5xx]
+        retry_on_failure_within_ms: 2000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://192.0.2.1:8080/v1/chat/completions
+  - id: unroutable-checks
+    uri: /unroutable/checks/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+            checks:
+              active:
+                type: http
+                http_path: /healthz
+                timeout: 1
+                healthy: {interval: 1, successes: 1}
+                unhealthy: {interval: 1, http_failures: 2, timeouts: 2, tcp_failures: 2}
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://192.0.2.1:8080/v1/chat/completions
+            checks:
+              active:
+                type: http
+                http_path: /healthz
+                timeout: 1
+                healthy: {interval: 1, successes: 1}
+                unhealthy: {interval: 1, http_failures: 2, timeouts: 2, tcp_failures: 2}
+  - id: refused-plain
+    uri: /refused/plain/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://127.0.0.1:9/v1/chat/completions
+  - id: refused-retry
+    uri: /refused/retry/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        fallback_strategy: [http_5xx]
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://127.0.0.1:9/v1/chat/completions
+  - id: refused-retry-fast
+    uri: /refused/retry-fast/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        fallback_strategy: [http_5xx]
+        retry_on_failure_within_ms: 2000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://127.0.0.1:9/v1/chat/completions
+  - id: refused-checks
+    uri: /refused/checks/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+            checks:
+              active:
+                type: http
+                http_path: /healthz
+                timeout: 1
+                healthy: {interval: 1, successes: 1}
+                unhealthy: {interval: 1, http_failures: 2, timeouts: 2, tcp_failures: 2}
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://127.0.0.1:9/v1/chat/completions
+            checks:
+              active:
+                type: http
+                http_path: /healthz
+                timeout: 1
+                healthy: {interval: 1, successes: 1}
+                unhealthy: {interval: 1, http_failures: 2, timeouts: 2, tcp_failures: 2}
+  - id: hung-plain
+    uri: /hung/plain/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-cloud:8080/v1/chat/completions
+  - id: hung-retry
+    uri: /hung/retry/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        fallback_strategy: [http_5xx]
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-cloud:8080/v1/chat/completions
+  - id: hung-retry-fast
+    uri: /hung/retry-fast/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        fallback_strategy: [http_5xx]
+        retry_on_failure_within_ms: 2000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-cloud:8080/v1/chat/completions
+  - id: hung-checks
+    uri: /hung/checks/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+            checks:
+              active:
+                type: http
+                http_path: /healthz
+                timeout: 1
+                healthy: {interval: 1, successes: 1}
+                unhealthy: {interval: 1, http_failures: 2, timeouts: 2, tcp_failures: 2}
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-cloud:8080/v1/chat/completions
+            checks:
+              active:
+                type: http
+                http_path: /healthz
+                timeout: 1
+                healthy: {interval: 1, successes: 1}
+                unhealthy: {interval: 1, http_failures: 2, timeouts: 2, tcp_failures: 2}
+  - id: unroutable-single-checks
+    uri: /unroutable/single-checks/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        instances:
+          - name: gone
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://192.0.2.1:8080/v1/chat/completions
+            checks:
+              active:
+                type: http
+                http_path: /healthz
+                timeout: 1
+                healthy: {interval: 1, successes: 1}
+                unhealthy: {interval: 1, http_failures: 2, timeouts: 2, tcp_failures: 2}
+  # A backend that answers 5xx (the mock does on "mock:error:503" in the prompt): what a retry
+  # does with one instance, and with two that both fail.
+  - id: 5xx-single-plain
+    uri: /5xx/single-plain/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+  - id: 5xx-single-retry
+    uri: /5xx/single-retry/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        fallback_strategy: [http_5xx]
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+  - id: 5xx-both-retry
+    uri: /5xx/both-retry/v1/chat/completions
+    methods: [POST]
+    plugins:
+      ai-proxy-multi:
+        timeout: 8000
+        fallback_strategy: [http_5xx]
+        instances:
+          - name: ok
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+          - name: ok2
+            provider: openai-compatible
+            weight: 1
+            auth:
+              header:
+                Authorization: Bearer dev-provider-key
+            override:
+              endpoint: http://mock-local:8080/v1/chat/completions
+#END

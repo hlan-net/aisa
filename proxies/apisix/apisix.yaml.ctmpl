@@ -397,6 +397,13 @@ routes:
             end
       ai-proxy-multi:
         timeout: {{ sprig_mul $maxTimeoutSec 1000 }}
+        # A failure that comes fast (a refused connection, a quick 5xx) is sent to another
+        # instance of the model, when there is one; a failure after a wait, such as the timeout
+        # of a backend that is gone, is answered as it is rather than waited for twice. With one
+        # instance nothing is retried. Spike S11 (#52): the timeout above is also the wait for a
+        # connection, and the plugin has no separate connect timeout.
+        fallback_strategy: [http_5xx]
+        retry_on_failure_within_ms: 5000
         instances:
         {{- range scratch.Get "instances" }}
           - name: {{ .ID | toJSON }}
