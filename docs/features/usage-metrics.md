@@ -34,6 +34,7 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_consumer_declaration_loads_total{result}` | Reads of the consumer declarations from Consul, `ok` or `error` |
 | `aisa_consumers_loaded_timestamp_seconds` | When the consumers were last loaded |
 | `aisa_quota_profiles`, `aisa_quota_profiles_invalid` | Quota profiles read from Consul, and those that could not be parsed |
+| `aisa_quota_profiles_missing{source}` | Quota profiles that are named and not in Consul: by the default profile (`default`, 0 or 1) or by the consumers' declarations (`consumer`, one per consumer); their consumers get 503 |
 | `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
 | `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
 | `aisa_model_prices`, `aisa_model_prices_invalid` | Models with a valid price in Consul KV, and price entries that could not be parsed |
@@ -84,6 +85,7 @@ aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `promet
 | `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |
 | `AisaQuotaProfileInvalid` | `aisa_quota_profiles_invalid > 0`: the consumers of a broken profile get 503 |
+| `AisaQuotaProfileMissing` | `aisa_quota_profiles_missing > 0`: the default profile or a consumer's names a profile that is not in Consul; its consumers get 503 |
 | `AisaConsumerDeclarationInvalid` | `aisa_consumer_declarations_invalid > 0`: a consumer with a broken declaration in Consul gets 503 |
 | `AisaConsumerSecretFailing` | `aisa_consumer_secrets{state!="ok"} > 0` for 10 min: a consumer's Secret is not written, because of its name, another consumer, or an error |
 | `AisaKubeWritesFailing`, `AisaKubeNoLeader` | `aisa_kube_passes_total{result="error"}` increases for 10 min, or `sum(aisa_kube_leader) == 0` for 5 min: the Kubernetes objects are not kept up to date |

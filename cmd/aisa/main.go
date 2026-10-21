@@ -168,8 +168,11 @@ func run(args []string) error {
 		charger ledger.Charger
 	)
 	if cfg.QuotasEnabled() {
-		q, profiles, closeQuotas := newQuotas(cfg, cc, m, log.With("component", "quotas"))
+		q, profiles, closeQuotas := newQuotas(cfg, cc, declarations, m, log.With("component", "quotas"))
 		defer closeQuotas()
+		if err := m.Register(profiles.Collectors()...); err != nil {
+			return fmt.Errorf("quota profile metrics: %w", err)
+		}
 		go profiles.Run(ctx)
 		quota, charger = q, q
 		checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
@@ -208,12 +211,17 @@ func run(args []string) error {
 }
 
 // newQuotas returns the token quotas with their profiles from Consul and counters in Redis,
-// and a function that closes the connections to Redis.
-func newQuotas(cfg config.Config, cc *consul.Client, m *metrics.Metrics, log *slog.Logger) (*quotas.Quota, *quotas.Profiles, func()) {
+// and a function that closes the connections to Redis. The profiles know the default and the
+// consumers' declarations, to report a profile that is named and not there (#82).
+func newQuotas(cfg config.Config, cc *consul.Client, declarations *consumers.Declarations, m *metrics.Metrics, log *slog.Logger) (*quotas.Quota, *quotas.Profiles, func()) {
 	profiles := quotas.NewProfiles(
 		quotas.ConsulSource{Client: cc, Prefix: cfg.Consul.Prefix + "/quotas/"},
 		log,
-		quotas.ProfileOptions{OnLoad: func(s quotas.LoadStats) { observeProfiles(m, s) }})
+		quotas.ProfileOptions{
+			OnLoad:    func(s quotas.LoadStats) { observeProfiles(m, s) },
+			Default:   cfg.DefaultQuotaProfile,
+			Consumers: declarations,
+		})
 	rdb := redis.NewClient(&redis.Options{
 		Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password,
 	})
