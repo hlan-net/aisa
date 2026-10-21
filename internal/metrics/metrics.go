@@ -3,6 +3,7 @@
 package metrics
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -405,3 +406,14 @@ func (m *Metrics) Handler() http.Handler {
 
 // Gatherer gives access to the registered metrics, for tests.
 func (m *Metrics) Gatherer() prometheus.Gatherer { return m.registry }
+
+// Register adds collectors of another package to aisa's registry, such as those of the
+// Kubernetes client.
+func (m *Metrics) Register(cs ...prometheus.Collector) error {
+	for _, c := range cs {
+		if err := m.registry.Register(c); err != nil {
+			return fmt.Errorf("register metrics: %w", err)
+		}
+	}
+	return nil
+}

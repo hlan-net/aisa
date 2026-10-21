@@ -42,6 +42,7 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_kube_passes_total{kind,result}` | Passes over the consumers' Secrets (`secrets`) and the `Model` objects (`models`), `ok` or `error` |
 | `aisa_consumer_secrets{state}` | Consumers that name a Secret, by the state of the last pass: `ok`, `not_owned` (a Secret of that name is not the consumer's), `duplicate_target` (another consumer names it too) or `error` |
 | `aisa_consumer_keys_issued_total{reason}` | Keys aisa issued: `new`, `missing` (the Secret was gone), `unknown_key` (the Secret's key was not one aisa issued) or `rotation` |
+| `rest_client_requests_total{code,method,host}`, `rest_client_request_duration_seconds{verb,host}`, `rest_client_rate_limiter_duration_seconds{verb,host}` | aisa's Kubernetes client, under client-go's own names (with `kubernetes.enabled`). The client has no rate limit of its own, the API server's Priority and Fairness applies, so the rate limiter histogram stays empty ([#70](https://github.com/hlan-net/aisa/issues/70)) |
 | `aisa_models`, `aisa_models_available` | `Model` objects this install keeps, and those with a healthy backend |
 | `aisa_model_conflicts`, `aisa_model_descriptions_invalid` | Models on offer without an object because of their name, and model descriptions in Consul that could not be read |
 

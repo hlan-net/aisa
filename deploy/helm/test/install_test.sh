@@ -247,6 +247,19 @@ expect "the key in the Secret passes the proxy" 200 "$status"
 issued=$(curl -fsS http://127.0.0.1:18090/metrics | awk '/^aisa_consumer_keys_issued_total\{reason="new"\}/{print $2}')
 expect "aisa counted the key it issued" 1 "$issued"
 
+# aisa's Kubernetes client is not rate limited by client-go (#70); the log is at debug, where
+# client-go reports its waits. Its requests are in aisa's metrics.
+# Read whole, not piped into grep -q: with pipefail, grep's early exit would fail the pipe.
+aisa_log=$("${K[@]}" logs deploy/"$RELEASE" -c aisa)
+if grep -q 'client-side throttling' <<<"$aisa_log"; then
+    fail "aisa's Kubernetes client does not throttle itself"
+fi
+ok "aisa's Kubernetes client does not throttle itself"
+metrics=$(curl -fsS http://127.0.0.1:18090/metrics)
+grep -q '^rest_client_requests_total{' <<<"$metrics" ||
+    fail "aisa's metrics have its Kubernetes client's requests"
+ok "aisa's metrics have its Kubernetes client's requests"
+
 # The Model objects: one per model on offer, found by what they can do.
 for _ in $(seq 1 60); do
     models=$(kubectl get models.aisa.hlan.net -l feature.aisa.hlan.net/TextGeneration -o jsonpath='{range .items[*]}{.spec.model} {end}' 2>/dev/null || true)
