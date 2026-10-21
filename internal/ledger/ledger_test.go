@@ -18,6 +18,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/pricing"
 )
 
 func TestHandlerServeHTTP(t *testing.T) {
@@ -517,5 +518,50 @@ func TestHandlerChargesNothingWithoutAnEstimate(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(m.TokensEstimated.WithLabelValues("chat-ui", "qwen3", "ollama-1")); got != 0 {
 		t.Fatalf("aisa_tokens_estimated_total = %v, want 0", got)
+	}
+}
+
+type fakePricer map[string]pricing.Price
+
+func (f fakePricer) Lookup(model string) (pricing.Price, bool) {
+	p, ok := f[model]
+	return p, ok
+}
+
+func TestHandlerCost(t *testing.T) {
+	m := metrics.New("test")
+	prices := fakePricer{
+		"cloud-large": {InputPer1K: 0.003, OutputPer1K: 0.015, Currency: "EUR"},
+		"qwen3":       {InputPer1K: 0, OutputPer1K: 0, Currency: "EUR"},
+	}
+	h := New(m, NewDedup(100, 5*time.Minute), nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{
+		EstimateDefaultTokens: 500,
+		Pricer:                prices,
+	})
+
+	body := `[
+		{"request_id": "p1", "consumer": "chat-ui", "model": "cloud-large", "backend": "cloud-1", "status": 200, "prompt_tokens": 1000, "completion_tokens": 2000},
+		{"request_id": "p1", "consumer": "chat-ui", "model": "cloud-large", "backend": "cloud-1", "status": 200, "prompt_tokens": 1000, "completion_tokens": 2000},
+		{"request_id": "p2", "consumer": "chat-ui", "model": "cloud-large", "backend": "cloud-1", "status": 200},
+		{"request_id": "f1", "consumer": "chat-ui", "model": "qwen3", "backend": "ollama-1", "status": 200, "prompt_tokens": 500, "completion_tokens": 500},
+		{"request_id": "u1", "consumer": "chat-ui", "model": "unpriced", "backend": "ollama-1", "status": 200, "prompt_tokens": 500, "completion_tokens": 500}
+	]`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/usage", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 1 000 prompt (0.003) + 2 000 completion (0.030) = 0.033 EUR; duplicate and missing-usage
+	// events do not add to aisa_cost_total.
+	if got := testutil.ToFloat64(m.Cost.WithLabelValues("chat-ui", "cloud-large", "EUR")); math.Abs(got-0.033) > 1e-12 {
+		t.Errorf("aisa_cost_total{cloud-large} = %v, want 0.033", got)
+	}
+	if got := testutil.ToFloat64(m.Cost.WithLabelValues("chat-ui", "qwen3", "EUR")); got != 0 {
+		t.Errorf("aisa_cost_total{qwen3} = %v, want 0", got)
+	}
+	// Only cloud-large and qwen3 have prices, so aisa_cost_total has 2 series.
+	if n := testutil.CollectAndCount(m.Cost); n != 2 {
+		t.Errorf("aisa_cost_total has %d series, want 2", n)
 	}
 }

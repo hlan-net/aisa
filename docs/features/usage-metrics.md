@@ -35,6 +35,8 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_quota_profiles`, `aisa_quota_profiles_invalid` | Quota profiles read from Consul, and those that could not be parsed |
 | `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
 | `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
+| `aisa_model_prices`, `aisa_model_prices_invalid` | Models with a valid price in Consul KV, and price entries that could not be parsed |
+| `aisa_model_price_loads_total{result}` | Reads of the model prices from Consul, `ok` or `error` |
 | `aisa_kube_leader` | 1 on the replica that holds the leader's Lease and writes the Kubernetes objects ([`KUBERNETES_OBJECTS.md`](../concepts/KUBERNETES_OBJECTS.md)) |
 | `aisa_kube_passes_total{kind,result}` | Passes over the consumers' Secrets (`secrets`) and the `Model` objects (`models`), `ok` or `error` |
 | `aisa_consumer_secrets{state}` | Consumers that name a Secret, by the state of the last pass: `ok`, `not_owned` (a Secret of that name is not the consumer's), `duplicate_target` (another consumer names it too) or `error` |

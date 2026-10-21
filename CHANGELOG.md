@@ -7,6 +7,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 ## [Unreleased]
 
 ### Added
+- **Model pricing and `aisa_cost_total`** (`ROADMAP.md` v0.3.0, [`quotas-and-budgets.md`](docs/features/quotas-and-budgets.md#budgets-v030)): aisa watches `aisa/pricing/<model>` in Consul KV (`{"input_per_1k": 0.003, "output_per_1k": 0.015, "currency": "EUR"}`) with blocking queries and computes `aisa_cost_total{consumer,model,currency}` for every accepted usage event with exact token counts on a priced model. State metrics: `aisa_model_prices`, `aisa_model_prices_invalid`, and `aisa_model_price_loads_total{result}`; `/readyz` checks `model_prices`. Also records the v0.3.0 budget scope decision in `docs/features/quotas-and-budgets.md`: monthly token budgets cover paid models (`input_per_1k > 0` or `output_per_1k > 0`) with prompt and completion tokens weighted 1:1.
 - **Documentation in the admin interface** (US-3): a Documentation tab at `/admin` shows the Markdown under `docs/`, embedded in the binary and rendered to HTML by aisa (GFM, raw HTML omitted, GitHub's heading anchors), so the docs of the running version can be read in the browser without access to GitHub. Links between documents stay in the view and can be bookmarked (`/admin/?doc=<path>#<heading>`); links to other files of the repository open on GitHub. API: `GET /admin/api/docs` and `GET /admin/api/docs/{path}`. The image build now copies `docs/`; the Markdown renderer is [goldmark](https://github.com/yuin/goldmark).
 
 ## [0.2.1] - 2026-10-20

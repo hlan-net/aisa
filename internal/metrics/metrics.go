@@ -116,6 +116,13 @@ type Metrics struct {
 	// QuotaErrors counts failed calls to the quota counters in Redis, by op.
 	QuotaErrors *prometheus.CounterVec
 
+	// ModelPrices and ModelPricesInvalid count the model prices in Consul whose entries could
+	// and could not be read.
+	ModelPrices        prometheus.Gauge
+	ModelPricesInvalid prometheus.Gauge
+	// ModelPriceLoads counts the loads of the model prices by result, LoadOK or LoadError.
+	ModelPriceLoads *prometheus.CounterVec
+
 	// ConfigRenders counts the proxy's renders of the gateway config by result: promoted,
 	// rejected or held. ConfigRendered is when a render was last promoted, in seconds since
 	// the epoch, and ConfigBackends and ConfigModels are what that config holds. The three
@@ -273,6 +280,18 @@ func New(version string) *Metrics {
 			Name: "aisa_quota_errors_total",
 			Help: "Failed reads and writes of the quota counters in Redis.",
 		}, []string{"op"}),
+		ModelPrices: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_model_prices",
+			Help: "Models with a valid price in Consul KV.",
+		}),
+		ModelPricesInvalid: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "aisa_model_prices_invalid",
+			Help: "Model prices in Consul KV that cannot be read.",
+		}),
+		ModelPriceLoads: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "aisa_model_price_loads_total",
+			Help: "Reads of the model prices from Consul KV.",
+		}, []string{"result"}),
 		ConfigRenders: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "aisa_config_renders_total",
 			Help: "Renders of the gateway config reported by the proxy, by result: promoted, rejected or held.",
@@ -339,6 +358,7 @@ func New(version string) *Metrics {
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
 		m.ConsumerDeclarations, m.ConsumerDeclarationsInvalid, m.ConsumerDeclarationLoads,
 		m.QuotaProfiles, m.QuotaProfilesInvalid, m.QuotaProfileLoads, m.QuotaErrors,
+		m.ModelPrices, m.ModelPricesInvalid, m.ModelPriceLoads,
 		m.KubeLeader, m.KubePasses, m.ConsumerSecrets, m.ConsumerKeysIssued,
 		m.Models, m.ModelsAvailable, m.ModelConflicts, m.ModelDescriptionsInvalid,
 	)

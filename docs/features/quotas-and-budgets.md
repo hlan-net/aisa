@@ -35,9 +35,8 @@ Gateway-native quota plugins (e.g. APISIX `ai-rate-limiting`) are **not** used. 
 
 Every limit is in tokens; currency is how spend is shown, never how it is limited (decided 2026-09-29).
 
-- Monthly budget per consumer in `aisa/budgets/<consumer>`, in tokens (`monthly_tokens`), **calendar month** in the configured time zone. Used = Σ (prompt tokens + completion tokens) of the consumer's requests that month to the models the budget covers.
-- **Cost is for display**: Σ (prompt tokens × input price + completion tokens × output price), with prices from `aisa/pricing/<model>` ([`CONSUL.md`](../concepts/CONSUL.md)), in `aisa_cost_total` and the dashboard. It denies nothing.
-- **Open, decided with the first v0.3.0 PR:** which models a budget covers, every model or only those with a price (proposed: only those with a price, because the token quota already limits local models), and whether prompt and completion tokens weigh the same (proposed: they do). Until then the formula above is provisional.
+- Monthly budget per consumer in `aisa/budgets/<consumer>`, in tokens (`monthly_tokens`), **calendar month** in the configured time zone. Used = Σ (prompt tokens + completion tokens) of the consumer's requests that month to models with a price > 0 (`input_per_1k > 0` or `output_per_1k > 0` in `aisa/pricing/<model>`); prompt and completion tokens weigh 1:1 (decided 2026-10-20). Local models cost 0 by default and are limited by the hourly token quota, though a local model can also be given a price (for instance from measured power use) when the holder wants it to count towards the budget.
+- **Cost is for display**: Σ (prompt tokens × input price + completion tokens × output price), with prices from `aisa/pricing/<model>` ([`CONSUL.md`](../concepts/CONSUL.md)), in `aisa_cost_total` and the dashboard. Only exact reported tokens (`prompt_tokens`, `completion_tokens`) are added to `aisa_cost_total`; a model without a price entry in Consul has no `aisa_cost_total` series. Cost denies nothing.
 - **Soft limit** (e.g. 80 %): the request is allowed, the response gets `X-Aisa-Budget-Remaining` (tokens), and an alert fires.
 - **Exhausted**, depending on `on_exhausted`:
   - `reject`: 429 with an OpenAI-style error body

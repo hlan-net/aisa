@@ -97,6 +97,7 @@ jobs:
           curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_build_info{version="ci"} 1'
           curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_consumer_loads_total{result="ok"}'
           curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_consumer_declaration_loads_total{result="ok"}'
+          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_model_price_loads_total{result="ok"}'
           # No consumers in Vault or Consul: every key is unknown.
           [[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer x' \
                 -H 'X-Aisa-Requested-Model: m' -X POST http://127.0.0.1:8080/v1/decide)" == 401 ]]
