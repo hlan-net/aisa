@@ -214,6 +214,16 @@ done
 [[ "$tokens" != 0 ]] || fail "usage events reached aisa"
 ok "usage events reached aisa ($tokens tokens for chat-ui)"
 
+# aisa times its own decisions (#71): every request above was decided, and a decision takes a
+# small part of a request, well under a second, even on a runner.
+decide=$(curl -fsS http://127.0.0.1:18090/metrics |
+    awk '/^aisa_decide_duration_seconds_count/{n += $2} /^aisa_decide_duration_seconds_sum/{s += $2} END {printf "%d %f", n, s}')
+read -r decide_count decide_sum <<<"$decide"
+(( decide_count >= 3 )) || fail "aisa timed its decisions: want at least 3, got $decide_count"
+awk -v n="$decide_count" -v s="$decide_sum" 'BEGIN { exit !(s / n < 1) }' ||
+    fail "aisa's decisions take under a second on average: $decide_sum s for $decide_count"
+ok "aisa timed its decisions ($decide_count in $decide_sum s)"
+
 echo "== Kubernetes objects"
 # The consumer's Secret: written by aisa, with a key that it issued.
 for _ in $(seq 1 60); do

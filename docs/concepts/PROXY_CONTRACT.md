@@ -202,6 +202,8 @@ aisa exports its own normalized metrics, so the dashboards and alerts work with 
 | `aisa_budget_limit`, `aisa_budget_spent` | consumer, period |
 | `aisa_latency_seconds`, `aisa_ttft_seconds` (histograms) | model, backend |
 | `aisa_decisions_total` | consumer, result (`allow`/`deny_auth`/`invalid`/`unavailable`/`deny_quota`/`deny_budget`/`downgrade`); a rejected credential and a 503 before the credential is checked count under the consumer `unknown` |
+| `aisa_decide_duration_seconds` (histogram) | result, as in `aisa_decisions_total`: the time aisa took to answer `/v1/decide`, without the network to and from the gateway |
+| `aisa_decide_stage_duration_seconds` (histogram) | stage (`consumer`: finding the key's consumer, which waits for a reload from Vault only on an unknown key; `quota`: reading the token usage from Redis) |
 | `aisa_usage_events_total` | result (`accepted`/`duplicate`/`rejected`) |
 | `aisa_usage_requests_rejected_total` | reason (`malformed`/`too_large`/`unreadable`): usage requests rejected as a whole, whose events are in no other metric |
 | `aisa_usage_missing_total` | consumer, model, backend: successful requests reported without token counts, which aisa charges by estimate |

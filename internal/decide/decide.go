@@ -65,56 +65,58 @@ func New(c Lookup, q QuotaChecker, m *metrics.Metrics, log *slog.Logger) *Handle
 
 // ServeHTTP answers POST and GET /v1/decide.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	result := h.decide(w, r)
+	h.metrics.DecideDuration.WithLabelValues(result).Observe(time.Since(start).Seconds())
+}
+
+// decide answers the request and returns the result label of aisa_decisions_total it counted.
+func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 	reqID := r.Header.Get(HeaderRequestID)
 	log := h.log.With("request_id", reqID)
 
 	key, ok := bearer(r.Header.Get("Authorization"))
 	if !ok {
-		h.deny(w, log, metrics.ConsumerUnknown, denyAuth("missing or malformed credential: want Authorization: Bearer <key>"))
-		return
+		return h.deny(w, log, metrics.ConsumerUnknown, denyAuth("missing or malformed credential: want Authorization: Bearer <key>"))
 	}
+	stage := time.Now()
 	consumer, res := h.consumers.Lookup(r.Context(), key)
+	h.metrics.DecideStageDuration.WithLabelValues(metrics.StageConsumer).Observe(time.Since(stage).Seconds())
 	switch res {
 	case consumers.Unavailable:
 		// Fail closed: without current consumers aisa cannot tell a valid key from a revoked one.
 		log.Error("cannot decide: consumers are not available")
-		h.deny(w, log, metrics.ConsumerUnknown, denial{
+		return h.deny(w, log, metrics.ConsumerUnknown, denial{
 			status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
 			typ: "server_error", code: "consumers_unavailable", msg: "aisa cannot verify credentials at the moment",
 		})
-		return
 	case consumers.Unknown:
-		h.deny(w, log, metrics.ConsumerUnknown, denyAuth("unknown or invalid consumer key"))
-		return
+		return h.deny(w, log, metrics.ConsumerUnknown, denyAuth("unknown or invalid consumer key"))
 	}
 
 	model, err := requestedModel(r)
 	if errors.Is(err, errBodyTooLarge) {
-		h.deny(w, log, consumer.Name, denial{
+		return h.deny(w, log, consumer.Name, denial{
 			status: http.StatusRequestEntityTooLarge, result: metrics.ResultInvalid,
 			typ: "invalid_request_error", code: "request_too_large",
 			msg: "the request is too large for aisa to find its model; the gateway should send the model in X-Aisa-Requested-Model",
 		})
-		return
 	}
 	if errors.Is(err, errModelTooLong) {
-		h.deny(w, log, consumer.Name, denial{
+		return h.deny(w, log, consumer.Name, denial{
 			status: http.StatusBadRequest, result: metrics.ResultInvalid,
 			typ: "invalid_request_error", code: "invalid_model",
 			msg: fmt.Sprintf("the requested model name is longer than %d bytes", maxModel),
 		})
-		return
 	}
 	if model == "" {
-		h.deny(w, log, consumer.Name, denial{
+		return h.deny(w, log, consumer.Name, denial{
 			status: http.StatusBadRequest, result: metrics.ResultInvalid,
 			typ: "invalid_request_error", code: "missing_model", msg: "the requested model could not be determined",
 		})
-		return
 	}
 	if d, denied := h.checkQuota(r.Context(), log, consumer); denied {
-		h.deny(w, log, consumer.Name, d)
-		return
+		return h.deny(w, log, consumer.Name, d)
 	}
 
 	w.Header().Set(HeaderConsumer, consumer.Name)
@@ -122,6 +124,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	h.metrics.Decisions.WithLabelValues(consumer.Name, metrics.ResultAllow).Inc()
 	log.Debug("allow", "consumer", consumer.Name, "model", model)
+	return metrics.ResultAllow
 }
 
 // checkQuota returns the denial of a consumer whose quota is exhausted or cannot be known.
@@ -129,7 +132,9 @@ func (h *Handler) checkQuota(ctx context.Context, log *slog.Logger, c consumers.
 	if h.quota == nil {
 		return denial{}, false
 	}
+	start := time.Now()
 	v := h.quota.Check(ctx, c)
+	h.metrics.DecideStageDuration.WithLabelValues(metrics.StageQuota).Observe(time.Since(start).Seconds())
 	switch v.Outcome {
 	case quotas.Exhausted:
 		return denial{
@@ -165,13 +170,15 @@ func denyAuth(msg string) denial {
 	}
 }
 
-func (h *Handler) deny(w http.ResponseWriter, log *slog.Logger, consumer string, d denial) {
+// deny writes the denial and returns its result label.
+func (h *Handler) deny(w http.ResponseWriter, log *slog.Logger, consumer string, d denial) string {
 	h.metrics.Decisions.WithLabelValues(consumer, d.result).Inc()
 	log.Info("deny", "status", d.status, "consumer", consumer, "result", d.result, "reason", d.code)
 	if d.retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(d.retryAfter.Seconds())), 10))
 	}
 	writeError(w, d.status, d.typ, d.code, d.msg)
+	return d.result
 }
 
 // bearer extracts the key from an Authorization header. The scheme is case-insensitive.

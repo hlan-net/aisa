@@ -27,6 +27,12 @@ const (
 	ResultDowngrade   = "downgrade"
 )
 
+// Values of the stage label of aisa_decide_stage_duration_seconds.
+const (
+	StageConsumer = "consumer" // finding the consumer of the key; waits for a Vault reload on an unknown key
+	StageQuota    = "quota"    // reading the consumer's token usage from Redis
+)
+
 // Values of the result label of aisa_usage_events_total.
 const (
 	EventAccepted  = "accepted"
@@ -77,6 +83,10 @@ type Metrics struct {
 	TTFT    *prometheus.HistogramVec
 	// Decisions counts the answers of the decision API by consumer and result.
 	Decisions *prometheus.CounterVec
+	// DecideDuration is the time aisa takes to answer the decision API, by result, and
+	// DecideStageDuration the part of it spent in each stage, by stage.
+	DecideDuration      *prometheus.HistogramVec
+	DecideStageDuration *prometheus.HistogramVec
 	// UsageEvents counts usage events received by result (accepted, duplicate, rejected).
 	UsageEvents *prometheus.CounterVec
 	// UsageRequestsRejected counts usage requests rejected as a whole, by reason. Their events
@@ -216,6 +226,16 @@ func New(version string) *Metrics {
 			Name: "aisa_decisions_total",
 			Help: "Answers of the decision API.",
 		}, []string{"consumer", "result"}),
+		DecideDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "aisa_decide_duration_seconds",
+			Help:    "Time aisa took to answer the decision API, by result as in aisa_decisions_total.",
+			Buckets: decideBuckets,
+		}, []string{"result"}),
+		DecideStageDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "aisa_decide_stage_duration_seconds",
+			Help:    "Time a decision spent in a stage: consumer (finding the key, a Vault reload on a miss) or quota (Redis).",
+			Buckets: decideBuckets,
+		}, []string{"stage"}),
 		UsageEvents: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "aisa_usage_events_total",
 			Help: "Usage events received by aisa, by result.",
@@ -353,6 +373,7 @@ func New(version string) *Metrics {
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 		buildInfo,
 		m.Requests, m.Tokens, m.Cost, m.BudgetLimit, m.BudgetSpent, m.Latency, m.TTFT, m.Decisions,
+		m.DecideDuration, m.DecideStageDuration,
 		m.UsageEvents, m.UsageRequestsRejected, m.UsageMissing, m.TokensEstimated,
 		m.ConfigRenders, m.ConfigRendered, m.ConfigBackends, m.ConfigModels,
 		m.Consumers, m.ConsumerKeys, m.ConsumersUnreadable, m.ConsumerLoads, m.ConsumersLoaded,
@@ -372,6 +393,10 @@ func New(version string) *Metrics {
 	}
 	return m
 }
+
+// decideBuckets cover a decision from memory (well under a millisecond) to one that waits on
+// Vault or Redis until their timeouts (seconds).
+var decideBuckets = []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}
 
 // Handler serves the metrics in the Prometheus text format.
 func (m *Metrics) Handler() http.Handler {
