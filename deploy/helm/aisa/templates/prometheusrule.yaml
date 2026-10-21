@@ -194,6 +194,29 @@ spec:
           annotations:
             summary: "{{ `{{ $labels.consumer }}` }} is denied or downgraded, its budget is used up"
             description: "The consumer's requests are answered 429 or routed to a cheaper model."
+{{- if .Values.quotas.enabled }}
+        - alert: AisaBudgetInvalid
+          expr: aisa_budgets_invalid > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $value }}` }} budget(s) in Consul cannot be parsed"
+            description: >-
+              The consumer of a broken budget under aisa/budgets/ in Consul KV is answered 503 on
+              priced models. aisa's log names the consumer.
+        - alert: AisaBudgetCountersFailing
+          expr: sum by (op) (rate(aisa_budget_errors_total[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "aisa cannot {{ `{{ $labels.op }}` }} its budget counters"
+            description: >-
+              Reads or writes of the budget counters in Redis, or of their copies in Consul KV,
+              have failed for 5 minutes. The budgets are enforced on the totals last persisted
+              while this lasts, and the tokens used meanwhile are not counted towards them.
+{{- end }}
 {{- if .Values.kubernetes.enabled }}
     - name: aisa.kubernetes
       rules:
