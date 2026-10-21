@@ -20,7 +20,8 @@ import (
 // KV (docs/concepts/CONSUL.md): the holder declares a consumer there, and Vault holds only the
 // hashes of its keys. A key whose consumer is not declared does not authenticate.
 type Declaration struct {
-	// QuotaProfile names the consumer's quota profile, aisa/quotas/<profile>; empty: no quota.
+	// QuotaProfile names the consumer's quota profile, aisa/quotas/<profile>; empty: the
+	// consumer is denied (403 no_quota), unless aisa has a default profile (decide.Options).
 	QuotaProfile string
 	// Namespace and Secret say where the consumer's application runs and the Secret aisa is to
 	// write its key into (docs/concepts/KUBERNETES_OBJECTS.md); both or neither.

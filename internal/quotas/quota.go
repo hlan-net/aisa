@@ -20,8 +20,9 @@ type Counter interface {
 type Outcome int
 
 const (
-	// Allow: the consumer has tokens left, has no quota profile, or its usage could not be
-	// read.
+	// Allow: the consumer has tokens left, or its usage could not be read. A consumer without
+	// a quota profile is allowed too: the decision denies such a consumer, or gives it the
+	// default profile, before it asks (decide.Options), so Check never sees one from there.
 	Allow Outcome = iota
 	// Exhausted: the consumer has used its tokens for the window.
 	Exhausted
