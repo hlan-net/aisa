@@ -183,7 +183,7 @@ routes:
           X-Request-Id: $apisix_request_id
         # Fail-open support (#4): allow_degradation passes the request to internal hop
         # only when aisa is unreachable (connection error or timeout). Answers from aisa
-        # (400, 401, 413, 429, 503) are passed directly to the client.
+        # (400, 401, 403, 413, 429, 503) are passed directly to the client.
         allow_degradation: true
         status_on_error: 503
       # Runs after forward-auth, and only when forward-auth let the request through: aisa allowed

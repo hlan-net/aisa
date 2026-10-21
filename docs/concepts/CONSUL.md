@@ -55,7 +55,7 @@ aisa/consumers/<name>   {"quota_profile": "batch", "namespace": "news", "secret"
 
 A consumer is declared here by the holder, and Vault holds only the hashes of its keys ([`VAULT.md`](./VAULT.md#consumer-credentials)). The declaration is a JSON object; every field is optional, and fields aisa does not know are ignored:
 
-- `quota_profile` names the consumer's token quota, `aisa/quotas/<profile>` below; without it the consumer has no quota.
+- `quota_profile` names the consumer's token quota, `aisa/quotas/<profile>` below. Without it the consumer is denied (403 `no_quota`), unless `AISA_DEFAULT_QUOTA_PROFILE` names a default ([`quotas-and-budgets.md`](../features/quotas-and-budgets.md#token-quotas-v020)).
 - `namespace` and `secret`, together, say where the consumer's application runs and the Secret aisa writes its key into ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret)); one without the other is invalid. aisa issues the key, so its hash in Vault is aisa's to write; a consumer without them gets its key by hand.
 - A key whose consumer is not declared does not authenticate, however valid its hash in Vault: the declaration is what makes a consumer exist. A declaration that is not valid JSON, or named `unknown`, is logged, counted in `aisa_consumer_declarations_invalid`, and its consumer's keys are answered 503 until it is fixed, so a typo does not lift a quota.
 - aisa follows the prefix with blocking queries, so a consumer declared or changed in Consul applies within seconds; its key, added in Vault, is picked up on the next reload or the first request with it ([`VAULT.md`](./VAULT.md#consumer-credentials)).

@@ -236,7 +236,8 @@ AISA enforces token quotas via a sliding 60-minute window in Redis. When declari
 |---|---|---|---|
 | `batch` | `100,000` to `200,000` | ~30–50 tokens/sec (~1 request/min) | Background jobs, scrapers, bulk data processing, embeddings |
 | `interactive` | `1,000,000` to `5,000,000` | ~300–1,500 tokens/sec (~10–30 rpm) | User-facing chat, real-time UI queries, interactive agents |
-| `unlimited` | None (omit `quota_profile`) | Unbounded | Internal admin tools, critical cluster infrastructure |
+
+A consumer without `quota_profile` is denied with 403 `no_quota`, unless the holder has set a default profile; no consumer is unlimited.
 
 > [!TIP]
 > Choose `batch` for non-urgent tasks to prevent background processes from consuming quota needed by user-facing services.
@@ -361,6 +362,7 @@ Every error is an OpenAI-style body, `{"error": {"message": …, "type": …, "c
 | **400** | `invalid_request_error` / `missing_model` | aisa | The request names no model | Send `model` in the body |
 | **400** | `invalid_request_error` / `invalid_model` | aisa | The model name is longer than 256 bytes | Use a name from `GET /v1/models` |
 | **401** | `invalid_request_error` / `invalid_api_key` | aisa | No `Authorization: Bearer` key, a key aisa does not know, or a replaced key after its grace period | Re-read the Secret (restart the pod, or mount it as a file), or check the consumer's declaration |
+| **403** | `invalid_request_error` / `no_quota` | aisa | The consumer has no quota profile, and the holder has set no default | Ask the holder to give the consumer a `quota_profile` |
 | **413** | `invalid_request_error` / `request_too_large` | aisa | The body is too large for aisa to find the model in it (the proxy normally spares aisa the body) | Make the request smaller |
 | **429** | `tokens` / `rate_limit_exceeded` | aisa | The consumer's hourly token quota is used up | Wait for `Retry-After` seconds; or ask for a larger quota profile |
 | **429** | `provider_rate_limited` | proxy | The provider limits the gateway's account | Back off with jitter and retry |

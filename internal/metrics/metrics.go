@@ -23,6 +23,7 @@ const (
 	ResultDenyAuth    = "deny_auth"   // unknown, invalid or missing credential (401)
 	ResultInvalid     = "invalid"     // no model in the request (400), or a body too large to look for it (413)
 	ResultUnavailable = "unavailable" // aisa cannot verify credentials and fails closed (503)
+	ResultNoQuota     = "no_quota"    // the consumer has no quota profile and there is no default (403)
 	ResultDenyQuota   = "deny_quota"  // quota exhausted (429)
 	ResultDenyBudget  = "deny_budget" // budget exhausted (429)
 	ResultDowngrade   = "downgrade"

@@ -195,7 +195,7 @@ func run(args []string) error {
 
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
-		decide.New(store, quota, m, log.With("component", "decide")),
+		decide.New(store, quota, m, log.With("component", "decide"), decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile}),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
 			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens, Pricer: prices}),
 		render.New(m, log.With("component", "render")),

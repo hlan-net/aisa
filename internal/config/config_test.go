@@ -71,6 +71,8 @@ func TestFromEnv(t *testing.T) {
 		"AISA_METRICS_ADDR":     ":9090",
 		"AISA_LOG_LEVEL":        "debug",
 		"AISA_SHUTDOWN_TIMEOUT": "30s",
+
+		"AISA_DEFAULT_QUOTA_PROFILE": " batch ",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +80,7 @@ func TestFromEnv(t *testing.T) {
 	want := Defaults()
 	want.Addr, want.LogLevel, want.ShutdownTimeout = "127.0.0.1:9000", slog.LevelDebug, 30*time.Second
 	want.MetricsAddr = ":9090"
+	want.DefaultQuotaProfile = "batch"
 	want.Vault.Addr = "http://vault:8200"
 	want.Consul.Addr = "consul:8500"
 	if cfg != want {

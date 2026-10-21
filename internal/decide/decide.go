@@ -1,8 +1,8 @@
 // Package decide is the decision API, contract 1 in docs/concepts/PROXY_CONTRACT.md: the
 // gateway asks POST /v1/decide before it proxies a request, and applies the answer.
 //
-// This version authenticates the consumer, checks its token quota and passes the requested
-// model through. Budgets, which can deny a request or rewrite its model, come in a later version.
+// This version authenticates the consumer, denies a consumer without a quota profile, checks
+// its token quota and passes the requested model through. Budgets, which can deny a request or rewrite its model, come in a later version.
 package decide
 
 import (
@@ -50,17 +50,27 @@ type QuotaChecker interface {
 	Check(ctx context.Context, c consumers.Consumer) quotas.Verdict
 }
 
+// Options configure the decision handler.
+type Options struct {
+	// DefaultQuotaProfile is the quota profile of a consumer that names none
+	// (AISA_DEFAULT_QUOTA_PROFILE). Empty: such a consumer is denied with 403 no_quota, so no
+	// consumer is served without a limit the holder set (#33).
+	DefaultQuotaProfile string
+}
+
 // Handler answers /v1/decide.
 type Handler struct {
 	consumers Lookup
 	quota     QuotaChecker
 	metrics   *metrics.Metrics
 	log       *slog.Logger
+	opts      Options
 }
 
-// New returns the decision handler. With a nil quota, no consumer has a quota.
-func New(c Lookup, q QuotaChecker, m *metrics.Metrics, log *slog.Logger) *Handler {
-	return &Handler{consumers: c, quota: q, metrics: m, log: log}
+// New returns the decision handler. With a nil quota, quotas are not checked; a consumer still
+// needs a quota profile, its own or the default.
+func New(c Lookup, q QuotaChecker, m *metrics.Metrics, log *slog.Logger, opts Options) *Handler {
+	return &Handler{consumers: c, quota: q, metrics: m, log: log, opts: opts}
 }
 
 // ServeHTTP answers POST and GET /v1/decide.
@@ -114,6 +124,16 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 			status: http.StatusBadRequest, result: metrics.ResultInvalid,
 			typ: "invalid_request_error", code: "missing_model", msg: "the requested model could not be determined",
 		})
+	}
+	if consumer.QuotaProfile == "" {
+		if h.opts.DefaultQuotaProfile == "" {
+			return h.deny(w, log, consumer.Name, denial{
+				status: http.StatusForbidden, result: metrics.ResultNoQuota,
+				typ: "invalid_request_error", code: "no_quota",
+				msg: "the consumer has no quota profile, and aisa serves no consumer without a limit",
+			})
+		}
+		consumer.QuotaProfile = h.opts.DefaultQuotaProfile
 	}
 	if d, denied := h.checkQuota(r.Context(), log, consumer); denied {
 		return h.deny(w, log, consumer.Name, d)

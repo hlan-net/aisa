@@ -59,6 +59,9 @@ consul:
 # keeps the books.
 quotas:
   enabled: true
+  # The quota profile of a consumer whose declaration names none, such as "batch". Empty: such a
+  # consumer is denied with 403 no_quota, so no consumer is served without a limit (#33).
+  defaultProfile: ""
 
 # Admin interface and embedded web UI (/admin). Off by default.
 # WARNING: /admin/api has no internal authentication. When enabled, anyone who can reach
