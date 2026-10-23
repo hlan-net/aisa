@@ -371,3 +371,29 @@ func TestUsablePath(t *testing.T) {
 		}
 	}
 }
+
+// A credential that Vault issues (#92): key_path needs key and key_field, and is a Vault path.
+func TestUsableKeyPath(t *testing.T) {
+	for _, c := range []struct {
+		meta map[string]string
+		want bool
+	}{
+		{map[string]string{}, true},
+		{map[string]string{"key": "vertex", "key_path": "gcp/roleset/vertex/token", "key_field": "token"}, true},
+		{map[string]string{"key": "vertex", "key_path": "gcp/static-account/vertex/token", "key_field": "access_token"}, true},
+		{map[string]string{"key_path": "gcp/roleset/vertex/token", "key_field": "token"}, false},
+		{map[string]string{"key": "vertex", "key_path": "gcp/roleset/vertex/token"}, false},
+		{map[string]string{"key": "vertex", "key_path": "/gcp/roleset/vertex/token", "key_field": "token"}, false},
+		{map[string]string{"key": "vertex", "key_path": "gcp/roleset/vertex/token/", "key_field": "token"}, false},
+		{map[string]string{"key": "vertex", "key_path": "gcp/../secret/x", "key_field": "token"}, false},
+		{map[string]string{"key": "vertex", "key_path": "gcp/roleset/vertex/token", "key_field": "data.token"}, false},
+	} {
+		meta := map[string]string{"provider": "openai-compatible", "models": "m"}
+		for k, v := range c.meta {
+			meta[k] = v
+		}
+		if got := usable(meta); got != c.want {
+			t.Errorf("usable(%v) = %v, want %v", c.meta, got, c.want)
+		}
+	}
+}

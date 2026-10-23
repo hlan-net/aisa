@@ -25,7 +25,8 @@ LONG_MODEL="example-org/a-model-name-that-is-much-longer-than-a-route-id-may-be:
 DOLLAR_MODEL='vendor/$model'
 cleanup() {
     for id in render-test render-test-slow render-test-bad-timeout render-test-path \
-        render-test-bad-path-1 render-test-bad-path-2 render-test-bad-path-3; do
+        render-test-bad-path-1 render-test-bad-path-2 render-test-bad-path-3 render-test-minted \
+        render-test-minted-no-field render-test-minted-no-key-field render-test-minted-no-key; do
         curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/$id" || true
     done
     rm -rf "$OUT"
@@ -59,6 +60,26 @@ for bad in "v1beta/openai" "/v1beta/openai/" "/v1/../admin"; do
  "Meta": {"provider": "openai-compatible", "models": "bad-path-test-$n,qwen3", "path": "$bad"}}
 EOF
 done
+# A credential that Vault issues rather than stores (#92): a KV v1 mount stands in for an engine
+# such as GCP's, whose tokens have no lease either. Backends that name it with key_path: one that
+# reads it, one with a field it does not have, one without key_field, one without key.
+vault() {
+    docker run --rm --network "$NETWORK" -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN=dev-root \
+        --entrypoint vault "${VAULT_IMAGE:-hashicorp/vault:2.2.0}" "$@"
+}
+vault secrets list -format=json | grep -q '"render-test-minted/"' || vault secrets enable -path=render-test-minted -version=1 kv >/dev/null
+vault write render-test-minted/vertex token=ya29.render-test >/dev/null
+register_minted() {
+    local id=$1 meta=$2
+    curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "$id", "Name": "aisa-backend", "Address": "mock-cloud", "Port": 8080,
+ "Meta": {"provider": "openai-compatible", "models": "$id", "scheme": "http", $meta}}
+EOF
+}
+register_minted render-test-minted '"key": "vertex", "key_path": "render-test-minted/vertex", "key_field": "token"'
+register_minted render-test-minted-no-field '"key": "vertex", "key_path": "render-test-minted/vertex", "key_field": "api_key"'
+register_minted render-test-minted-no-key-field '"key": "vertex", "key_path": "render-test-minted/vertex"'
+register_minted render-test-minted-no-key '"key_path": "render-test-minted/vertex", "key_field": "token"'
 # consul-template runs as a user of its own in the container.
 chmod 777 "$OUT"
 
@@ -172,5 +193,21 @@ for n in 1 2 3; do
     fi
 done
 echo "ok: a backend with an invalid path serves nothing"
+
+expect_in_route "a credential from key_path is the backend's key" '"model-render-test-minted"' 'Authorization: "Bearer ya29.render-test"'
+if route '"model-render-test-minted"' | grep -q 'render-test-minted/vertex'; then
+    fail "the route names the path of its credential"
+fi
+echo "ok: the route holds the credential, not its path"
+expect "a credential without the field is named in a comment" "^# Skipped backend \"render-test-minted-no-field\": the credential at its 'key_path' has no field \"api_key\""
+for id in render-test-minted-no-key-field render-test-minted-no-key; do
+    expect "invalid key_path metadata is named in a comment ($id)" "^# Skipped backend \"$id\": invalid 'key_path' metadata"
+done
+for id in render-test-minted-no-field render-test-minted-no-key-field render-test-minted-no-key; do
+    if grep -q "^  - id: \"model-$id\"$" "$RENDERED"; then
+        fail "$id got a route"
+    fi
+done
+echo "ok: a backend whose credential cannot be read from key_path serves nothing"
 
 echo "ok: all render tests passed"

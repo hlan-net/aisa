@@ -76,8 +76,8 @@ The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front
 | Item | Scope | Status |
 |------|-------|--------|
 | Consul token rotation | consul-template is reloaded with a rotated Consul token and never exits on one ([#90](https://github.com/hlan-net/aisa/issues/90)) | Done ([#93](https://github.com/hlan-net/aisa/pull/93)) |
-| Backend path prefix | A backend whose OpenAI-compatible API is not at `/v1`, such as Google's ([#91](https://github.com/hlan-net/aisa/issues/91)) | In review |
-| Minted provider credentials | A provider key that Vault issues, such as Vertex AI's OAuth2 token from the GCP secrets engine ([#92](https://github.com/hlan-net/aisa/issues/92)) | — |
+| Backend path prefix | A backend whose OpenAI-compatible API is not at `/v1`, such as Google's ([#91](https://github.com/hlan-net/aisa/issues/91)) | Done ([#94](https://github.com/hlan-net/aisa/pull/94)) |
+| Minted provider credentials | A provider key that Vault issues, such as Vertex AI's OAuth2 token from the GCP secrets engine ([#92](https://github.com/hlan-net/aisa/issues/92)) | In review; a consul-template change that reads a GCP token's expiry is prepared for upstream |
 
 ## Direction: decided, not scheduled
 
@@ -87,7 +87,7 @@ Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/conc
 |------|-------|-------|
 | No way around the proxy | Applications cannot reach a backend directly | US-1 |
 | Admin interface | An admin API and a UI on it (`/admin`); credentials with traceable metadata and expiry warnings; login through Vault | US-3 (Web UI and API in v0.2.1, the documentation in it next; authentication in aisa, key metadata and expiry warnings remain) |
-| Provider adapters | What is specific to a kind of provider, beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains can be used | US-2, US-3 |
+| Provider adapters | What is specific to a kind of provider, beyond `openai-compatible` (a provider key as a reference to any Vault path came with [#92](https://github.com/hlan-net/aisa/issues/92)) | US-2, US-3 |
 | Rendering without consul-template | A renderer in Go next to the proxy, which also logs in to Vault itself, in place of the template and the Vault Agent. It must follow leases as consul-template does | — |
 | Default model in Secret | Consumer declaration or quota profile carries `default_model`, written to Secret as `OPENAI_MODEL` / `LLM_MODEL` for clean client fallbacks | US-1 |
 | Namespaced keys in Secret | Secret publishes `AISA_BASE_URL` / `AISA_API_KEY` / `AISA_MODEL` alongside `OPENAI_*` to prevent collisions with direct provider credentials | US-1 (`AISA_BASE_URL` and `AISA_API_KEY` in v0.2.1; `AISA_MODEL` remains) |

@@ -41,6 +41,12 @@ consulTemplate:
   # Seconds a rendered config without model routes waits before it replaces one that has them:
   # the catalog can come back empty although the backends are fine (guard.sh, GUARD_EMPTY_GRACE).
   emptyCatalogGrace: 300
+  # How often a secret without a lease is read again: a provider key in KV, and a credential
+  # that Vault issues without a lease, such as a GCP access token (key_path, #92). Empty: the
+  # 10s of consul-template.hcl, so a rotated key reaches the gateway within seconds. Each read
+  # of a GCP token mints a new one and rewrites the config, so with such a backend set it well
+  # below the token's lifetime, e.g. "15m"; a rotated KV key then takes as long to arrive.
+  vaultDefaultLeaseDuration: ""
   resources:
     requests: {cpu: 10m, memory: 32Mi, ephemeral-storage: 16Mi}
     limits: {memory: 64Mi, ephemeral-storage: 64Mi}
