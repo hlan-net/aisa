@@ -69,6 +69,8 @@ docker run --rm --network "$NETWORK" \
     "$IMAGE" -config=/etc/apisix/aisa/consul-template.hcl -once
 
 RENDERED="$OUT/apisix.yaml"
+# The ID of the local model's route, as route and expect_in_route take it.
+QWEN3_ROUTE='"model-qwen3"'
 fail() {
     local why=$1
     echo "FAIL: $why" >&2
@@ -141,12 +143,12 @@ expect_in_route() {
     }
     echo "ok: $what"
 }
-expect_in_route "the default timeout of 300 s" '"model-qwen3"' '^        timeout: 300000$'
+expect_in_route "the default timeout of 300 s" "$QWEN3_ROUTE" '^        timeout: 300000$'
 expect_in_route "the budget header goes upstream from the decision" 'client' 'upstream_headers: .X-Aisa-Consumer, X-Aisa-Model, X-Aisa-Budget-Remaining.$'
 expect_in_route "the budget header is copied to the client's response" 'client' '^            X-Aisa-Budget-Remaining: \$http_x_aisa_budget_remaining$'
-expect_in_route "a fast failure is retried on another instance (S11)" '"model-qwen3"' '^        fallback_strategy: \[http_5xx\]$'
-expect_in_route "a slow failure is not retried (S11)" '"model-qwen3"' '^        retry_on_failure_within_ms: 5000$'
-expect_in_route "a chat route calls the backend's chat path" '"model-qwen3"' 'endpoint: "http://mock-local:8080/v1/chat/completions"'
+expect_in_route "a fast failure is retried on another instance (S11)" "$QWEN3_ROUTE" '^        fallback_strategy: \[http_5xx\]$'
+expect_in_route "a slow failure is not retried (S11)" "$QWEN3_ROUTE" '^        retry_on_failure_within_ms: 5000$'
+expect_in_route "a chat route calls the backend's chat path" "$QWEN3_ROUTE" 'endpoint: "http://mock-local:8080/v1/chat/completions"'
 expect_in_route "an embeddings route matches the embeddings path" '"embed-model-qwen3"' '^    uri: /v1/embeddings$'
 expect_in_route "an embeddings route calls the backend's embeddings path" '"embed-model-qwen3"' 'endpoint: "http://mock-local:8080/v1/embeddings"'
 expect_in_route "a timeout above 600 s is capped" '"model-slow-test"' '^        timeout: 600000$'
@@ -155,7 +157,7 @@ if grep -q '^  - id: "model-bad-timeout-test"$' "$RENDERED"; then
     fail "a backend with an invalid timeout got a route"
 fi
 echo "ok: no route for the model of a backend with an invalid timeout"
-if route '"model-qwen3"' | grep -q 'render-test-bad-timeout'; then
+if route "$QWEN3_ROUTE" | grep -q 'render-test-bad-timeout'; then
     fail "a backend with an invalid timeout is among the instances of a shared model"
 fi
 echo "ok: a backend with an invalid timeout serves no shared model either"
@@ -165,7 +167,7 @@ expect_in_route "a backend's path replaces /v1 on its embeddings route" '"embed-
 expect_in_route "the client still calls the contract's path" '"model-path-test"' '^    uri: /v1/chat/completions$'
 for n in 1 2 3; do
     expect "a backend with an invalid path is named in a comment ($n)" "^# Skipped backend \"render-test-bad-path-$n\": invalid 'path' metadata"
-    if grep -q "^  - id: \"model-bad-path-test-$n\"$" "$RENDERED" || route '"model-qwen3"' | grep -q "render-test-bad-path-$n"; then
+    if grep -q "^  - id: \"model-bad-path-test-$n\"$" "$RENDERED" || route "$QWEN3_ROUTE" | grep -q "render-test-bad-path-$n"; then
         fail "a backend with an invalid path ($n) got a route or serves a shared model"
     fi
 done
