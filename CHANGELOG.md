@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-23
+
+A paid provider behind aisa: the proxy's consul-template no longer exits when its Consul token rotates, a backend's OpenAI-compatible API can be at a path other than `/v1` (Google's Gemini API, Groq, OpenRouter), and a provider credential can be one that Vault issues, such as Vertex AI's OAuth2 token, with the proxy chart's `consulTemplate.vaultDefaultLeaseDuration` to match. Both additions are to contract 3, in `/v1/`; a backend without the new service metas renders as before.
+
 ### Added
 - **A provider credential that Vault issues** ([#92](https://github.com/hlan-net/aisa/issues/92)): the service meta `key_path` names a Vault path that issues the backend's credential, such as `gcp/roleset/vertex/token` of the GCP secrets engine, and `key_field` the field of the answer that holds it; `key` still names the account and its budget. So Vertex AI, which takes only a short-lived OAuth2 token, can be registered without anything outside aisa refreshing a secret, and aisa never holds the service account. The holder adds `read` on the path to the `aisa-render` policy. GCP tokens have no lease, so consul-template reads them again after `default_lease_duration`; the proxy chart's new `consulTemplate.vaultDefaultLeaseDuration` sets it (empty: the 10 s of `consul-template.hcl`), and with such a backend it should be well below the token's lifetime, e.g. `15m`. An invalid `key_path` or `key_field`, or a credential without the field, leaves the backend out with a comment. `VAULT.md` and `CONSUL.md` (Vertex AI) describe it. An addition to contract 3, in `/v1/`.
 - **A backend's API can be at a path other than `/v1`** ([#91](https://github.com/hlan-net/aisa/issues/91)): the service meta `path` is the base path of the backend's OpenAI-compatible API, and the proxy calls `{path}/chat/completions` and `{path}/embeddings` on it, so Google's Gemini API (`/v1beta/openai`), Vertex AI, Groq (`/openai/v1`) and OpenRouter (`/api/v1`) can be registered, with quotas, budgets, prices and usage as for any backend. It defaults to `/v1`; a backend without it renders byte for byte as before. A `path` that is not a prefix leaves the backend out of the rendered config, with a comment that names it, and out of the `Model` objects' available models. `CONSUL.md` registers the Gemini API with a provider budget that downgrades to a local model. An addition to contract 3, in `/v1/`.
@@ -118,7 +122,8 @@ The first release: the design, the answered spikes, the dev stack and the start 
 - **Decision API** (unstable `/v1`): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
 - **CI actions**: `actions/setup-go` v6 → v7 and `golangci/golangci-lint-action` v8 → v9 (golangci-lint pinned to v2.14). The other actions were checked against their published tags and are current. Dependabot also watches the dev stack's Dockerfile and Compose images.
 
-[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/hlan-net/aisa/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/hlan-net/aisa/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/hlan-net/aisa/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/hlan-net/aisa/compare/v0.1.0...v0.2.0
