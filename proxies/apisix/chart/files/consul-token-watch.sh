@@ -1,0 +1,1 @@
+../../consul-token-watch.sh

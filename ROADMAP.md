@@ -69,6 +69,16 @@ Budgets are enforced in tokens, like quotas. Prices turn tokens into currency fo
 | Downgrade | `on_exhausted: downgrade` → local model via `X-Aisa-Model` | Done |
 | Safe defaults and a ceiling | A consumer without limits cannot use a backend with a key; a budget per provider account above the consumers ([#33](https://github.com/hlan-net/aisa/issues/33), US-1) | Done: a consumer without a quota profile is denied, and `aisa/budgets/providers/<key>` caps every key |
 
+## v0.3.x: A paid provider behind aisa
+
+The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front a SaaS provider with a hard ceiling (`aisa/budgets/providers/<key>`, `on_exhausted: downgrade` to a local model), and first stop failing in the cluster it runs in. Done when Gemini or Vertex AI can be registered and its provider budget bounds what it costs.
+
+| Item | Scope | Status |
+|------|-------|--------|
+| Consul token rotation | consul-template is reloaded with a rotated Consul token and never exits on one ([#90](https://github.com/hlan-net/aisa/issues/90)) | In review |
+| Backend path prefix | A backend whose OpenAI-compatible API is not at `/v1`, such as Google's ([#91](https://github.com/hlan-net/aisa/issues/91)) | — |
+| Minted provider credentials | A provider key that Vault issues, such as Vertex AI's OAuth2 token from the GCP secrets engine ([#92](https://github.com/hlan-net/aisa/issues/92)) | — |
+
 ## Direction: decided, not scheduled
 
 Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#state-of-this-direction); none of it has a version yet. The Kubernetes objects and consumers in Consul are now v0.2.0 PRs 11 and 12.

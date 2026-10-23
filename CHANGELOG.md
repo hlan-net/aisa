@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+- **A rotated Consul token no longer ends the proxy's consul-template** ([#90](https://github.com/hlan-net/aisa/issues/90)): consul-template reads `-consul-token-file` only when it starts, so when the Vault Agent replaced its token and Vault deleted the old one, every query was answered 403 (ACL not found) until the default 12 retries ran out and it exited with code 14; only the restart of its container picked the new token up, and nothing rendered in the meantime. The pod now reloads consul-template (SIGHUP) when the token file changes (`proxies/apisix/consul-token-watch.sh`), and `consul-template.hcl` retries Consul without a limit, for the short window of a rotation. `CONSUL.md` states that the lease of the `consul/` mount sets how often the tokens rotate, and what a rotation does. Tested by `proxies/apisix/token_rotation_test.sh` (CI) and `charts_test.sh`.
+
 ## [0.3.0] - 2026-10-22
 
 Budgets: a monthly token budget per consumer on priced models, with a downgrade to a local model when it is used up, and a ceiling per provider account above the consumers; model prices for display. Also `POST /v1/embeddings` through the proxy, the timing of aisa's decisions, a quota profile that is missing visible before the applications see it, fast backend failures retried on another backend, and the documentation in the admin interface.

@@ -55,6 +55,15 @@ validate "admin-ingress" "$AISA" --set admin.enabled=true --set admin.ingress.en
 grep -q '^kind: Ingress$' "$OUT/admin-ingress.yaml" || fail "admin-ingress case does not render the Ingress"
 validate "proxy-alone" "$PROXY" --set aisa.url=https://aisa.aisa.svc:8080
 
+# A rotated Consul token never ends consul-template (#90): it retries Consul without a limit, and
+# the pod reloads it with the new token, but only where the Vault Agent writes one.
+awk '/consul-template.hcl: \|-/{c = 1} c && /^    consul \{/{b = 1} b && /attempts *= *0/{f = 1; exit} END {exit !f}' \
+    "$OUT/defaults.yaml" || fail "the rendered consul-template.hcl retries Consul a limited number of times"
+watches() { local file=$1; grep -c 'consul-token-watch.sh /vault/consul-token \$\$ &' "$file" || true; }
+[[ "$(watches "$OUT/defaults.yaml")" == 1 ]] || fail "consul-template is not reloaded when its Consul token changes"
+[[ "$(watches "$OUT/consul-without-acls.yaml")" == 0 ]] || fail "the token watch runs without a Consul token"
+echo "ok: consul-template survives the rotation of its Consul token"
+
 # The values that must be given are asked for.
 if helm template aisa "$AISA" >/dev/null 2>&1; then
     fail "the chart renders without global.vault.addr"

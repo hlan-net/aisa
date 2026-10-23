@@ -122,6 +122,12 @@ spec:
                     echo "guard: error: the recheck of a hold failed (see above); the next render runs the guard again" >&2
                 fi
               done &
+              {{- if $consulToken }}
+              # consul-template reads its Consul token only when it starts; this reloads it when
+              # the Vault Agent writes a new one (consul-token-watch.sh, #90). $$ is this shell,
+              # which exec makes consul-template.
+              /etc/apisix/aisa/consul-token-watch.sh /vault/consul-token $$ &
+              {{- end }}
               exec /bin/consul-template "$@"
             - consul-template
           args:
