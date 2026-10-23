@@ -21,12 +21,15 @@
 {{- scratch.Set "valid" (sprig_dict) }}
 {{- range service "aisa-backend" }}
   {{- $timeout := index .ServiceMeta "timeout" }}
+  {{- $path := index .ServiceMeta "path" }}
   {{- if not (index .ServiceMeta "models") }}
 # Skipped backend {{ .ID | toJSON }}: missing 'models' metadata
   {{- else if not (eq (index .ServiceMeta "provider") "openai-compatible") }}
 # Skipped backend {{ .ID | toJSON }}: unsupported provider {{ index .ServiceMeta "provider" | toJSON }}
   {{- else if and $timeout (not (regexMatch "^[1-9][0-9]{0,17}$" $timeout)) }}
 # Skipped backend {{ .ID | toJSON }}: invalid 'timeout' metadata {{ $timeout | toJSON }} (want whole seconds)
+  {{- else if and $path (or (not (regexMatch "^(/[A-Za-z0-9._~@:+-]+)+$" $path)) (regexMatch "(^|/)[.][.]?(/|$)" $path)) }}
+# Skipped backend {{ .ID | toJSON }}: invalid 'path' metadata {{ $path | toJSON }} (want a path such as /v1beta/openai: a leading '/', no trailing '/')
   {{- else }}
     {{- scratch.MapSet "valid" .ID "1" }}
   {{- end }}
@@ -324,6 +327,9 @@ routes:
 */}}
 {{- define "model-route" }}{{ $model := .model }}{{ $failOpen := .failOpen }}
   {{- $path := "/v1/chat/completions" }}{{ if .embed }}{{ $path = "/v1/embeddings" }}{{ end }}
+  {{- /* The backend is called on this path below the base path of its API (#91): its meta path,
+         such as /v1beta/openai, or /v1 when it has none, which makes it the path the client called. */}}
+  {{- $call := "/chat/completions" }}{{ if .embed }}{{ $call = "/embeddings" }}{{ end }}
   {{- /* A route ID for APISIX: letters, digits, '-', '_', '.', at most 64 characters. The prefix
          says the kind of route, "model-" or "fail-open-", so the two kinds never share an ID.
          A name that had to be changed or shortened gets a hash of the full name. */}}
@@ -431,7 +437,8 @@ routes:
             {{- $scheme := "http" }}
             {{- if index .ServiceMeta "key" }}{{ $scheme = "https" }}{{ end }}
             {{- with index .ServiceMeta "scheme" }}{{ if eq . "http" "https" }}{{ $scheme = . }}{{ end }}{{ end }}
-            override: {endpoint: {{ printf "%s://%s:%d%s" $scheme .Address .Port $path | toJSON }}}
+            {{- $base := or (index .ServiceMeta "path") "/v1" }}
+            override: {endpoint: {{ printf "%s://%s:%d%s%s" $scheme .Address .Port $base $call | toJSON }}}
         {{- end }}
       http-logger:
         uri: {{ or (env "AISA_USAGE_URI") "http://aisa:8080/v1/usage" }}

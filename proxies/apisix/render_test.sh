@@ -24,7 +24,8 @@ LONG_MODEL="example-org/a-model-name-that-is-much-longer-than-a-route-id-may-be:
 # A dollar in a name: an APISIX variable to fault-injection, unless the model list escapes it.
 DOLLAR_MODEL='vendor/$model'
 cleanup() {
-    for id in render-test render-test-slow render-test-bad-timeout; do
+    for id in render-test render-test-slow render-test-bad-timeout render-test-path \
+        render-test-bad-path-1 render-test-bad-path-2 render-test-bad-path-3; do
         curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/$id" || true
     done
     rm -rf "$OUT"
@@ -44,6 +45,20 @@ curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
 {"ID": "render-test-bad-timeout", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
  "Meta": {"provider": "openai-compatible", "models": "bad-timeout-test,qwen3", "timeout": "fast"}}
 EOF
+# A backend whose API is not at /v1 (#91), as Google's OpenAI-compatible endpoint, and paths
+# that are not a prefix: no leading '/', a trailing '/', a '..' segment.
+curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "render-test-path", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
+ "Meta": {"provider": "openai-compatible", "models": "path-test", "path": "/v1beta/openai"}}
+EOF
+n=0
+for bad in "v1beta/openai" "/v1beta/openai/" "/v1/../admin"; do
+    n=$((n + 1))
+    curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "render-test-bad-path-$n", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
+ "Meta": {"provider": "openai-compatible", "models": "bad-path-test-$n,qwen3", "path": "$bad"}}
+EOF
+done
 # consul-template runs as a user of its own in the container.
 chmod 777 "$OUT"
 
@@ -144,5 +159,16 @@ if route '"model-qwen3"' | grep -q 'render-test-bad-timeout'; then
     fail "a backend with an invalid timeout is among the instances of a shared model"
 fi
 echo "ok: a backend with an invalid timeout serves no shared model either"
+
+expect_in_route "a backend's path replaces /v1 on its chat route" '"model-path-test"' 'endpoint: "http://mock-local:8080/v1beta/openai/chat/completions"'
+expect_in_route "a backend's path replaces /v1 on its embeddings route" '"embed-model-path-test"' 'endpoint: "http://mock-local:8080/v1beta/openai/embeddings"'
+expect_in_route "the client still calls the contract's path" '"model-path-test"' '^    uri: /v1/chat/completions$'
+for n in 1 2 3; do
+    expect "a backend with an invalid path is named in a comment ($n)" "^# Skipped backend \"render-test-bad-path-$n\": invalid 'path' metadata"
+    if grep -q "^  - id: \"model-bad-path-test-$n\"$" "$RENDERED" || route '"model-qwen3"' | grep -q "render-test-bad-path-$n"; then
+        fail "a backend with an invalid path ($n) got a route or serves a shared model"
+    fi
+done
+echo "ok: a backend with an invalid path serves nothing"
 
 echo "ok: all render tests passed"

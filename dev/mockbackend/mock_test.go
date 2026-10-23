@@ -403,3 +403,44 @@ func TestEmbeddings(t *testing.T) {
 		})
 	}
 }
+
+// The API under another base path (#91): served there, and the path is recorded.
+func TestBasePaths(t *testing.T) {
+	srv := newTestServer(t, Config{BasePaths: []string{"/v1", "/v1beta/openai"}})
+	for _, path := range []string{"/v1/chat/completions", "/v1beta/openai/embeddings", "/v1beta/openai/chat/completions"} {
+		body := `{"model": "m", "messages": [{"role": "user", "content": "hi"}]}`
+		if strings.HasSuffix(path, "/embeddings") {
+			body = `{"model": "m", "input": "hi"}`
+		}
+		resp, err := srv.Client().Post(srv.URL+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("POST %s: %d", path, resp.StatusCode)
+		}
+	}
+	resp, err := srv.Client().Get(srv.URL + "/debug/last-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var last struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&last); err != nil {
+		t.Fatal(err)
+	}
+	if last.Path != "/v1beta/openai/chat/completions" {
+		t.Errorf("last path = %q", last.Path)
+	}
+	resp2, err := srv.Client().Post(srv.URL+"/v2/chat/completions", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("a path not served: %d", resp2.StatusCode)
+	}
+}

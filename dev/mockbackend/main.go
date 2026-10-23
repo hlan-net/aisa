@@ -51,6 +51,14 @@ func configFromEnv() (Config, error) {
 		Name:        devutil.Env("MOCK_NAME", "mock"),
 		StreamUsage: devutil.Env("MOCK_STREAM_USAGE", usageAuto),
 	}
+	for b := range strings.SplitSeq(devutil.Env("MOCK_BASE_PATHS", "/v1"), ",") {
+		if b = strings.TrimSpace(b); b != "" {
+			if !strings.HasPrefix(b, "/") || strings.HasSuffix(b, "/") {
+				return cfg, fmt.Errorf("MOCK_BASE_PATHS: %q is not a path such as /v1", b)
+			}
+			cfg.BasePaths = append(cfg.BasePaths, b)
+		}
+	}
 	for m := range strings.SplitSeq(devutil.Env("MOCK_MODELS", ""), ",") {
 		if m = strings.TrimSpace(m); m != "" {
 			cfg.Models = append(cfg.Models, m)
