@@ -101,35 +101,19 @@ spec:
         - name: consul-template
           image: {{ printf "%s:%s" .Values.consulTemplate.image.repository .Values.consulTemplate.image.tag | quote }}
           imagePullPolicy: {{ .Values.consulTemplate.image.pullPolicy }}
-          # consul-template runs guard.sh only when the rendered file changes. A hold (a rendered
-          # file without model routes, guard.sh step 6) ends on its own because this loop runs
-          # the guard again every 30 s while the mark of the hold exists; it restarts with the
-          # container, so a hold survives a restart. The loop also sends the render reports aisa
-          # has not taken yet (the first render comes before aisa is up).
-          # guard.sh takes a lock, so the loop and consul-template never run it at once. The
-          # args are consul-template's.
+          # consul-template-run.sh keeps a shell as the container's PID 1, which reaps (#98), runs
+          # guard.sh every 30 s beside consul-template, and reloads consul-template when the Vault
+          # Agent writes it a new Consul token (#90). No shell script in the command itself:
+          # Kubernetes reduces $$ in it to $ (#97). The args are consul-template's.
           command:
-            - sh
-            - -c
-            - |
-              # No guard of this container's last life can still run, but its lock can remain
-              # on the volume, and the PID in it may belong to a new process now.
-              rm -rf /rendered/apisix.yaml.lock
-              while sleep 30; do
-                /etc/apisix/aisa/guard.sh --resend /rendered/apisix.yaml
-                if [ -f /rendered/apisix.yaml.empty-since ]; then
-                  GUARD_RECHECK=1 /etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml ||
-                    echo "guard: error: the recheck of a hold failed (see above); the next render runs the guard again" >&2
-                fi
-              done &
-              {{- if $consulToken }}
-              # consul-template reads its Consul token only when it starts; this reloads it when
-              # the Vault Agent writes a new one (consul-token-watch.sh, #90). $$ is this shell,
-              # which exec makes consul-template.
-              /etc/apisix/aisa/consul-token-watch.sh /vault/consul-token $$ &
-              {{- end }}
-              exec /bin/consul-template "$@"
-            - consul-template
+            - /etc/apisix/aisa/consul-template-run.sh
+            - --guard
+            - /rendered/apisix.yaml
+            {{- if $consulToken }}
+            - --consul-token
+            - /vault/consul-token
+            {{- end }}
+            - --
           args:
             {{- include "proxy.renderArgs" . | nindent 12 }}
           env:

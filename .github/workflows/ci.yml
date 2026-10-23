@@ -141,6 +141,7 @@ jobs:
           ./proxies/apisix/render_test.sh
           ./proxies/apisix/runtime_test.sh
           ./proxies/apisix/token_rotation_test.sh
+          ./proxies/apisix/run_test.sh
 
       - name: Logs
         if: failure()
