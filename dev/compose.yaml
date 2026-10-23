@@ -74,7 +74,10 @@ services:
     entrypoint: ["/usr/local/bin/mockbackend"]
     environment:
       MOCK_NAME: mock-local
-      MOCK_MODELS: qwen3,llama3.2
+      # path-test: the model of a backend with the meta path, in proxies/apisix/runtime_test.sh.
+      MOCK_MODELS: qwen3,llama3.2,path-test
+      # The API under a second path too, as Google's is (#91).
+      MOCK_BASE_PATHS: /v1,/v1beta/openai
       MOCK_TTFT: 50ms
       MOCK_TOKEN_DELAY: 5ms
     ports: ["127.0.0.1:8082:8080"]

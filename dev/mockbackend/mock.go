@@ -38,6 +38,9 @@ type Config struct {
 	TokenDelay time.Duration
 	// StreamUsage is one of usageAuto, usageAlways or usageNever.
 	StreamUsage string
+	// BasePaths are the paths the OpenAI-compatible API is served under; /v1 when empty. A
+	// provider such as Google's serves it under another one (#91).
+	BasePaths []string
 	// Now returns the current time; tests replace it.
 	Now func() time.Time
 }
@@ -47,8 +50,10 @@ type server struct {
 	log *slog.Logger
 
 	mu sync.Mutex
-	// last holds the headers of the last chat request, for tests of what a gateway forwards.
-	last http.Header
+	// last holds the headers of the last chat request, for tests of what a gateway forwards,
+	// and lastPath its path.
+	last     http.Header
+	lastPath string
 }
 
 // errorTrigger, as the whole content of a message, makes the backend answer with that status
@@ -79,9 +84,15 @@ func newServer(cfg Config, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		devutil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("GET /v1/models", s.models)
-	mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
-	mux.HandleFunc("POST /v1/embeddings", s.embeddings)
+	bases := cfg.BasePaths
+	if len(bases) == 0 {
+		bases = []string{"/v1"}
+	}
+	for _, base := range bases {
+		mux.HandleFunc("GET "+base+"/models", s.models)
+		mux.HandleFunc("POST "+base+"/chat/completions", s.chatCompletions)
+		mux.HandleFunc("POST "+base+"/embeddings", s.embeddings)
+	}
 	// A minimal part of Ollama's native API, so scripts written for a real Ollama can run
 	// against the mock.
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
@@ -91,12 +102,13 @@ func newServer(cfg Config, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /debug/last-request", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		devutil.WriteJSON(w, http.StatusOK, map[string]any{"headers": s.last})
+		devutil.WriteJSON(w, http.StatusOK, map[string]any{"headers": s.last, "path": s.lastPath})
 	})
 	mux.HandleFunc("DELETE /debug/last-request", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.last = nil
+		s.lastPath = ""
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
@@ -143,6 +155,7 @@ func (s *server) models(w http.ResponseWriter, _ *http.Request) {
 func (s *server) answering(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.last = r.Header.Clone()
+	s.lastPath = r.URL.Path
 	s.mu.Unlock()
 	w.Header().Set(headerBackend, s.cfg.Name)
 	for k, v := range accountHeaders {

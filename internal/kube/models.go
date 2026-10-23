@@ -47,6 +47,10 @@ var (
 // value is left out of the gateway's config, and so out of the models on offer.
 var timeoutMeta = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
 
+// pathMeta is what the proxy's template takes as the base path of a backend's API (#91): one or
+// more segments, each after a '/', none of them "." or "..".
+var pathMeta = regexp.MustCompile(`^(/[A-Za-z0-9._~@:+-]+)+$`)
+
 // HealthReader reads the backends registered in the catalog; consul.Client implements it.
 type HealthReader interface {
 	Health(ctx context.Context, service string) ([]consul.Instance, error)
@@ -257,13 +261,31 @@ func (m *Models) applyAll(ctx context.Context, models map[string]*offered, stats
 }
 
 // usable reports whether the proxy's template renders a backend (proxies/apisix/apisix.yaml.ctmpl):
-// one with models, the provider openai-compatible, and a valid timeout if any.
+// one with models, the provider openai-compatible, and a valid timeout and path if any.
 func usable(meta map[string]string) bool {
 	if strings.TrimSpace(meta["models"]) == "" || meta["provider"] != "openai-compatible" {
 		return false
 	}
-	t := meta["timeout"]
-	return t == "" || timeoutMeta.MatchString(t)
+	if t := meta["timeout"]; t != "" && !timeoutMeta.MatchString(t) {
+		return false
+	}
+	return validPath(meta["path"])
+}
+
+// validPath reports whether a backend's meta path is absent or one the template takes.
+func validPath(p string) bool {
+	if p == "" {
+		return true
+	}
+	if !pathMeta.MatchString(p) {
+		return false
+	}
+	for _, seg := range strings.Split(p[1:], "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func parseDescription(value []byte) (description, error) {

@@ -101,6 +101,7 @@ func TestModelsFromTheCatalog(t *testing.T) {
 		backend("down", "phi4", false),
 		consul.Instance{ID: "no-provider", Passing: true, Meta: map[string]string{"models": "skipped"}},
 		consul.Instance{ID: "bad-timeout", Passing: true, Meta: map[string]string{"provider": "openai-compatible", "models": "skipped2", "timeout": "5m"}},
+		consul.Instance{ID: "bad-path", Passing: true, Meta: map[string]string{"provider": "openai-compatible", "models": "skipped3", "path": "/v1/"}},
 	)
 	mt.descs.pairs = []consul.Pair{
 		{Key: "qwen3:8b", Value: []byte(`{"features": ["TextGeneration"], "contextLength": 32768, "capabilities": ["tools", "json_mode"]}`)},
@@ -340,5 +341,33 @@ func TestParseDescription(t *testing.T) {
 				t.Error("no features: want TextGeneration by default")
 			}
 		})
+	}
+}
+
+// The backends the proxy's template renders (#91): a path, when there is one, is a prefix.
+func TestUsablePath(t *testing.T) {
+	for path, want := range map[string]bool{
+		"":               true,
+		"/v1":            true,
+		"/v1beta/openai": true,
+		"/openai/v1":     true,
+		"/api/v1":        true,
+		"/v1/projects/my-project/locations/europe-north1/endpoints/openapi": true,
+		"v1":           false,
+		"/":            false,
+		"/v1/":         false,
+		"//v1":         false,
+		"/v1//openai":  false,
+		"/v1/../admin": false,
+		"/./v1":        false,
+		"/v1?key=x":    false,
+		"/v1 beta":     false,
+		"/v1/%2e%2e":   false,
+		"/v1...":       true,
+	} {
+		meta := map[string]string{"provider": "openai-compatible", "models": "m", "path": path}
+		if got := usable(meta); got != want {
+			t.Errorf("usable with path %q = %v, want %v", path, got, want)
+		}
 	}
 }

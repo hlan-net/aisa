@@ -35,6 +35,7 @@ OUT=$(mktemp -d)
 cleanup() {
     curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test" || true
     curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test-down" || true
+    curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test-path" || true
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     rm -rf "$OUT"
 }
@@ -329,5 +330,24 @@ proxy "$OUT/unreachable"
 one "a model that fails open" any-key qwen3 200 ""
 one "a model that fails closed" any-key cloud-large 503 ""
 models "the model list while aisa is unreachable" "cloud-large llama3.2 qwen3"
+
+echo "== a backend whose API is under another path (#91)"
+# The mock serves its API under /v1beta/openai too, as Google's Gemini API does.
+curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register" <<EOF
+{"ID": "runtime-test-path", "Name": "aisa-backend", "Address": "mock-local", "Port": 8080,
+ "Meta": {"provider": "openai-compatible", "models": "path-test", "path": "/v1beta/openai"}}
+EOF
+render "$OUT/path" http://stub-aisa:8080/v1/decide
+proxy "$OUT/path"
+curl -fsS -o /dev/null -X DELETE "$MOCK_LOCAL/debug/last-request"
+one "a chat request to the backend under its path" dev-key-chat-ui path-test 200 chat-ui
+expect "the backend got the request on its own path" "/v1beta/openai/chat/completions" \
+    "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.path')"
+expect "its usage event names the model" "path-test" "$(events | jq -r '.model')"
+curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
+expect "an embeddings request to the backend under its path" "200" \
+    "$(curl -sS -o /dev/null -w "$STATUS" -H "$CHAT_UI" -H "$JSON" -d '{"model":"path-test","input":"hello there"}' "$PROXY/v1/embeddings")"
+expect "the backend got the embeddings on its own path" "/v1beta/openai/embeddings" \
+    "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.path')"
 
 echo "all $pass runtime checks passed"

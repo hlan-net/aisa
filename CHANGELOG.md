@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **A backend's API can be at a path other than `/v1`** ([#91](https://github.com/hlan-net/aisa/issues/91)): the service meta `path` is the base path of the backend's OpenAI-compatible API, and the proxy calls `{path}/chat/completions` and `{path}/embeddings` on it, so Google's Gemini API (`/v1beta/openai`), Vertex AI, Groq (`/openai/v1`) and OpenRouter (`/api/v1`) can be registered, with quotas, budgets, prices and usage as for any backend. It defaults to `/v1`; a backend without it renders byte for byte as before. A `path` that is not a prefix leaves the backend out of the rendered config, with a comment that names it, and out of the `Model` objects' available models. `CONSUL.md` registers the Gemini API with a provider budget that downgrades to a local model. An addition to contract 3, in `/v1/`.
+
 ### Fixed
 - **A rotated Consul token no longer ends the proxy's consul-template** ([#90](https://github.com/hlan-net/aisa/issues/90)): consul-template reads `-consul-token-file` only when it starts, so when the Vault Agent replaced its token and Vault deleted the old one, every query was answered 403 (ACL not found) until the default 12 retries ran out and it exited with code 14; only the restart of its container picked the new token up, and nothing rendered in the meantime. The pod now reloads consul-template (SIGHUP) when the token file changes (`proxies/apisix/consul-token-watch.sh`), and `consul-template.hcl` retries Consul without a limit, for the short window of a rotation. `CONSUL.md` states that the lease of the `consul/` mount sets how often the tokens rotate, and what a rotation does. Tested by `proxies/apisix/token_rotation_test.sh` (CI) and `charts_test.sh`.
 

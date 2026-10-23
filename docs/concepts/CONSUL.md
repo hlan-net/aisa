@@ -25,6 +25,7 @@ resource "consul_service" "ollama_1" {
     # key    = "openai"   for a backend that needs an API key: the secret's name in Vault
     # scheme = "https"    http or https; https by default for a backend with a key, else http
     # timeout = "600"     seconds the gateway waits for the backend's next byte; 300 by default
+    # path  = "/v1beta/openai"  the base path of the backend's OpenAI-compatible API; /v1 by default
   }
   check {
     name     = "ollama"
@@ -43,9 +44,51 @@ resource "consul_service" "ollama_1" {
 - The meta `scheme` says how the gateway reaches a backend, `http` or `https`. It defaults to `https` for a backend with a key, so a provider key is not sent in the clear by accident, and to `http` for the others.
 - The meta `fail_policy` says whether the backend may serve requests while aisa is unreachable: `open` backends serve them without a decision, `closed` backends (the default) do not. A request is answered with 503 only when its model has no `open` backend. It belongs to the backend and not to the consumer, because without aisa the gateway cannot tell who the consumer is. An `open` backend serves any credential in that time, including an unknown one, and its usage is charged to no quota or budget, so set it only where unmetered use costs nothing that matters, typically local models ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#proxy-rules-for-the-decision)).
 - The meta `timeout` is how long, in seconds, the gateway waits for the backend's next byte: before the first token, between tokens, or for a whole non-streamed answer. It defaults to 300, and the proxy caps it at what its gateway accepts ([`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md#3-config-rendering-gateway-configuration)). Slow local models need it raised. A value that is not whole seconds leaves the backend out of the rendered config, with a comment that names it.
+- The meta `path` is the base path of the backend's OpenAI-compatible API, what an OpenAI SDK's base URL has after the host: the gateway calls `{path}/chat/completions` and `{path}/embeddings` on it. It defaults to `/v1`, so a backend without it is called on the client's own path, and is rendered exactly as before the meta existed. Providers that chose another path need it: Google's Gemini API (`/v1beta/openai`), Vertex AI (`/v1/projects/<project>/locations/<location>/endpoints/openapi`), Groq (`/openai/v1`), OpenRouter (`/api/v1`). It is data, not a special case: aisa knows no provider by name. A `path` that is not a prefix (one or more segments, each after a `/`, of letters, digits and `. _ ~ @ : + -`, none of them `.` or `..`, no trailing `/`) leaves the backend out of the rendered config, with a comment that names it, and out of the models on offer ([#91](https://github.com/hlan-net/aisa/issues/91)). `GET /v1/models` does not use it: the gateway answers that itself.
 - A backend that needs an API key names it with the meta `key`: the secret `secret/aisa/providers/<key>` in Vault ([`VAULT.md`](./VAULT.md#provider-keys)).
 - **Who runs the check.** A catalog registration carries a check's definition, but only a Consul agent that owns the service executes it: an agent on the backend's node, or [consul-esm](https://github.com/hashicorp/consul-esm) for nodes registered through the catalog, as the Terraform provider does. Without either, the check's status is whatever the registration wrote, and its `interval` and `timeout` do nothing. The Terraform provider registers through `/v1/catalog/register`, where an omitted status is `critical`, so without the `status` above the backend is never rendered and its models are never on offer. A check that nothing has run has an empty output (`/v1/health/checks/aisa-backend`), which tells it from one that ran ([#69](https://github.com/hlan-net/aisa/issues/69)).
 - Where something executes the check, a failed health check drops the backend from the rendered config, so a machine that is asleep or down leaves rotation automatically. Until then, requests sent to it fail. That window is the check's interval and timeout, plus the template's quiet period and the gateway's reload: with a 2 s interval it was about 3 s (spike S9). Requests already sent to the backend can wait until the gateway's timeout. With a static status, nothing drops a backend that is down: every request sent to it fails, after the gateway's timeout when the machine does not refuse the connection, so choose the meta `timeout` with this in mind, or run consul-esm.
+
+### A paid provider: the Gemini API
+
+Google's Gemini API has an OpenAI-compatible endpoint at `https://generativelanguage.googleapis.com/v1beta/openai/` ([docs](https://ai.google.dev/gemini-api/docs/openai)), which takes an API key as `Authorization: Bearer`. Registered with a hard monthly ceiling that falls back to a local model:
+
+```hcl
+resource "consul_node" "gemini" {
+  name    = "gemini-api"
+  address = "generativelanguage.googleapis.com"
+}
+
+resource "consul_service" "gemini" {
+  name       = "aisa-backend"
+  service_id = "gemini-1"
+  node       = consul_node.gemini.name
+  port       = 443
+  meta = {
+    provider    = "openai-compatible"
+    models      = "gemini-2.5-flash"
+    key         = "gemini"           # secret/aisa/providers/gemini, api_key = the API key
+    path        = "/v1beta/openai"   # called on /v1beta/openai/chat/completions
+    fail_policy = "closed"           # no request without a decision: it costs money
+  }
+  check {
+    check_id = "service:gemini-1"
+    name     = "gemini"
+    tcp      = "generativelanguage.googleapis.com:443"   # run only by an agent or consul-esm
+    interval = "60s"
+    timeout  = "5s"
+    status   = "passing"
+  }
+}
+```
+
+```
+secret/aisa/providers/gemini            api_key=<the API key>
+aisa/pricing/gemini-2.5-flash           {"input_per_1k": 0.0003, "output_per_1k": 0.0025, "currency": "USD"}
+aisa/budgets/providers/gemini           {"monthly_tokens": 20000000, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}
+```
+
+The scheme is `https`, the default for a backend with a key. The provider budget bounds every token that goes through the key, whichever consumer sends it; when the month's tokens are used, requests for `gemini-2.5-flash` are sent to `qwen3`, a local model, with `X-Aisa-Model` ([`quotas-and-budgets.md`](../features/quotas-and-budgets.md#budgets-v030)). The price (USD 0.30 and 2.50 per million tokens when this was written; check the provider's) makes the model priced, so the consumers' own budgets apply to it as well, and its cost shows in `aisa_cost_total`. Vertex AI takes the same form with its own `path`, but its credential is a short-lived OAuth2 token, not an API key ([#92](https://github.com/hlan-net/aisa/issues/92)).
 
 ## Consumers: Consul KV
 
