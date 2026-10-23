@@ -1,6 +1,6 @@
 # aisa — AI Service [Access, Admin, Authority]
 
-> **Status: early development, v0.3.0.** aisa installs into a cluster from one Helm chart with its proxy, authenticates the consumers declared in Consul, issues their keys into their applications' Secrets, publishes the models as `Model` objects, accounts usage events, enforces token quotas and monthly budgets per consumer and per provider account, downgrades to a local model when a budget is used up, and has an admin interface. Next come the Terraform module and the dashboard; v0.4.0 proves the contract with a second proxy.
+> **Status: early development, v0.3.1.** aisa installs into a cluster from one Helm chart with its proxy, authenticates the consumers declared in Consul, issues their keys into their applications' Secrets, publishes the models as `Model` objects, accounts usage events, enforces token quotas and monthly budgets per consumer and per provider account, downgrades to a local model when a budget is used up, can front a paid provider such as Gemini or Vertex AI, and has an admin interface. Next come the Terraform module and the dashboard; v0.4.0 proves the contract with a second proxy.
 
 Pick the A that fits your day:
 - **Access**: decides who may use which model, through a decision API that your gateway asks before every request.
