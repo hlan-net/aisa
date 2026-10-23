@@ -64,6 +64,13 @@ watches() { local file=$1; grep -c 'consul-token-watch.sh /vault/consul-token \$
 [[ "$(watches "$OUT/consul-without-acls.yaml")" == 0 ]] || fail "the token watch runs without a Consul token"
 echo "ok: consul-template survives the rotation of its Consul token"
 
+# How often a secret without a lease is read again (#92): the file's 10 s unless the value is set.
+! grep -q -- '-vault-default-lease-duration' "$OUT/defaults.yaml" || fail "the lease duration is set by default"
+helm template aisa "$AISA" "${REQUIRED[@]}" --set apisix.consulTemplate.vaultDefaultLeaseDuration=15m >"$OUT/lease.yaml" 2>/dev/null
+[[ "$(grep -c -- '- "-vault-default-lease-duration=15m"' "$OUT/lease.yaml")" == 2 ]] ||
+    fail "consulTemplate.vaultDefaultLeaseDuration does not reach both renders"
+echo "ok: consulTemplate.vaultDefaultLeaseDuration sets how often a secret without a lease is read"
+
 # The values that must be given are asked for.
 if helm template aisa "$AISA" >/dev/null 2>&1; then
     fail "the chart renders without global.vault.addr"

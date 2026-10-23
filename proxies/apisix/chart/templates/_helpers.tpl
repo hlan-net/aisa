@@ -63,6 +63,9 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- define "proxy.renderArgs" -}}
 - -config=/etc/apisix/aisa/consul-template.hcl
 - -vault-agent-token-file=/vault/token
+{{- with .Values.consulTemplate.vaultDefaultLeaseDuration }}
+- {{ printf "-vault-default-lease-duration=%s" . | quote }}
+{{- end }}
 {{- if .Values.vaultAgent.consulToken.enabled }}
 - -consul-token-file=/vault/consul-token
 {{- end }}

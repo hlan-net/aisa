@@ -22,6 +22,12 @@
 {{- range service "aisa-backend" }}
   {{- $timeout := index .ServiceMeta "timeout" }}
   {{- $path := index .ServiceMeta "path" }}
+  {{- $keyPath := index .ServiceMeta "key_path" }}
+  {{- $keyField := index .ServiceMeta "key_field" }}
+  {{- /* A credential that Vault issues (#92): readable when its meta is valid and its field is there. */}}
+  {{- $keyMeta := and (index .ServiceMeta "key") (regexMatch "^[A-Za-z0-9_-]+$" $keyField) (regexMatch "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$" $keyPath) (not (regexMatch "(^|/)[.][.]?(/|$)" $keyPath)) }}
+  {{- $keyFound := false }}
+  {{- if and $keyPath $keyMeta }}{{ with secret $keyPath }}{{ if index .Data $keyField }}{{ $keyFound = true }}{{ end }}{{ end }}{{ end }}
   {{- if not (index .ServiceMeta "models") }}
 # Skipped backend {{ .ID | toJSON }}: missing 'models' metadata
   {{- else if not (eq (index .ServiceMeta "provider") "openai-compatible") }}
@@ -30,6 +36,10 @@
 # Skipped backend {{ .ID | toJSON }}: invalid 'timeout' metadata {{ $timeout | toJSON }} (want whole seconds)
   {{- else if and $path (or (not (regexMatch "^(/[A-Za-z0-9._~@:+-]+)+$" $path)) (regexMatch "(^|/)[.][.]?(/|$)" $path)) }}
 # Skipped backend {{ .ID | toJSON }}: invalid 'path' metadata {{ $path | toJSON }} (want a path such as /v1beta/openai: a leading '/', no trailing '/')
+  {{- else if and $keyPath (not $keyMeta) }}
+# Skipped backend {{ .ID | toJSON }}: invalid 'key_path' metadata {{ $keyPath | toJSON }} or 'key_field' {{ $keyField | toJSON }} (want 'key', a Vault path such as gcp/roleset/vertex/token and a field such as token)
+  {{- else if and $keyPath (not $keyFound) }}
+# Skipped backend {{ .ID | toJSON }}: the credential at its 'key_path' has no field {{ $keyField | toJSON }}
   {{- else }}
     {{- scratch.MapSet "valid" .ID "1" }}
   {{- end }}
@@ -423,7 +433,13 @@ routes:
           - name: {{ .ID | toJSON }}
             provider: {{ index .ServiceMeta "provider" | toJSON }}
             weight: 1
-            {{- if index .ServiceMeta "key" }}
+            {{- if index .ServiceMeta "key_path" }}
+            {{- /* A credential that Vault issues (#92), read from its path as it is. */}}
+            {{- $keyField := index .ServiceMeta "key_field" }}
+            {{- with secret (index .ServiceMeta "key_path") }}
+            auth: {header: {Authorization: {{ printf "Bearer %v" (index .Data $keyField) | toJSON }}}}
+            {{- end }}
+            {{- else if index .ServiceMeta "key" }}
             {{- with secret (printf "secret/data/aisa/providers/%s" (index .ServiceMeta "key")) }}
             auth: {header: {Authorization: {{ printf "Bearer %s" .Data.data.api_key | toJSON }}}}
             {{- end }}

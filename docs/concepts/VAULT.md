@@ -17,7 +17,7 @@ The mount name (`secret/`) and the `aisa/` prefix are configurable in the Terraf
 | Reader | Auth | Reads | Why |
 |---|---|---|---|
 | aisa | Kubernetes auth, role `aisa` | `secret/aisa/consumers/*` (KV v2; reads, and creates and updates the hashes of the keys it issues), `consul/creds/aisa` (its Vault Agent) | Validates consumer credentials in `/v1/decide`; issues the keys of consumers with a Secret ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret)); reads the consumers' declarations, quota profiles and catalog from Consul with that token |
-| consul-template (next to the gateway) | Kubernetes auth, role `aisa-render` | `secret/aisa/providers/*` (KV v2), `consul/creds/aisa-render` | Renders provider keys into the gateway config |
+| consul-template (next to the gateway) | Kubernetes auth, role `aisa-render` | `secret/aisa/providers/*` (KV v2), `consul/creds/aisa-render`, and the paths of [credentials that Vault issues](#credentials-that-vault-issues) that the holder adds | Renders provider keys into the gateway config |
 
 The Consul tokens are dynamic: how often they rotate, and what a rotation does to the readers, is in [`CONSUL.md`](./CONSUL.md#acls).
 
@@ -66,7 +66,20 @@ A backend in Consul names its secret with the service meta `key` (`key = "openai
 
 Where the provider supports it, dynamic credentials are better than static keys, e.g. Azure OpenAI through Vault's Azure secrets engine.
 
-> **Direction** (US-3 in [`USER_STORIES.md`](../process/USER_STORIES.md)): a backend's key becomes a reference to any Vault path and field, so that a secret Vault issues and rotates itself can be used as well as one entered by hand. A key entered by hand carries what identifies it at the provider and its expiry date as metadata of the secret, readable without the secret's value.
+> **Direction** (US-3 in [`USER_STORIES.md`](../process/USER_STORIES.md)): a key entered by hand carries what identifies it at the provider and its expiry date as metadata of the secret, readable without the secret's value. A reference to any Vault path and field is built, below.
+
+### Credentials that Vault issues
+
+Some providers have no static credential: Vertex AI accepts only a short-lived OAuth2 access token of a service account. Vault issues these, as its Consul secrets engine issues the proxy's Consul tokens, so aisa does not learn to mint them and never holds the service account ([#92](https://github.com/hlan-net/aisa/issues/92)). A backend names the path with the meta `key_path` and the field of the answer with `key_field`; `key` still names the account, for its budget ([`CONSUL.md`](./CONSUL.md#backends-consul-catalog)):
+
+```
+gcp/roleset/vertex/token   token=ya29.…  token_ttl=3599  expires_at_seconds=…
+```
+
+- **The holder adds the policy.** The `aisa-render` role reads the path, so its policy needs `path "gcp/roleset/vertex/token" { capabilities = ["read"] }`. aisa's Terraform cannot know the mount in advance; nothing outside that policy can be read, whatever a backend's meta names.
+- **How often the token is read again.** Vault does not lease GCP access tokens: they are not renewable and cannot be revoked. consul-template therefore reads such a credential again after `default_lease_duration`, the same interval as a KV key, and every read issues a new token and rewrites the gateway's config. The shipped 10 s suits KV keys, not this; with a backend that has such a credential, set the proxy chart's `consulTemplate.vaultDefaultLeaseDuration` well below the token's lifetime, for example `15m`. A rotated KV key then also takes up to that long to reach the gateway. A change to consul-template that reads the expiry of such a token (`expires_at_seconds`) would remove the trade-off; until a release has it, the interval is the holder's choice.
+- **A credential with a lease** (a secrets engine that leases what it issues) is renewed and read again by consul-template as its lease requires, whatever the interval.
+- A KV secret stays under `key`: `key_path` is read as it is, without the KV v2 conventions of `secret/aisa/providers/<key>`.
 
 ## APISIX's own Vault support
 

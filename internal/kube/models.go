@@ -51,6 +51,13 @@ var timeoutMeta = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)
 // more segments, each after a '/', none of them "." or "..".
 var pathMeta = regexp.MustCompile(`^(/[A-Za-z0-9._~@:+-]+)+$`)
 
+// keyPathMeta and keyFieldMeta are what the template takes as the Vault path and the field of a
+// credential that Vault issues (#92); key_path also needs key, the account's name.
+var (
+	keyPathMeta  = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$`)
+	keyFieldMeta = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+)
+
 // HealthReader reads the backends registered in the catalog; consul.Client implements it.
 type HealthReader interface {
 	Health(ctx context.Context, service string) ([]consul.Instance, error)
@@ -261,7 +268,8 @@ func (m *Models) applyAll(ctx context.Context, models map[string]*offered, stats
 }
 
 // usable reports whether the proxy's template renders a backend (proxies/apisix/apisix.yaml.ctmpl):
-// one with models, the provider openai-compatible, and a valid timeout and path if any.
+// one with models, the provider openai-compatible, and a valid timeout, path and key_path if any.
+// Whether the credential at key_path has its field is the template's to see: aisa does not read it.
 func usable(meta map[string]string) bool {
 	if strings.TrimSpace(meta["models"]) == "" || meta["provider"] != "openai-compatible" {
 		return false
@@ -269,7 +277,21 @@ func usable(meta map[string]string) bool {
 	if t := meta["timeout"]; t != "" && !timeoutMeta.MatchString(t) {
 		return false
 	}
+	if kp := meta["key_path"]; kp != "" && (meta["key"] == "" || !keyFieldMeta.MatchString(meta["key_field"]) ||
+		!keyPathMeta.MatchString(kp) || hasDotSegment(kp)) {
+		return false
+	}
 	return validPath(meta["path"])
+}
+
+// hasDotSegment reports whether a path has a segment "." or "..".
+func hasDotSegment(p string) bool {
+	for _, seg := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // validPath reports whether a backend's meta path is absent or one the template takes.
@@ -277,15 +299,7 @@ func validPath(p string) bool {
 	if p == "" {
 		return true
 	}
-	if !pathMeta.MatchString(p) {
-		return false
-	}
-	for _, seg := range strings.Split(p[1:], "/") {
-		if seg == "." || seg == ".." {
-			return false
-		}
-	}
-	return true
+	return pathMeta.MatchString(p) && !hasDotSegment(p)
 }
 
 func parseDescription(value []byte) (description, error) {
