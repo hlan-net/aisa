@@ -15,8 +15,23 @@ vault {
   default_lease_duration = "10s"
 }
 
+consul {
+  # A query answered 403 (ACL not found) is retried until it succeeds, never given up on (#90).
+  # The Consul token comes from Vault's Consul secrets engine and is rotated as often as the
+  # lease of the consul/ mount allows; consul-token-watch.sh reloads consul-template with the
+  # new one, and a query still in flight with the old one, or the new one before Consul has
+  # replicated it, is answered 403 until then. With the default of 12 attempts that window
+  # could end the process. A failure that lasts is visible in the log, and the gateway keeps
+  # serving the last config it promoted.
+  retry {
+    attempts    = 0
+    backoff     = "250ms"
+    max_backoff = "1m"
+  }
+}
+
 template {
-  source      = "/etc/apisix/aisa/apisix.yaml.ctmpl"
+  source     = "/etc/apisix/aisa/apisix.yaml.ctmpl"
   destination = "/rendered/apisix.yaml.staged"
   command     = "/etc/apisix/aisa/guard.sh /rendered/apisix.yaml.staged /rendered/apisix.yaml"
   perms       = 0644

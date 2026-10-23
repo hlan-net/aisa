@@ -19,6 +19,8 @@ The mount name (`secret/`) and the `aisa/` prefix are configurable in the Terraf
 | aisa | Kubernetes auth, role `aisa` | `secret/aisa/consumers/*` (KV v2; reads, and creates and updates the hashes of the keys it issues), `consul/creds/aisa` (its Vault Agent) | Validates consumer credentials in `/v1/decide`; issues the keys of consumers with a Secret ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret)); reads the consumers' declarations, quota profiles and catalog from Consul with that token |
 | consul-template (next to the gateway) | Kubernetes auth, role `aisa-render` | `secret/aisa/providers/*` (KV v2), `consul/creds/aisa-render` | Renders provider keys into the gateway config |
 
+The Consul tokens are dynamic: how often they rotate, and what a rotation does to the readers, is in [`CONSUL.md`](./CONSUL.md#acls).
+
 Each role can only reach its own paths. aisa's policy:
 
 ```hcl

@@ -23,6 +23,8 @@ data:
     {{- .Files.Get "files/consul-template.hcl" | nindent 4 }}
   guard.sh: |-
     {{- .Files.Get "files/guard.sh" | nindent 4 }}
+  consul-token-watch.sh: |-
+    {{- .Files.Get "files/consul-token-watch.sh" | nindent 4 }}
   # The Vault Agent logs in to Vault with the pod's service account and keeps the tokens of
   # consul-template in memory, which cannot log in by itself (docs/concepts/VAULT.md):
   #   /vault/token          the Vault token of the role: reads secret/aisa/providers/*

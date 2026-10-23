@@ -97,14 +97,14 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> -n aisa -
   --set global.vault.addr=https://vault.vault.svc:8200 --set global.consul.addr=consul-server.consul.svc:8500
 ```
 
-The chart's ConfigMaps hold the files of this directory (`config.yaml`, `apisix.yaml.ctmpl`, `consul-template.hcl`, `guard.sh`), linked into `chart/files/`, so a cluster runs what the tests run, and a changed file rolls the pod. The Vault Agent's configuration is rendered from the chart's values. The Service, `<release>-apisix`, is what applications call.
+The chart's ConfigMaps hold the files of this directory (`config.yaml`, `apisix.yaml.ctmpl`, `consul-template.hcl`, `guard.sh`, `consul-token-watch.sh`), linked into `chart/files/`, so a cluster runs what the tests run, and a changed file rolls the pod. The Vault Agent's configuration is rendered from the chart's values. The Service, `<release>-apisix`, is what applications call.
 
 One pod, three containers:
 
 | Container | Role |
 |---|---|
 | `vault-agent` | Logs in to Vault with the pod's service account (Kubernetes auth, role `aisa-render`) and keeps two tokens in a directory in memory: the Vault token and a Consul ACL token from `consul/creds/aisa-render`. Starts first, as a sidecar init container (Kubernetes 1.29+). |
-| `consul-template` | Renders `apisix.yaml` with those tokens. An init container renders once before APISIX starts, because APISIX does not start without the file. |
+| `consul-template` | Renders `apisix.yaml` with those tokens. An init container renders once before APISIX starts, because APISIX does not start without the file. consul-template reads the Consul token only when it starts, so `consul-token-watch.sh` reloads it (SIGHUP) when the Vault Agent writes a new one, and it retries a query Consul answers 403 without a limit ([#90](https://github.com/hlan-net/aisa/issues/90), [`CONSUL.md`](../../docs/concepts/CONSUL.md#acls)). |
 | `apisix` | Reads the rendered file from a second directory in memory. It has no token and no access to Vault or Consul. |
 
 Settings for an environment are values of the chart ([`chart/values.yaml`](./chart/values.yaml); under `apisix:` when installed through aisa's chart):
@@ -118,11 +118,12 @@ Settings for an environment are values of the chart ([`chart/values.yaml`](./cha
 
 Run against the dev stack (`docker compose -f dev/compose.yaml up -d --build --wait`); CI runs all three:
 
+* [`token_rotation_test.sh`](./token_rotation_test.sh): consul-template keeps rendering the catalog across rotations of its Consul token, each a new token in the file and the old one deleted in Consul, with the shipped `consul` block and `consul-token-watch.sh`; its own Consul with ACLs, in Docker.
 * [`guard_test.sh`](./guard_test.sh): what `guard.sh` promotes, what it rejects and what it holds, with a fake Control API.
 * [`render_test.sh`](./render_test.sh): renders the template with consul-template against the dev Consul and Vault and checks the routes, also for model names that need an escaped or shortened route ID, and the timeouts: the default, the cap, and a backend left out for an invalid one.
 * [`runtime_test.sh`](./runtime_test.sh): runs APISIX on the rendered config with the stub aisa, and checks that a request aisa allows, denies, or cannot be asked about is reported to the usage sink exactly once, by the right route. It also runs `guard.sh` next to that APISIX: a file with a route APISIX's schema rejects is put back, and a valid one is kept, and both are reported to the stub's `/v1/render`.
 
-The chart is installed in a kind cluster by [`deploy/helm/test/install_test.sh`](../../deploy/helm/test/install_test.sh) (CI, amd64 and arm64): the Vault Agent's login with Kubernetes auth, the Consul token from Vault and a provider key rendered from Vault are checked there. Not verified yet: whether consul-template picks up a Consul token that the Vault Agent replaces when its lease ends; until it has, give the Consul role a long lease or restart the pod within it.
+The chart is installed in a kind cluster by [`deploy/helm/test/install_test.sh`](../../deploy/helm/test/install_test.sh) (CI, amd64 and arm64): the Vault Agent's login with Kubernetes auth, the Consul token from Vault and a provider key rendered from Vault are checked there.
 
 ### Metrics
 
