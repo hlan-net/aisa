@@ -59,7 +59,7 @@ validate "proxy-alone" "$PROXY" --set aisa.url=https://aisa.aisa.svc:8080
 # the pod reloads it with the new token, but only where the Vault Agent writes one.
 awk '/consul-template.hcl: \|-/{c = 1} c && /^    consul \{/{b = 1} b && /attempts *= *0/{f = 1; exit} END {exit !f}' \
     "$OUT/defaults.yaml" || fail "the rendered consul-template.hcl retries Consul a limited number of times"
-watches() { grep -c 'consul-token-watch.sh /vault/consul-token \$\$ &' "$1" || true; }
+watches() { local file=$1; grep -c 'consul-token-watch.sh /vault/consul-token \$\$ &' "$file" || true; }
 [[ "$(watches "$OUT/defaults.yaml")" == 1 ]] || fail "consul-template is not reloaded when its Consul token changes"
 [[ "$(watches "$OUT/consul-without-acls.yaml")" == 0 ]] || fail "the token watch runs without a Consul token"
 echo "ok: consul-template survives the rotation of its Consul token"

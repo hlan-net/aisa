@@ -75,11 +75,12 @@ docker run -d --name "$NAME-ct" --network "$NAME" -e CONSUL_HTTP_ADDR="$NAME-con
 
 # wait_for <backend>: the rendered file names it within 30 s.
 wait_for() {
+    local backend=$1
     for _ in $(seq 1 30); do
-        grep -qw "$1" "$WORK/out/backends" 2>/dev/null && return 0
+        grep -qw "$backend" "$WORK/out/backends" 2>/dev/null && return 0
         sleep 1
     done
-    fail "the render does not name $1 after 30 s: $(cat "$WORK/out/backends" 2>/dev/null)"
+    fail "the render does not name $backend after 30 s: $(cat "$WORK/out/backends" 2>/dev/null)"
 }
 wait_for backend-0
 echo "ok: rendered with the first token"
