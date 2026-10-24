@@ -23,6 +23,7 @@ import (
 	"github.com/hlan-net/aisa/internal/budgets"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/models"
 	"github.com/hlan-net/aisa/internal/quotas"
 )
 
@@ -58,6 +59,12 @@ type BudgetChecker interface {
 	Check(ctx context.Context, consumer, model string) budgets.Verdict
 }
 
+// Resolver places a requested model name: a model's, an alias of one, or unknown;
+// models.Registry implements it.
+type Resolver interface {
+	Resolve(name string) (string, models.Outcome)
+}
+
 // ProviderChecker checks the budgets of the provider keys that serve a model, the ceiling
 // above the consumers; budgets.Ceiling implements it.
 type ProviderChecker interface {
@@ -74,6 +81,9 @@ type Options struct {
 	Budget BudgetChecker
 	// Provider checks the budgets of the provider keys that serve the model. Nil: none.
 	Provider ProviderChecker
+	// Models resolves aliases to their models and tells a name aisa does not know (#89). Nil:
+	// the requested name is taken as it is.
+	Models Resolver
 }
 
 // Handler answers /v1/decide.
@@ -145,6 +155,14 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 			typ: "invalid_request_error", code: "missing_model", msg: "the requested model could not be determined",
 		})
 	}
+	model, known := h.resolve(model)
+	if !known {
+		return h.deny(w, log, consumer.Name, denial{
+			status: http.StatusNotFound, result: metrics.ResultUnknownModel,
+			typ: "invalid_request_error", code: "model_not_found",
+			msg: fmt.Sprintf("the model %q does not exist; GET /v1/models lists the models on offer", model),
+		})
+	}
 	if consumer.QuotaProfile == "" {
 		if h.opts.DefaultQuotaProfile == "" {
 			return h.deny(w, log, consumer.Name, denial{
@@ -183,7 +201,8 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 			// The request goes on, to the budget's downgrade model instead; the proxy routes
 			// by X-Aisa-Model and forwards the request with that model (proxy rule 3).
 			log.Info("downgrade", "consumer", consumer.Name, "model", model, "to", v.DowngradeTo)
-			model, result = v.DowngradeTo, metrics.ResultDowngrade
+			model, _ = h.resolve(v.DowngradeTo)
+			result = metrics.ResultDowngrade
 		}
 		if v.Outcome != budgets.NoBudget && v.Err == nil {
 			remaining = strconv.FormatInt(v.Remaining, 10)
@@ -215,7 +234,8 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 				})
 			}
 			log.Info("downgrade", "consumer", consumer.Name, "model", model, "to", v.DowngradeTo, "provider", v.Provider)
-			model, result = v.DowngradeTo, metrics.ResultDowngrade
+			model, _ = h.resolve(v.DowngradeTo)
+			result = metrics.ResultDowngrade
 		}
 	}
 
@@ -230,6 +250,17 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 		log.Debug("allow", "consumer", consumer.Name, "model", model)
 	}
 	return result
+}
+
+// resolve returns the model a name stands for, itself or the model of an alias, and false for a
+// name that is neither. A name that cannot be placed yet, before the catalog has been read, is
+// let through as it is: the proxy has no route for a name that is no model, and answers 503.
+func (h *Handler) resolve(name string) (string, bool) {
+	if h.opts.Models == nil {
+		return name, true
+	}
+	model, outcome := h.opts.Models.Resolve(name)
+	return model, outcome != models.Unknown
 }
 
 // checkQuota returns the denial of a consumer whose quota is exhausted or cannot be known.

@@ -74,6 +74,7 @@ import (
 	"github.com/hlan-net/aisa/internal/kube"
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/models"
 	"github.com/hlan-net/aisa/internal/pricing"
 	"github.com/hlan-net/aisa/internal/quotas"
 	"github.com/hlan-net/aisa/internal/render"
@@ -81,6 +82,9 @@ import (
 	"github.com/hlan-net/aisa/internal/vault"
 	"github.com/hlan-net/aisa/internal/version"
 )
+
+// backendService is the backends' service name in the Consul catalog (docs/concepts/CONSUL.md).
+const backendService = "aisa-backend"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -161,10 +165,17 @@ func run(args []string) error {
 		pricing.Options{OnLoad: func(s pricing.LoadStats) { observePrices(m, s) }})
 	go prices.Run(ctx)
 
+	// The model names: which are models, and which are aliases of one (#89).
+	registry := models.NewRegistry(cc,
+		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
+		log.With("component", "models"), models.RegistryOptions{Service: backendService})
+	go registry.Run(ctx)
+
 	checks := []server.Check{
 		{Name: "consumers", Probe: store.Ready},
 		{Name: "consumer_declarations", Probe: declarations.Ready},
 		{Name: "model_prices", Probe: prices.Ready},
+		{Name: "models", Probe: registry.Ready},
 	}
 	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
 	var (
@@ -225,7 +236,7 @@ func run(args []string) error {
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide"),
-			decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile, Budget: budget, Provider: provider}),
+			decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile, Budget: budget, Provider: provider, Models: registry}),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
 			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens, Pricer: prices, Budget: budgetCharger, Provider: providerCharger}),
 		render.New(m, log.With("component", "render")),
@@ -309,7 +320,7 @@ func newCeiling(cfg config.Config, cc *consul.Client, rdb *redis.Client, m *metr
 			Location: loc, StatePrefix: cfg.Consul.Prefix + "/state/providers/",
 			Limit: m.ProviderBudgetLimit, Spent: m.ProviderBudgetSpent, Label: "provider",
 		})
-	catalog := budgets.NewCatalog(cc, log, budgets.CatalogOptions{Service: "aisa-backend"})
+	catalog := budgets.NewCatalog(cc, log, budgets.CatalogOptions{Service: backendService})
 	return budgets.NewCeiling(catalog, monthly, log), set, monthly, catalog
 }
 
@@ -360,7 +371,7 @@ func runKubernetes(ctx context.Context, cfg config.Config, src kubeSources, m *m
 		Rotation: k.Rotation, Grace: k.Grace, OnIssue: obs.issued, OnPass: obs.secrets,
 	})
 	models := kube.NewModels(src.consul, dyn, log, kube.ModelsOptions{
-		Service:      "aisa-backend",
+		Service:      backendService,
 		Descriptions: consul.KVPrefix{Client: src.consul, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
 		Endpoint:     k.ProxyURL,
 		Install:      k.Namespace,

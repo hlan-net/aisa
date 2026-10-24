@@ -18,6 +18,7 @@ import (
 	"github.com/hlan-net/aisa/internal/budgets"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/models"
 	"github.com/hlan-net/aisa/internal/quotas"
 )
 
@@ -779,4 +780,102 @@ func (f *exhaustedProviders) Check(_ context.Context, model string) budgets.Verd
 		v.OnExhausted, v.DowngradeTo = budgets.Downgrade, to
 	}
 	return v
+}
+
+// fakeModels knows llama3.2 and qwen3, and llama3.2:3b and small as aliases.
+type fakeModels struct{ outcome models.Outcome }
+
+func (f fakeModels) Resolve(name string) (string, models.Outcome) {
+	if f.outcome == models.NotLoaded {
+		return name, models.NotLoaded
+	}
+	switch name {
+	case "llama3.2", "qwen3":
+		return name, models.Model
+	case "llama3.2:3b":
+		return "llama3.2", models.Alias
+	case "small":
+		return "qwen3", models.Alias
+	}
+	return name, models.Unknown
+}
+
+// An alias is decided as its model (#89): the budget sees the model, and X-Aisa-Model names it.
+// A name that is neither is 404 model_not_found, before the quota is asked.
+func TestModelNames(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		resolver   Resolver
+		model      string
+		wantStatus int
+		wantModel  string
+		wantCode   string
+		wantResult string
+		wantBudget []string
+	}{
+		{"a model", fakeModels{outcome: models.Model}, "llama3.2", 200, "llama3.2", "", metrics.ResultAllow, []string{"chat-ui/llama3.2"}},
+		{"an alias", fakeModels{outcome: models.Model}, "llama3.2:3b", 200, "llama3.2", "", metrics.ResultAllow, []string{"chat-ui/llama3.2"}},
+		{"unknown", fakeModels{outcome: models.Model}, "llama3.2:1b", 404, "", "model_not_found", metrics.ResultUnknownModel, nil},
+		{"not loaded yet", fakeModels{outcome: models.NotLoaded}, "llama3.2:1b", 200, "llama3.2:1b", "", metrics.ResultAllow, []string{"chat-ui/llama3.2:1b"}},
+		{"no resolver", nil, "anything", 200, "anything", "", metrics.ResultAllow, []string{"chat-ui/anything"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := metrics.New("test")
+			b := &fakeBudget{verdict: budgets.Verdict{Outcome: budgets.NoBudget}}
+			q := &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Allow}}
+			l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}}}
+			h := New(l, q, m, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Budget: b, Models: tc.resolver})
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"`+tc.model+`"}`))
+			req.Header.Set("Authorization", "Bearer key-chat")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			checkAnswer(t, rec, m, tc.wantStatus, tc.wantModel, tc.wantCode, tc.wantResult)
+			if !slices.Equal(b.checked, tc.wantBudget) {
+				t.Errorf("budget checked %v, want %v", b.checked, tc.wantBudget)
+			}
+			if rec.Code == 404 && len(q.checked) != 0 {
+				t.Error("the quota was asked about an unknown model")
+			}
+		})
+	}
+}
+
+// A downgrade named by an alias goes to the alias's model.
+func TestDowngradeToAnAlias(t *testing.T) {
+	b := &fakeBudget{verdict: budgets.Verdict{Outcome: budgets.Exhausted, Applies: true, OnExhausted: budgets.Downgrade, DowngradeTo: "small"}}
+	p := &exhaustedProviders{to: map[string]string{"llama3.2": "small"}}
+	q := &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Allow}}
+	l := fakeLookup{keys: map[string]consumers.Consumer{"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"}}}
+	for name, opts := range map[string]Options{
+		"consumer budget": {Budget: b, Models: fakeModels{outcome: models.Model}},
+		"provider budget": {Provider: p, Models: fakeModels{outcome: models.Model}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := New(l, q, metrics.New("test"), slog.New(slog.NewTextHandler(io.Discard, nil)), opts)
+			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"llama3.2:3b"}`))
+			req.Header.Set("Authorization", "Bearer key-chat")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != 200 || rec.Header().Get(HeaderModel) != "qwen3" {
+				t.Errorf("status = %d, X-Aisa-Model = %q, want 200 and qwen3; body %s", rec.Code, rec.Header().Get(HeaderModel), rec.Body)
+			}
+		})
+	}
+}
+
+// checkAnswer checks a decision's status, X-Aisa-Model, error code and its count under chat-ui.
+func checkAnswer(t *testing.T, rec *httptest.ResponseRecorder, m *metrics.Metrics, status int, model, code, result string) {
+	t.Helper()
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d; body %s", rec.Code, status, rec.Body)
+	}
+	if got := rec.Header().Get(HeaderModel); got != model {
+		t.Errorf("X-Aisa-Model = %q, want %q", got, model)
+	}
+	checkDenial(t, rec, code)
+	if n := testutil.ToFloat64(m.Decisions.WithLabelValues("chat-ui", result)); n != 1 {
+		t.Errorf("aisa_decisions_total{chat-ui,%s} = %v, want 1", result, n)
+	}
 }

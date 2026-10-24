@@ -11,6 +11,9 @@ until consul members >/dev/null 2>&1; do sleep 1; done
 consul kv put aisa/consumers/chat-ui    '{"quota_profile": "interactive"}'
 consul kv put aisa/consumers/batch-jobs '{"quota_profile": "batch"}'
 
+# llama3.2 is asked for under an Ollama tag too (#89).
+consul kv put aisa/models/llama3.2     '{"aliases": ["llama3.2:3b"]}'
+
 consul kv put aisa/pricing/qwen3       '{"input_per_1k": 0.0, "output_per_1k": 0.0, "currency": "EUR"}'
 consul kv put aisa/pricing/llama3.2    '{"input_per_1k": 0.0, "output_per_1k": 0.0, "currency": "EUR"}'
 consul kv put aisa/pricing/cloud-large '{"input_per_1k": 0.003, "output_per_1k": 0.015, "currency": "EUR"}'
