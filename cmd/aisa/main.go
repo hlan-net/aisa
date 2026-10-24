@@ -174,7 +174,7 @@ func run(args []string) error {
 		budgetCharger   ledger.Charger
 		provider        decide.ProviderChecker
 		providerCharger ledger.ProviderCharger
-		budgetUsage     admin.BudgetUsage
+		budgetUsage     admin.UsageReporter
 	)
 	if cfg.QuotasEnabled() {
 		q, profiles, rdb, closeQuotas := newQuotas(cfg, cc, declarations, m, log.With("component", "quotas"))

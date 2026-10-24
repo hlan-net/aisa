@@ -67,18 +67,7 @@ func TestBudgetsCRUD(t *testing.T) {
 		t.Errorf("get = %d %+v, usage %+v", w.Code, item, item.Usage)
 	}
 
-	// The list holds the consumers' budgets, not the providers' below them.
-	_ = mc.Put(context.Background(), "aisa/budgets/providers/gemini", []byte(`{"monthly_tokens": 1}`))
-	_ = mc.Put(context.Background(), "aisa/budgets/broken", []byte(`{"soft_ratio": 0.5}`))
-	w = serve(h, http.MethodGet, "/admin/api/budgets", "")
-	var list []BudgetItem
-	_ = json.Unmarshal(w.Body.Bytes(), &list)
-	if w.Code != http.StatusOK || len(list) != 2 || list[0].Consumer != "broken" || list[1].Consumer != "chat-ui" {
-		t.Fatalf("list = %d %+v", w.Code, list)
-	}
-	if list[0].Status != "invalid" || list[0].Error != "monthly_tokens is missing" || list[0].Usage != nil {
-		t.Errorf("broken budget = %+v", list[0])
-	}
+	checkBudgetList(t, h, mc)
 
 	// Remove.
 	if w = serve(h, http.MethodDelete, "/admin/api/budgets/chat-ui", ""); w.Code != http.StatusOK {
@@ -164,5 +153,21 @@ func TestBudgetErrors(t *testing.T) {
 	mc.delErr = errors.New("denied")
 	if w := serve(h, http.MethodDelete, "/admin/api/budgets/chat-ui", ""); w.Code != http.StatusInternalServerError {
 		t.Errorf("delete denied: %d", w.Code)
+	}
+}
+
+// checkBudgetList checks that the list holds the consumers' budgets, not the providers' below them.
+func checkBudgetList(t *testing.T, h http.Handler, mc *mockConsul) {
+	t.Helper()
+	_ = mc.Put(context.Background(), "aisa/budgets/providers/gemini", []byte(`{"monthly_tokens": 1}`))
+	_ = mc.Put(context.Background(), "aisa/budgets/broken", []byte(`{"soft_ratio": 0.5}`))
+	w := serve(h, http.MethodGet, "/admin/api/budgets", "")
+	var list []BudgetItem
+	_ = json.Unmarshal(w.Body.Bytes(), &list)
+	if w.Code != http.StatusOK || len(list) != 2 || list[0].Consumer != "broken" || list[1].Consumer != "chat-ui" {
+		t.Fatalf("list = %d %+v", w.Code, list)
+	}
+	if list[0].Status != "invalid" || list[0].Error != "monthly_tokens is missing" || list[0].Usage != nil {
+		t.Errorf("broken budget = %+v", list[0])
 	}
 }

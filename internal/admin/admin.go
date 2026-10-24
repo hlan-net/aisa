@@ -43,7 +43,7 @@ type Options struct {
 	VaultMount   string // KV v2 mount in Vault, defaults to "secret"
 	VaultPrefix  string // Prefix in Vault KV v2 mount, defaults to "aisa"
 	// Budgets reports the consumers' use of their monthly budgets; nil when aisa counts none.
-	Budgets BudgetUsage
+	Budgets UsageReporter
 }
 
 // Handler serves both the admin JSON API and the embedded web dashboard.

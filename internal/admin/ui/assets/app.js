@@ -195,7 +195,7 @@ function openBudget(name) {
   const b = budgetsByConsumer[name];
   document.getElementById('budget-consumer').textContent = name;
   document.getElementById('form-budget').reset();
-  const valid = b && b.status === 'ready';
+  const valid = b?.status === 'ready';
   if (valid) {
     document.getElementById('budget-tokens').value = b.monthly_tokens;
     document.getElementById('budget-soft').value = b.soft_ratio;

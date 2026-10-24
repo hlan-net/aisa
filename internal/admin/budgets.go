@@ -19,8 +19,8 @@ const (
 	maxBudgetBody = 64 << 10
 )
 
-// BudgetUsage reports a consumer's tokens in the current month; budgets.Monthly implements it.
-type BudgetUsage interface {
+// UsageReporter reports a consumer's tokens in the current month; budgets.Monthly implements it.
+type UsageReporter interface {
 	Usage(ctx context.Context, consumer string) (period string, used int64)
 }
 
