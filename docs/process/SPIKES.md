@@ -189,3 +189,12 @@ Consequences, in [`proxies/apisix/apisix.yaml.ctmpl`](../../proxies/apisix/apisi
 - The model routes set `fallback_strategy: [http_5xx]` and `retry_on_failure_within_ms: 5000`: a fast failure moves to another instance when there is one, a slow one does not double the wait. The client guide's 502 covers the case of every instance failing.
 - Active checks are not rendered: they would need a health path that every provider answers, and they do nothing for a single backend.
 - A separate connect timeout, and a cap above 600 s, stay an upstream request (`ROADMAP.md`, Upstream contributions). Until then the holder's lever is the backend's Consul health check: its interval and timeout bound how long new requests keep going to a backend that is gone.
+
+**Follow-up, 2026-10-24:** the upstream change, measured before it is submitted. A patch to `ai-proxy` and `ai-proxy-multi` (`ai-proxy/schema.lua` and `ai-transport/http.lua`, the same in 3.19.0 and in master) lets `timeout` be `{connect, send, read}` in milliseconds, each up to the cosocket maximum, while the integer form is unchanged. Measured with the two files mounted into the 3.19.0 image, on amd64, with the same two-instance route as above (a host that drops the SYN, `fallback_strategy: [http_5xx]`, `retry_on_failure_within_ms: 5000`), ten requests each:
+
+| `timeout` | Two instances, one gone | The gone instance alone |
+|---|---|---|
+| `8000` | 5 of 10 succeed, the other 5 get 504 after 8 s | 504 after 8.0 s |
+| `{connect: 1000, send: 8000, read: 8000}` | 10 of 10 succeed, the slowest in 1.1 s | 504 after 1.0 s |
+
+A backend that takes 5 s before its first byte still answers with that timeout, streamed or not, and gets 504 after 3 s with `read: 3000`; a non-streamed answer of 620 s succeeds with `read: 700000`. So the connect timeout is what makes `fallback_strategy` useful for a gone host, and a single backend that is gone fails in the connect timeout instead of the read timeout; a hung process, which accepts the connection, still waits the read timeout. The patch and the text for the upstream PR are kept outside the repository until it is submitted; the template changes once an APISIX release carries it.
