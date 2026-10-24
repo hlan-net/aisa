@@ -2,7 +2,7 @@
 
 ## Concept
 
-aisa provides an embedded Web UI and REST Administration API at `/admin` to inspect and manage consumers, quota profiles, backends, and models without requiring direct manipulation of Consul KV and Vault KV v2 storage paths.
+aisa provides an embedded Web UI and REST Administration API at `/admin` to inspect and manage consumers, quota profiles, the consumers' monthly budgets, backends, and models without requiring direct manipulation of Consul KV and Vault KV v2 storage paths.
 
 The administration interface follows aisa's core design principles:
 - **Consul and Vault remain the sources of truth**: the admin interface reads from and writes to Consul KV and Vault KV v2. It stores nothing in local process memory or separate databases.
@@ -51,11 +51,17 @@ Displays real-time system readiness checks (Vault connectivity, Consul declarati
 - **Create quota profile**: Creates hourly token limits (`tokens_per_hour`) using check-and-set (returns 409 Conflict if already exists), with preset buttons (100k, 500k, 1M, 5M).
 - **Delete quota profile**: Deletes profiles no longer in use.
 
-### 4. Backends & Models Catalog
+### 4. Budgets
+- **Show budgets**: The consumers table shows each consumer's monthly budget (`aisa/budgets/<name>` in Consul KV, [`quotas-and-budgets.md`](./quotas-and-budgets.md#budgets-v030)): this month's tokens of the budget, and a badge once the soft limit is reached or the budget is exhausted (`Downgraded` with `on_exhausted: downgrade`). A stored budget that aisa cannot read is shown as `Invalid`, with the reason; aisa denies that consumer's requests to priced models with 503 until it is fixed.
+- **Set, change or remove a budget**: The consumer's Budget button opens the budget with the month's use, what remains and the soft limit in tokens, and edits `monthly_tokens`, `soft_ratio`, `on_exhausted` and `downgrade_to`. A budget is validated as aisa validates it when it reads the budgets, so one that aisa would refuse cannot be saved. Only a declared consumer can be given a budget. The change applies to the next decisions within seconds, as a change in Consul does.
+- The month's use is the one the decision counts (the counter in Redis, or the copy in `aisa/state/` when Redis cannot be read). Without Redis aisa counts no budgets, and the budgets are shown without their use.
+- The provider budgets (`aisa/budgets/providers/<key>`) are not shown or managed here yet.
+
+### 5. Backends & Models Catalog
 - **Backends**: Discovers instances of `aisa-backend` registered in the Consul service catalog, listing their IP/port, priority, fail policy, check status, and supported models.
 - **Models**: Summarizes available models mapped across discovered backends and indicates overall model health (healthy if at least one backend providing the model passes checks).
 
-### 5. Documentation
+### 6. Documentation
 - Shows aisa's documentation, the Markdown under `docs/` of the release the binary was built from, rendered to HTML. The files are embedded in the binary (`docs/docs.go`), so the view works airgapped and always matches the running version.
 - aisa renders each document once at start-up (GFM: tables, strikethrough, task lists, autolinks); raw HTML in the Markdown is omitted, not rendered. Headings get the same anchors as on GitHub.
 - A link to another document opens it in the view (`/admin/?doc=concepts/VAULT.md#consumer-credentials`, which can also be bookmarked); a link to any other file of the repository, such as `ROADMAP.md`, opens it on GitHub.
@@ -115,6 +121,29 @@ Returns system status, readiness probe states, and entity counts.
   ```
 - `DELETE /admin/api/quotas/{name}`
   Deletes a quota profile from Consul KV.
+
+### Budgets
+- `GET /admin/api/budgets`
+  Lists the consumers' budgets, sorted by consumer; the provider budgets below `aisa/budgets/providers/` are not in it.
+- `GET /admin/api/budgets/{consumer}`
+  Returns one consumer's budget; 404 when it has none.
+  ```json
+  {
+    "consumer": "batch-jobs",
+    "status": "ready",
+    "monthly_tokens": 5000000,
+    "soft_ratio": 0.8,
+    "on_exhausted": "downgrade",
+    "downgrade_to": "qwen3",
+    "soft_limit": 4000000,
+    "usage": {"period": "2026-10", "used": 4200000, "remaining": 800000, "soft": true, "exhausted": false}
+  }
+  ```
+  `usage` is absent when aisa counts no budgets (no Redis) and for a budget that cannot be read, which has `"status": "invalid"` and the reason in `error`. `exhausted` means the month's tokens are used up, so requests to priced models are rejected or downgraded; requests to free models are not bounded by the budget.
+- `PUT /admin/api/budgets/{consumer}`
+  Sets a declared consumer's budget (404 for a consumer that is not declared). The body is the budget's value in Consul KV ([`CONSUL.md`](../concepts/CONSUL.md)), such as `{"monthly_tokens": 5000000, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}`; a budget aisa would refuse is answered 400 with the reason aisa would log (`invalid budget: on_exhausted is downgrade, but downgrade_to names no model`). It is stored with every field named, defaults filled in, and the response is the budget as `GET` returns it.
+- `DELETE /admin/api/budgets/{consumer}`
+  Removes a consumer's budget; 404 when it has none.
 
 ### Backends & Models
 - `GET /admin/api/backends`

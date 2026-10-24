@@ -392,6 +392,32 @@ form { padding: 20px; }
   margin-top: 20px;
 }
 
+.form-group.hidden,
+.modal-footer .btn.hidden { display: none; }
+
+/* Budget */
+.budget-usage {
+  margin: 16px 20px 0;
+}
+
+.budget-usage .section-desc { margin: 0; }
+
+.budget-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.budget-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-heading);
+}
+
+.budget-usage .key-warning { margin: 0; }
+
+#budget-remove { margin-right: auto; }
+
 /* Key reveal */
 .key-warning {
   padding: 12px 16px;

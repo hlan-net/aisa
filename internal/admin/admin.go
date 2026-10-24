@@ -1,5 +1,6 @@
 // Package admin provides an HTTP administration API and Web UI for aisa, allowing the
-// holder to inspect and manage consumers, quota profiles, backends, and models in Consul and Vault.
+// holder to inspect and manage consumers, quota profiles, budgets, backends, and models in
+// Consul and Vault.
 package admin
 
 import (
@@ -41,6 +42,8 @@ type Options struct {
 	ConsulPrefix string // Prefix in Consul KV, defaults to "aisa"
 	VaultMount   string // KV v2 mount in Vault, defaults to "secret"
 	VaultPrefix  string // Prefix in Vault KV v2 mount, defaults to "aisa"
+	// Budgets reports the consumers' use of their monthly budgets; nil when aisa counts none.
+	Budgets UsageReporter
 }
 
 // Handler serves both the admin JSON API and the embedded web dashboard.
@@ -103,6 +106,10 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("GET /admin/api/quotas", h.listQuotas)
 	h.mux.HandleFunc("POST /admin/api/quotas", protectJSON(h.createQuota))
 	h.mux.HandleFunc("DELETE /admin/api/quotas/{name}", protectJSON(h.deleteQuota))
+	h.mux.HandleFunc("GET /admin/api/budgets", h.listBudgets)
+	h.mux.HandleFunc("GET /admin/api/budgets/{name}", h.getBudget)
+	h.mux.HandleFunc("PUT /admin/api/budgets/{name}", protectJSON(h.putBudget))
+	h.mux.HandleFunc("DELETE /admin/api/budgets/{name}", protectJSON(h.deleteBudget))
 	h.mux.HandleFunc("GET /admin/api/backends", h.listBackends)
 	h.mux.HandleFunc("GET /admin/api/models", h.listModels)
 	h.mux.HandleFunc("GET /admin/api/docs", h.listDocs)

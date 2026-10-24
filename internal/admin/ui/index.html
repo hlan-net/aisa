@@ -81,7 +81,7 @@
       <div class="section-header">
         <div>
           <h2>Consumers</h2>
-          <p class="section-desc">Declared in Consul KV (<code>aisa/consumers/&lt;name&gt;</code>) with key hashes in Vault.</p>
+          <p class="section-desc">Declared in Consul KV (<code>aisa/consumers/&lt;name&gt;</code>) with key hashes in Vault; monthly budgets in <code>aisa/budgets/&lt;name&gt;</code>.</p>
         </div>
         <button class="btn btn-primary" onclick="openModal('modal-add-consumer')">+ New Consumer</button>
       </div>
@@ -92,6 +92,7 @@
             <tr>
               <th>Consumer Name</th>
               <th>Quota Profile</th>
+              <th>Monthly Budget</th>
               <th>Kubernetes Target</th>
               <th>Vault Hash</th>
               <th>Status</th>
@@ -99,7 +100,7 @@
             </tr>
           </thead>
           <tbody id="consumers-table-body">
-            <tr><td colspan="6" class="text-center">Loading consumers...</td></tr>
+            <tr><td colspan="7" class="text-center">Loading consumers...</td></tr>
           </tbody>
         </table>
       </div>
@@ -252,6 +253,47 @@
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="closeModal('modal-add-quota')">Cancel</button>
           <button type="submit" class="btn btn-primary">Save Profile</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Budget -->
+  <div id="modal-budget" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Monthly Budget: <span id="budget-consumer"></span></h3>
+        <button class="btn-close" onclick="closeModal('modal-budget')">&times;</button>
+      </div>
+      <div id="budget-usage" class="budget-usage"></div>
+      <form id="form-budget" onsubmit="handleSaveBudget(event)">
+        <div class="form-group">
+          <label for="budget-tokens">Tokens per month *</label>
+          <input type="number" id="budget-tokens" required min="0" placeholder="e.g. 5000000">
+          <small>Counts only the models that have a price; 0 allows none.</small>
+        </div>
+        <div class="form-group">
+          <label for="budget-soft">Soft limit (share of the budget)</label>
+          <input type="number" id="budget-soft" min="0.01" max="1" step="0.01" placeholder="0.8">
+          <small>At this share the request is allowed and the holder is alerted. Default 0.8.</small>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="budget-on-exhausted">When exhausted</label>
+            <select id="budget-on-exhausted" onchange="toggleDowngradeInput()">
+              <option value="reject">Reject (429)</option>
+              <option value="downgrade">Downgrade to a model</option>
+            </select>
+          </div>
+          <div id="budget-downgrade-container" class="form-group hidden">
+            <label for="budget-downgrade">Downgrade to *</label>
+            <input type="text" id="budget-downgrade" placeholder="e.g. qwen3">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="budget-remove" class="btn btn-danger" onclick="handleRemoveBudget()">Remove Budget</button>
+          <button type="button" class="btn btn-secondary" onclick="closeModal('modal-budget')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Budget</button>
         </div>
       </form>
     </div>

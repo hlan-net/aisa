@@ -15,6 +15,7 @@ AISA="${AISA:-http://127.0.0.1:8084}"
 COMPOSE=(docker compose -f "$(dirname "$0")/compose.yaml")
 JSON='Content-Type: application/json'
 QWEN='{"model":"qwen3"}'
+CLOUD_LARGE='{"model":"cloud-large"}'
 HTTP_CODE='%{http_code}'
 
 pass=0
@@ -182,26 +183,26 @@ budget_put '{"monthly_tokens": 1, "on_exhausted": "downgrade", "downgrade_to": "
 expect "aisa: usage of a priced model by batch-jobs accepted" "200" \
     "$(send_usage "{\"request_id\":\"${smoke_run_id}-budget\",\"consumer\":\"batch-jobs\",\"model\":\"cloud-large\",\"backend\":\"mock-cloud\",\"status\":200,\"prompt_tokens\":5,\"completion_tokens\":5}")"
 for _ in $(seq 1 30); do
-    [[ "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')" == "200 batch-jobs qwen3" ]] && break
+    [[ "$(decide dev-key-batch-jobs "$CLOUD_LARGE")" == "200 batch-jobs qwen3" ]] && break
     sleep 1
 done
-expect "aisa: a priced model past the budget is downgraded" "200 batch-jobs qwen3" "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')"
+expect "aisa: a priced model past the budget is downgraded" "200 batch-jobs qwen3" "$(decide dev-key-batch-jobs "$CLOUD_LARGE")"
 expect "aisa: a free model is served past the budget" "200 batch-jobs llama3.2" "$(decide dev-key-batch-jobs '{"model":"llama3.2"}')"
 expect "aisa: nothing remains of the budget" "0" "$(decide_remaining dev-key-batch-jobs '{"model":"llama3.2"}')"
 budget_put '{"monthly_tokens": 1, "on_exhausted": "reject"}'
 for _ in $(seq 1 30); do
-    [[ "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')" == "429  " ]] && break
+    [[ "$(decide dev-key-batch-jobs "$CLOUD_LARGE")" == "429  " ]] && break
     sleep 1
 done
-expect "aisa: a priced model past a reject budget is refused" "429  " "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')"
+expect "aisa: a priced model past a reject budget is refused" "429  " "$(decide dev-key-batch-jobs "$CLOUD_LARGE")"
 expect "aisa: budget denials counted (at least one)" "1" \
     "$(curl -fsS "$AISA/metrics" | awk '$1 == "aisa_decisions_total{consumer=\"batch-jobs\",result=\"deny_budget\"}" { n = $2 } END { print (n + 0 >= 1) }')"
 budget_put "$batch_budget"
 for _ in $(seq 1 30); do
-    [[ "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')" == "200 batch-jobs cloud-large" ]] && break
+    [[ "$(decide dev-key-batch-jobs "$CLOUD_LARGE")" == "200 batch-jobs cloud-large" ]] && break
     sleep 1
 done
-expect "aisa: the budget restored, the priced model is served again" "200 batch-jobs cloud-large" "$(decide dev-key-batch-jobs '{"model":"cloud-large"}')"
+expect "aisa: the budget restored, the priced model is served again" "200 batch-jobs cloud-large" "$(decide dev-key-batch-jobs "$CLOUD_LARGE")"
 
 echo "== aisa: a budget per provider account"
 # A backend with a key, registered for this run on the dev agent (no check: an agent
@@ -228,15 +229,15 @@ done
 expect "aisa: a request through the key is charged to its budget" "1" \
     "$(awk -v s="$(provider_metric aisa_provider_budget_spent)" 'BEGIN { print (s + 0 >= 2) }')"
 expect "aisa: past the provider budget, every consumer's requests to its models are refused" "429  " \
-    "$(decide dev-key-chat-ui '{"model":"cloud-large"}')"
+    "$(decide dev-key-chat-ui "$CLOUD_LARGE")"
 expect "aisa: a model the key does not serve is unaffected" "200 chat-ui qwen3" "$(decide dev-key-chat-ui "$QWEN")"
 curl -fsS -o /dev/null -X DELETE "$CONSUL/v1/kv/aisa/budgets/providers/smoke"
 curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/$provider_backend"
 for _ in $(seq 1 30); do
-    [[ "$(decide dev-key-chat-ui '{"model":"cloud-large"}')" == "200 chat-ui cloud-large" ]] && break
+    [[ "$(decide dev-key-chat-ui "$CLOUD_LARGE")" == "200 chat-ui cloud-large" ]] && break
     sleep 1
 done
-expect "aisa: the provider budget removed, the model is served again" "200 chat-ui cloud-large" "$(decide dev-key-chat-ui '{"model":"cloud-large"}')"
+expect "aisa: the provider budget removed, the model is served again" "200 chat-ui cloud-large" "$(decide dev-key-chat-ui "$CLOUD_LARGE")"
 
 echo "== aisa: token quotas"
 # A new consumer for each run, so a window left by an earlier run does not matter: declared in
@@ -326,6 +327,33 @@ curl -fsS -X POST -H "$JSON" \
     "$AISA/admin/api/quotas" >/dev/null
 expect "admin: created quota profile listed" "$admin_quota" \
     "$(curl -fsS "$AISA/admin/api/quotas" | jq -r ".[] | select(.name == \"$admin_quota\") | .name")"
+
+# A budget set through the admin API applies to the next decisions: a month of 0 tokens sends
+# the consumer's priced requests to the downgrade model, and without the budget they pass again.
+admin_budget() { # admin_budget <method> [body]: the status of the call on the consumer's budget
+    local args=(-X "$1" -H "$JSON")
+    if [[ $# -gt 1 ]]; then args+=(-d "$2"); fi
+    curl -sS -o /dev/null -w "$HTTP_CODE" "${args[@]}" "$AISA/admin/api/budgets/$admin_consumer"
+}
+expect "admin: a budget aisa would refuse is not saved" "400" \
+    "$(admin_budget PUT '{"monthly_tokens": 0, "on_exhausted": "downgrade"}')"
+expect "admin: budget set" "200" \
+    "$(admin_budget PUT '{"monthly_tokens": 0, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}')"
+expect "admin: the budget is listed with the month's use" "0 $period" \
+    "$(curl -fsS "$AISA/admin/api/budgets" | jq -r ".[] | select(.consumer == \"$admin_consumer\") | \"\(.monthly_tokens) \(.usage.period)\"")"
+for _ in $(seq 1 30); do
+    [[ "$(decide "$rotated_key" "$CLOUD_LARGE")" == "200 $admin_consumer qwen3" ]] && break
+    sleep 1
+done
+expect "admin: the budget set through the API applies to the next decision" "200 $admin_consumer qwen3" \
+    "$(decide "$rotated_key" "$CLOUD_LARGE")"
+expect "admin: budget removed" "200" "$(admin_budget DELETE)"
+for _ in $(seq 1 30); do
+    [[ "$(decide "$rotated_key" "$CLOUD_LARGE")" == "200 $admin_consumer cloud-large" ]] && break
+    sleep 1
+done
+expect "admin: without the budget the priced model is served again" "200 $admin_consumer cloud-large" \
+    "$(decide "$rotated_key" "$CLOUD_LARGE")"
 
 curl -fsS -X DELETE "$AISA/admin/api/consumers/$admin_consumer" >/dev/null
 expect "admin: deleted consumer no longer listed" "" \

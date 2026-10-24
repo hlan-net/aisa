@@ -29,6 +29,7 @@ function setupActionDelegation() {
     if (action === 'rotate-key') void rotateKey(name);
     else if (action === 'delete-consumer') void deleteConsumer(name);
     else if (action === 'delete-quota') void deleteQuota(name);
+    else if (action === 'edit-budget') openBudget(name);
   });
 }
 
@@ -135,10 +136,12 @@ async function loadOverview() {
 async function loadConsumers() {
   const tbody = document.getElementById('consumers-table-body');
   try {
-    const [consumers, quotas] = await Promise.all([
+    const [consumers, quotas, budgetList] = await Promise.all([
       api('/consumers'),
-      api('/quotas').catch(() => [])
+      api('/quotas').catch(() => []),
+      api('/budgets').catch(() => [])
     ]);
+    budgetsByConsumer = Object.fromEntries(budgetList.map(b => [b.consumer, b]));
 
     // Populate quota dropdown in consumer modal
     const quotaSelect = document.getElementById('consumer-quota');
@@ -146,7 +149,7 @@ async function loadConsumers() {
       quotas.map(q => `<option value="${escapeHTML(q.name)}">${escapeHTML(q.name)} (${formatTokens(q.tokens_per_hour)}/h)</option>`).join('');
 
     if (consumers.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="color:var(--text-muted); padding:24px;">No consumers declared.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="color:var(--text-muted); padding:24px;">No consumers declared.</td></tr>';
       return;
     }
 
@@ -154,17 +157,105 @@ async function loadConsumers() {
       <tr>
         <td><strong>${escapeHTML(c.name)}</strong></td>
         <td>${c.quota_profile ? `<span class="badge badge-accent">${escapeHTML(c.quota_profile)}</span>` : '<span style="color:var(--text-muted)">None</span>'}</td>
+        <td>${renderBudget(budgetsByConsumer[c.name])}</td>
         <td>${c.namespace ? `${escapeHTML(c.namespace)} / <code>${escapeHTML(c.secret)}</code>` : '<span style="color:var(--text-muted)">-</span>'}</td>
         <td>${c.has_key ? '<span class="badge badge-ready">Key Present</span>' : '<span class="badge badge-warning">Missing Hash</span>'}</td>
         <td>${renderStatusBadge(c.status)}</td>
         <td class="text-right">
+          ${c.status !== 'undeclared' ? `<button class="btn btn-outline" style="padding:3px 8px; font-size:11px;" data-action="edit-budget" data-name="${escapeHTML(c.name)}">Budget</button>` : ''}
           ${!c.namespace ? `<button class="btn btn-outline" style="padding:3px 8px; font-size:11px;" data-action="rotate-key" data-name="${escapeHTML(c.name)}">Rotate Key</button>` : ''}
           <button class="btn btn-danger" data-action="delete-consumer" data-name="${escapeHTML(c.name)}">Delete</button>
         </td>
       </tr>
     `).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color:var(--danger)">Failed to load consumers: ${escapeHTML(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center" style="color:var(--danger)">Failed to load consumers: ${escapeHTML(err.message)}</td></tr>`;
+  }
+}
+
+// Budgets
+let budgetsByConsumer = {};
+let budgetConsumer = '';
+
+// renderBudget shows a consumer's budget and this month's use of it in the consumers table.
+function renderBudget(b) {
+  if (!b) return '<span style="color:var(--text-muted)">None</span>';
+  if (b.status === 'invalid') return `<span class="badge badge-danger" title="${escapeHTML(b.error)}">Invalid</span>`;
+  const limit = `${formatTokens(b.monthly_tokens)} / month`;
+  if (!b.usage) return `<code>${limit}</code>`;
+  const u = b.usage;
+  let badge = '';
+  if (u.exhausted) badge = ` <span class="badge badge-danger">${b.on_exhausted === 'downgrade' ? 'Downgraded' : 'Exhausted'}</span>`;
+  else if (u.soft) badge = ' <span class="badge badge-warning">Soft limit</span>';
+  return `<code>${formatTokens(u.used)} / ${formatTokens(b.monthly_tokens)}</code>${badge}`;
+}
+
+function openBudget(name) {
+  budgetConsumer = name;
+  const b = budgetsByConsumer[name];
+  document.getElementById('budget-consumer').textContent = name;
+  document.getElementById('form-budget').reset();
+  const valid = b?.status === 'ready';
+  if (valid) {
+    document.getElementById('budget-tokens').value = b.monthly_tokens;
+    document.getElementById('budget-soft').value = b.soft_ratio;
+    document.getElementById('budget-on-exhausted').value = b.on_exhausted || 'reject';
+    document.getElementById('budget-downgrade').value = b.downgrade_to || '';
+  }
+  toggleDowngradeInput();
+  document.getElementById('budget-remove').classList.toggle('hidden', !b);
+  document.getElementById('budget-usage').innerHTML = renderBudgetUsage(b);
+  openModal('modal-budget');
+}
+
+function renderBudgetUsage(b) {
+  if (!b) return '<p class="section-desc">No budget: the consumer\'s use of priced models is not bounded by a month.</p>';
+  if (b.status === 'invalid') return `<div class="key-warning">The stored budget cannot be read, so requests to priced models are refused with 503: ${escapeHTML(b.error)}</div>`;
+  if (!b.usage) return '<p class="section-desc">aisa counts no budgets (no Redis), so the month\'s use is not known.</p>';
+  const u = b.usage;
+  return `
+    <div class="budget-stats">
+      <div><div class="stat-label">Used in ${escapeHTML(u.period)}</div><div class="budget-value">${formatTokens(u.used)}</div></div>
+      <div><div class="stat-label">Remaining</div><div class="budget-value">${formatTokens(u.remaining)}</div></div>
+      <div><div class="stat-label">Soft limit</div><div class="budget-value">${formatTokens(b.soft_limit)}</div></div>
+    </div>`;
+}
+
+function toggleDowngradeInput() {
+  const downgrade = document.getElementById('budget-on-exhausted').value === 'downgrade';
+  document.getElementById('budget-downgrade-container').classList.toggle('hidden', !downgrade);
+  document.getElementById('budget-downgrade').required = downgrade;
+}
+
+async function handleSaveBudget(e) {
+  e.preventDefault();
+  const tokens = Number.parseInt(document.getElementById('budget-tokens').value, 10);
+  const soft = document.getElementById('budget-soft').value.trim();
+  const onExhausted = document.getElementById('budget-on-exhausted').value;
+  const body = { monthly_tokens: tokens, on_exhausted: onExhausted };
+  if (soft !== '') body.soft_ratio = Number.parseFloat(soft);
+  if (onExhausted === 'downgrade') body.downgrade_to = document.getElementById('budget-downgrade').value.trim();
+  try {
+    await api(`/budgets/${encodeURIComponent(budgetConsumer)}`, { method: 'PUT', body: JSON.stringify(body) });
+    closeModal('modal-budget');
+    showToast(`Budget of '${budgetConsumer}' saved`, 'success');
+    await loadConsumers();
+  } catch (_err) {
+    // API error notification is handled in api()
+  }
+}
+
+async function handleRemoveBudget() {
+  if (!confirm(`Remove the budget of '${budgetConsumer}'? Its use of priced models will no longer be bounded by a month.`)) {
+    return;
+  }
+  try {
+    await api(`/budgets/${encodeURIComponent(budgetConsumer)}`, { method: 'DELETE' });
+    closeModal('modal-budget');
+    showToast(`Budget of '${budgetConsumer}' removed`, 'success');
+    await loadConsumers();
+  } catch (_err) {
+    // API error notification is handled in api()
   }
 }
 
