@@ -69,7 +69,7 @@ for _ in $(seq 1 30); do
     [[ "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")" == 200 ]] && break
     sleep 1
 done
-expect "aisa: ready (consumers, declarations, prices and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")"
+expect "aisa: ready (consumers, declarations, prices, model names and quota profiles loaded)" "200" "$(curl -s -o /dev/null -w "$HTTP_CODE" "$AISA/readyz")"
 # decide <key> <json body> [extra curl args...]: prints "<status> <X-Aisa-Consumer> <X-Aisa-Model>"
 decide() {
     local key=$1 body=$2
@@ -88,6 +88,8 @@ expect "aisa: model from X-Aisa-Requested-Model" "200 batch-jobs llama3.2" \
 expect "aisa: unknown key" "401  " "$(decide dev-key-nobody "$QWEN")"
 expect "aisa: no model" "400  " "$(decide dev-key-chat-ui '{"messages":[]}')"
 expect "aisa: decisions counted" "$((allowed_before + 1))" "$(allowed)"
+expect "aisa: a model's alias is decided as the model" "200 chat-ui llama3.2" "$(decide dev-key-chat-ui '{"model":"llama3.2:3b"}')"
+expect "aisa: a name that is neither a model nor an alias" "404  " "$(decide dev-key-chat-ui '{"model":"no-such-model"}')"
 
 echo "== aisa: /v1/usage event ingestion and metrics"
 send_usage() {

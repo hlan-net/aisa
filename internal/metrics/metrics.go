@@ -19,13 +19,14 @@ const (
 
 // Values of the result label of aisa_decisions_total.
 const (
-	ResultAllow       = "allow"
-	ResultDenyAuth    = "deny_auth"   // unknown, invalid or missing credential (401)
-	ResultInvalid     = "invalid"     // no model in the request (400), or a body too large to look for it (413)
-	ResultUnavailable = "unavailable" // aisa cannot verify credentials and fails closed (503)
-	ResultNoQuota     = "no_quota"    // the consumer has no quota profile and there is no default (403)
-	ResultDenyQuota   = "deny_quota"  // quota exhausted (429)
-	ResultDenyBudget  = "deny_budget" // the consumer's budget exhausted (429)
+	ResultAllow        = "allow"
+	ResultDenyAuth     = "deny_auth"     // unknown, invalid or missing credential (401)
+	ResultInvalid      = "invalid"       // no model in the request (400), or a body too large to look for it (413)
+	ResultUnknownModel = "unknown_model" // the requested model is neither a model nor an alias (404)
+	ResultUnavailable  = "unavailable"   // aisa cannot verify credentials and fails closed (503)
+	ResultNoQuota      = "no_quota"      // the consumer has no quota profile and there is no default (403)
+	ResultDenyQuota    = "deny_quota"    // quota exhausted (429)
+	ResultDenyBudget   = "deny_budget"   // the consumer's budget exhausted (429)
 	// ResultDenyProviderBudget: the budget of a provider key that serves the model is exhausted (429).
 	ResultDenyProviderBudget = "deny_provider_budget"
 	ResultDowngrade          = "downgrade"

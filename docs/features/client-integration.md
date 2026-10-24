@@ -363,6 +363,7 @@ Every error is an OpenAI-style body, `{"error": {"message": …, "type": …, "c
 | **400** | `invalid_request_error` / `missing_model` | aisa | The request names no model | Send `model` in the body |
 | **400** | `invalid_request_error` / `invalid_model` | aisa | The model name is longer than 256 bytes | Use a name from `GET /v1/models` |
 | **401** | `invalid_request_error` / `invalid_api_key` | aisa | No `Authorization: Bearer` key, a key aisa does not know, or a replaced key after its grace period | Re-read the Secret (restart the pod, or mount it as a file), or check the consumer's declaration |
+| **404** | `invalid_request_error` / `model_not_found` | aisa | The model is neither a model aisa offers nor an alias of one | Use a name from `GET /v1/models`, or ask the holder to add yours as an alias |
 | **403** | `invalid_request_error` / `no_quota` | aisa | The consumer has no quota profile, and the holder has set no default | Ask the holder to give the consumer a `quota_profile` |
 | **413** | `invalid_request_error` / `request_too_large` | aisa | The body is too large for aisa to find the model in it (the proxy normally spares aisa the body) | Make the request smaller |
 | **429** | `tokens` / `rate_limit_exceeded` | aisa | The consumer's hourly token quota is used up | Wait for `Retry-After` seconds; or ask for a larger quota profile |
@@ -375,7 +376,9 @@ Every error is an OpenAI-style body, `{"error": {"message": …, "type": …, "c
 | **5xx** | `gateway_error` | proxy | The gateway could not reach a provider | Retry later |
 | **503** | `server_error` / `consumers_unavailable`, `quota_unavailable` or `budget_unavailable` | aisa | aisa cannot verify keys, or the consumer's quota or budget, at the moment, and refuses rather than guesses | Retry with backoff |
 | **503** | `aisa_unreachable` | proxy | aisa is down and this model's backends do not serve without it | Retry with backoff, or use a local model that fails open |
-| **503** | `no_backend` | proxy | No healthy backend serves the model | Check the name in `GET /v1/models`; the model may be on a machine that is asleep |
+| **503** | `no_backend` | proxy | The model exists, and no healthy backend serves it; or aisa was unreachable and the name has no route | Retry later: the model may be on a machine that is asleep |
+
+**Coming from Ollama.** Ollama names a model `name:tag`, and an application that called it directly carries such names in its settings, such as `llama3.2:3b`. aisa offers a model under one name, the one in `GET /v1/models`, and the holder can list other names for it as aliases (`aisa/models/<model>`, [`CONSUL.md`](../concepts/CONSUL.md#model-descriptions-consul-kv)). A name that is neither is answered 404 `model_not_found`, so a misspelt name is told apart from a model that is down. The response's `model` field names the model aisa offers, not the alias.
 
 Sample 429 quota error response, with `Retry-After: 142`:
 
