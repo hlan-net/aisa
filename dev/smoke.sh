@@ -87,9 +87,9 @@ expect "aisa: model from X-Aisa-Requested-Model" "200 batch-jobs llama3.2" \
     "$(decide dev-key-batch-jobs '{}' -H 'X-Aisa-Requested-Model: llama3.2')"
 expect "aisa: unknown key" "401  " "$(decide dev-key-nobody "$QWEN")"
 expect "aisa: no model" "400  " "$(decide dev-key-chat-ui '{"messages":[]}')"
+expect "aisa: decisions counted" "$((allowed_before + 1))" "$(allowed)"
 expect "aisa: a model's alias is decided as the model" "200 chat-ui llama3.2" "$(decide dev-key-chat-ui '{"model":"llama3.2:3b"}')"
 expect "aisa: a name that is neither a model nor an alias" "404  " "$(decide dev-key-chat-ui '{"model":"no-such-model"}')"
-expect "aisa: decisions counted" "$((allowed_before + 1))" "$(allowed)"
 
 echo "== aisa: /v1/usage event ingestion and metrics"
 send_usage() {
