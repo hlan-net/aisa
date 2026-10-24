@@ -24,18 +24,20 @@ cleanup() {
 }
 trap cleanup EXIT
 fail() {
-    echo "FAIL: $1" >&2
+    local msg=$1
+    echo "FAIL: $msg" >&2
     docker logs "$NAME" 2>&1 | tail -20 >&2 || true
     exit 1
 }
-logged() { docker logs "$NAME" 2>&1 | grep -c -- "$1" || true; }
+logged() { local text=$1; docker logs "$NAME" 2>&1 | grep -c -- "$text" || true; }
 # wait_logged <text>: the container logs it within 30 s.
 wait_logged() {
+    local text=$1
     for _ in $(seq 1 30); do
-        [[ "$(logged "$1")" -gt 0 ]] && return 0
+        [[ "$(logged "$text")" -gt 0 ]] && return 0
         sleep 1
     done
-    fail "not logged after 30 s: $1"
+    fail "not logged after 30 s: $text"
 }
 
 mkdir -p "$WORK/etc" "$WORK/vault" "$WORK/out"

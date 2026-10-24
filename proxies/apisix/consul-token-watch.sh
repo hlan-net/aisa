@@ -28,6 +28,7 @@ case $PID in
     '' | *[!0-9]*)
         echo "consul-token-watch: error: usage: consul-token-watch.sh <token-file> <consul-template-pid>, not '$TOKEN_FILE' '$PID'" >&2
         exit 2 ;;
+    *) ;;
 esac
 if [ -z "$TOKEN_FILE" ] || ! kill -0 "$PID" 2>/dev/null; then
     echo "consul-token-watch: error: no token file given, or no process $PID to reload" >&2

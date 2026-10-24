@@ -66,7 +66,7 @@ watches() { local file=$1; grep -A1 -- '- --consul-token$' "$file" | grep -c -- 
 # script there is not run as written: the PID of #90's token watch was lost that way (#97).
 # The scripts live in the ConfigMaps, where nothing is expanded.
 for case in defaults consul-without-acls proxy-alone; do
-    awk '/^kind:/{d = ($2 == "Deployment")} c && match($0, /[^ ]/) <= i {c = 0}
+    awk '/^kind:/{d = ($2 == "Deployment")} !/^ *$/ && c && match($0, /[^ ]/) <= i {c = 0}
          d && /^ *(- )?(command|args):/{c = 1; i = match($0, /[^ ]/)} d && c && /\$/' "$OUT/$case.yaml" | grep . &&
         fail "a \$ in the command or args of a container in the $case case"
 done
