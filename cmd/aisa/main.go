@@ -83,6 +83,9 @@ import (
 	"github.com/hlan-net/aisa/internal/version"
 )
 
+// backendService is the backends' service name in the Consul catalog (docs/concepts/CONSUL.md).
+const backendService = "aisa-backend"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "aisa:", err)
@@ -165,7 +168,7 @@ func run(args []string) error {
 	// The model names: which are models, and which are aliases of one (#89).
 	registry := models.NewRegistry(cc,
 		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
-		log.With("component", "models"), models.RegistryOptions{Service: "aisa-backend"})
+		log.With("component", "models"), models.RegistryOptions{Service: backendService})
 	go registry.Run(ctx)
 
 	checks := []server.Check{
@@ -316,7 +319,7 @@ func newCeiling(cfg config.Config, cc *consul.Client, rdb *redis.Client, m *metr
 			Location: loc, StatePrefix: cfg.Consul.Prefix + "/state/providers/",
 			Limit: m.ProviderBudgetLimit, Spent: m.ProviderBudgetSpent, Label: "provider",
 		})
-	catalog := budgets.NewCatalog(cc, log, budgets.CatalogOptions{Service: "aisa-backend"})
+	catalog := budgets.NewCatalog(cc, log, budgets.CatalogOptions{Service: backendService})
 	return budgets.NewCeiling(catalog, monthly, log), set, monthly, catalog
 }
 
@@ -367,7 +370,7 @@ func runKubernetes(ctx context.Context, cfg config.Config, src kubeSources, m *m
 		Rotation: k.Rotation, Grace: k.Grace, OnIssue: obs.issued, OnPass: obs.secrets,
 	})
 	models := kube.NewModels(src.consul, dyn, log, kube.ModelsOptions{
-		Service:      "aisa-backend",
+		Service:      backendService,
 		Descriptions: consul.KVPrefix{Client: src.consul, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
 		Endpoint:     k.ProxyURL,
 		Install:      k.Namespace,

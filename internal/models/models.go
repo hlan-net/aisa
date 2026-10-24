@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -106,32 +107,11 @@ func NewIndex(pairs []consul.Pair, catalog map[string]bool) Index {
 	descs, invalid, _ := consul.ParseEntries(pairs, Parse)
 	// A model's name is one the catalog has, or one with a description.
 	isModel := func(name string) bool {
-		if catalog[name] {
-			return true
-		}
 		_, valid := descs[name]
 		_, bad := invalid[name]
-		return valid || bad
+		return catalog[name] || valid || bad
 	}
-	claims := map[string][]string{}
-	for model, d := range descs {
-		for _, a := range d.Aliases {
-			claims[a] = append(claims[a], model)
-		}
-	}
-	for a, models := range claims {
-		if isModel(a) {
-			for _, m := range models {
-				invalid[m] = fmt.Errorf("alias %q is the name of a model", a)
-			}
-		}
-		if len(models) > 1 {
-			sort.Strings(models)
-			for _, m := range models {
-				invalid[m] = fmt.Errorf("alias %q is claimed by more than one model: %v", a, models)
-			}
-		}
-	}
+	maps.Copy(invalid, collisions(descs, isModel))
 	aliases := map[string]string{}
 	for model, d := range descs {
 		if _, bad := invalid[model]; bad {
@@ -142,12 +122,35 @@ func NewIndex(pairs []consul.Pair, catalog map[string]bool) Index {
 			aliases[a] = model
 		}
 	}
-	names := make([]string, 0, len(invalid))
-	for name := range invalid {
-		names = append(names, name)
+	return Index{Descriptions: descs, Invalid: invalid, InvalidNames: slices.Sorted(maps.Keys(invalid)), Aliases: aliases}
+}
+
+// collisions returns the descriptions made invalid by their aliases: one that is a model's
+// name, or one that more than one description claims.
+func collisions(descs map[string]Description, isModel func(string) bool) map[string]error {
+	claims := map[string][]string{}
+	for model, d := range descs {
+		for _, a := range d.Aliases {
+			claims[a] = append(claims[a], model)
+		}
 	}
-	sort.Strings(names)
-	return Index{Descriptions: descs, Invalid: invalid, InvalidNames: names, Aliases: aliases}
+	out := map[string]error{}
+	for a, models := range claims {
+		var err error
+		switch {
+		case len(models) > 1:
+			sort.Strings(models)
+			err = fmt.Errorf("alias %q is claimed by more than one model: %v", a, models)
+		case isModel(a):
+			err = fmt.Errorf("alias %q is the name of a model", a)
+		default:
+			continue
+		}
+		for _, m := range models {
+			out[m] = err
+		}
+	}
+	return out
 }
 
 // Of returns a model's description: its own when it could be read, the default otherwise.

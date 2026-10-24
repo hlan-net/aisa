@@ -831,16 +831,7 @@ func TestModelNames(t *testing.T) {
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 
-			if rec.Code != tc.wantStatus {
-				t.Fatalf("status = %d, want %d; body %s", rec.Code, tc.wantStatus, rec.Body)
-			}
-			if got := rec.Header().Get(HeaderModel); got != tc.wantModel {
-				t.Errorf("X-Aisa-Model = %q, want %q", got, tc.wantModel)
-			}
-			checkDenial(t, rec, tc.wantCode)
-			if n := testutil.ToFloat64(m.Decisions.WithLabelValues("chat-ui", tc.wantResult)); n != 1 {
-				t.Errorf("aisa_decisions_total{chat-ui,%s} = %v, want 1", tc.wantResult, n)
-			}
+			checkAnswer(t, rec, m, tc.wantStatus, tc.wantModel, tc.wantCode, tc.wantResult)
 			if !slices.Equal(b.checked, tc.wantBudget) {
 				t.Errorf("budget checked %v, want %v", b.checked, tc.wantBudget)
 			}
@@ -871,5 +862,20 @@ func TestDowngradeToAnAlias(t *testing.T) {
 				t.Errorf("status = %d, X-Aisa-Model = %q, want 200 and qwen3; body %s", rec.Code, rec.Header().Get(HeaderModel), rec.Body)
 			}
 		})
+	}
+}
+
+// checkAnswer checks a decision's status, X-Aisa-Model, error code and its count under chat-ui.
+func checkAnswer(t *testing.T, rec *httptest.ResponseRecorder, m *metrics.Metrics, status int, model, code, result string) {
+	t.Helper()
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d; body %s", rec.Code, status, rec.Body)
+	}
+	if got := rec.Header().Get(HeaderModel); got != model {
+		t.Errorf("X-Aisa-Model = %q, want %q", got, model)
+	}
+	checkDenial(t, rec, code)
+	if n := testutil.ToFloat64(m.Decisions.WithLabelValues("chat-ui", result)); n != 1 {
+		t.Errorf("aisa_decisions_total{chat-ui,%s} = %v, want 1", result, n)
 	}
 }
