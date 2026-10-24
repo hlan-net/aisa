@@ -1,0 +1,1 @@
+../../consul-template-run.sh

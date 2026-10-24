@@ -197,6 +197,16 @@ ok "the proxy reported a promoted render to aisa's /v1/render ($promoted)"
 models=$(curl -fsS http://127.0.0.1:18090/metrics | awk '/^aisa_config_models /{print $2}')
 expect "aisa knows the models of the rendered config" 2 "$models"
 
+# The consul-template container as the kubelet starts it (#97, #98): the token watch runs, and
+# what guard.sh's timeout orphans to PID 1 is reaped. The loop of the guard has run by now.
+# shellcheck disable=SC2016 # expanded in the container
+procs=$("${K[@]}" exec "deploy/$RELEASE-apisix" -c consul-template -- sh -c \
+    'for p in /proc/[0-9]*; do [ "${p#/proc/}" = "$$" ] || cut -d" " -f2,3 "$p/stat"; done')
+grep -q '(consul-token-wa) [SR]' <<<"$procs" ||
+    fail "the token watch does not run in the consul-template container: $(tr '\n' ' ' <<<"$procs")"
+ok "the token watch runs in the consul-template container"
+expect "zombies in the consul-template container" 0 "$(grep -c ') Z$' <<<"$procs" || true)"
+
 echo "== requests through the proxy"
 port_forward "$RELEASE-apisix" 19080 80
 chat() {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # consul-template survives the rotation of its Consul token (#90): with the shipped consul block
-# (unlimited retries) and consul-token-watch.sh, it keeps rendering the catalog after the token
+# (unlimited retries) and consul-token-watch.sh, started by consul-template-run.sh, it keeps rendering the catalog after the token
 # it started with is replaced in the file and deleted in Consul, as the Vault Agent and Vault's
 # Consul secrets engine do. Before #90 it kept the deleted token, was answered 403 until its
 # retries ran out and exited with code 14.
@@ -57,7 +57,7 @@ template {
   destination = "/out/backends"
 }
 EOF
-cp "$SCRIPT_DIR/consul-token-watch.sh" "$WORK/etc/"
+cp "$SCRIPT_DIR/consul-template-run.sh" "$SCRIPT_DIR/consul-token-watch.sh" "$WORK/etc/"
 
 # write_token replaces the token file the way the Vault Agent does: a new file renamed over it.
 write_token() { printf %s "$1" >"$WORK/vault/consul-token.new" && mv "$WORK/vault/consul-token.new" "$WORK/vault/consul-token"; }
@@ -69,8 +69,7 @@ consul services register -name aisa-backend -id backend-0 -address 192.0.2.1 -po
 docker run -d --name "$NAME-ct" --network "$NAME" -e CONSUL_HTTP_ADDR="$NAME-consul:8500" \
     -e CONSUL_TOKEN_WATCH_INTERVAL=1 \
     -v "$WORK/etc":/etc/apisix/aisa:ro -v "$WORK/vault":/vault:ro -v "$WORK/out":/out \
-    --entrypoint sh "$CT_IMAGE" -c '/etc/apisix/aisa/consul-token-watch.sh /vault/consul-token $$ &
-        exec /bin/consul-template "$@"' consul-template \
+    --entrypoint /etc/apisix/aisa/consul-template-run.sh "$CT_IMAGE" --consul-token /vault/consul-token -- \
     -config=/etc/apisix/aisa/ct.hcl -consul-token-file=/vault/consul-token >/dev/null
 
 # wait_for <backend>: the rendered file names it within 30 s.
