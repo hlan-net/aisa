@@ -74,6 +74,7 @@ import (
 	"github.com/hlan-net/aisa/internal/kube"
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
+	"github.com/hlan-net/aisa/internal/models"
 	"github.com/hlan-net/aisa/internal/pricing"
 	"github.com/hlan-net/aisa/internal/quotas"
 	"github.com/hlan-net/aisa/internal/render"
@@ -161,10 +162,17 @@ func run(args []string) error {
 		pricing.Options{OnLoad: func(s pricing.LoadStats) { observePrices(m, s) }})
 	go prices.Run(ctx)
 
+	// The model names: which are models, and which are aliases of one (#89).
+	registry := models.NewRegistry(cc,
+		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
+		log.With("component", "models"), models.RegistryOptions{Service: "aisa-backend"})
+	go registry.Run(ctx)
+
 	checks := []server.Check{
 		{Name: "consumers", Probe: store.Ready},
 		{Name: "consumer_declarations", Probe: declarations.Ready},
 		{Name: "model_prices", Probe: prices.Ready},
+		{Name: "models", Probe: registry.Ready},
 	}
 	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
 	var (
@@ -224,7 +232,7 @@ func run(args []string) error {
 	srv := server.New(log, m.Handler(), cfg.ShutdownTimeout, checks...)
 	routes(srv,
 		decide.New(store, quota, m, log.With("component", "decide"),
-			decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile, Budget: budget, Provider: provider}),
+			decide.Options{DefaultQuotaProfile: cfg.DefaultQuotaProfile, Budget: budget, Provider: provider, Models: registry}),
 		ledger.New(m, ledger.NewDedup(cfg.Ledger.DedupCapacity, cfg.Ledger.DedupTTL), charger, log.With("component", "ledger"),
 			ledger.Options{EstimateDefaultTokens: cfg.Ledger.EstimateDefaultTokens, Pricer: prices, Budget: budgetCharger, Provider: providerCharger}),
 		render.New(m, log.With("component", "render")),

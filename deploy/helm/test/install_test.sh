@@ -133,8 +133,9 @@ vault kv put secret/aisa/consumers/chat-ui key_sha256="$(sha256 test-key-chat-ui
 # A consumer whose key aisa issues and writes into a Secret in its application's namespace.
 kubectl create namespace "$APP_NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 consul kv put aisa/consumers/batch-jobs "{\"quota_profile\": \"interactive\", \"namespace\": \"$APP_NS\", \"secret\": \"aisa\"}" >/dev/null
-# A description of one model, for its Model object.
-consul kv put aisa/models/qwen3 '{"contextLength": 32768, "capabilities": ["tools"]}' >/dev/null
+# A description of one model, for its Model object, with an alias that an application coming
+# from Ollama may ask for (#89).
+consul kv put aisa/models/qwen3 '{"contextLength": 32768, "capabilities": ["tools"], "aliases": ["qwen3:8b"]}' >/dev/null
 vault kv put secret/aisa/providers/cloud api_key=test-provider-key >/dev/null
 vault secrets enable consul >/dev/null
 vault write consul/config/access address=consul:8500 token=test-root >/dev/null
@@ -224,6 +225,8 @@ done
 expect "a known key, a local model" 200 "$status"
 expect "a known key, a paid model (its key rendered from Vault)" 200 "$(chat test-key-chat-ui cloud-large)"
 expect "an unknown key" 401 "$(chat test-key-unknown qwen3)"
+expect "a model's alias, served as the model (#89)" 200 "$(chat test-key-chat-ui qwen3:8b)"
+expect "a name that is neither a model nor an alias" 404 "$(chat test-key-chat-ui no-such-model)"
 
 "${K[@]}" logs deploy/mock-cloud | grep -q '"authorization_present":true' ||
     fail "the paid backend got the provider key"
@@ -242,6 +245,20 @@ for _ in $(seq 1 15); do
 done
 [[ "$tokens" != 0 ]] || fail "usage events reached aisa"
 ok "usage events reached aisa ($tokens tokens for chat-ui)"
+# The alias's request is counted under its model: no series names the alias as the model.
+for _ in $(seq 1 15); do
+    metrics=$(curl -fsS http://127.0.0.1:18090/metrics)
+    qwen3=$(awk '/^aisa_requests_total\{.*consumer="chat-ui".*model="qwen3",status="200"/{s += $2} END {print s + 0}' <<<"$metrics")
+    (( qwen3 >= 2 )) && break
+    sleep 1
+done
+(( qwen3 >= 2 )) || fail "the alias's request is counted under its model: $qwen3 requests of qwen3"
+if grep -q 'model="qwen3:8b"' <<<"$metrics"; then
+    fail "no aisa_* series names the alias as the model"
+fi
+ok "the alias's request is counted under its model ($qwen3 requests of qwen3)"
+unknown=$(awk '/^aisa_decisions_total\{.*result="unknown_model"/{s += $2} END {print s + 0}' <<<"$metrics")
+expect "the unknown name is counted as unknown_model" 1 "$unknown"
 
 # aisa times its own decisions (#71): every request above was decided, and a decision takes a
 # small part of a request, well under a second, even on a runner.

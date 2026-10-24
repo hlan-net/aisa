@@ -78,6 +78,7 @@ The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front
 | Consul token rotation | consul-template is reloaded with a rotated Consul token and never exits on one ([#90](https://github.com/hlan-net/aisa/issues/90)) | Done ([#93](https://github.com/hlan-net/aisa/pull/93)) |
 | Backend path prefix | A backend whose OpenAI-compatible API is not at `/v1`, such as Google's ([#91](https://github.com/hlan-net/aisa/issues/91)) | Done ([#94](https://github.com/hlan-net/aisa/pull/94)) |
 | Minted provider credentials | A provider key that Vault issues, such as Vertex AI's OAuth2 token from the GCP secrets engine ([#92](https://github.com/hlan-net/aisa/issues/92)) | Done ([#95](https://github.com/hlan-net/aisa/pull/95)); a consul-template change that reads a GCP token's expiry is prepared for upstream |
+| Model aliases | Other names of a model, such as Ollama tags, resolved in the decision; an unknown name is 404 `model_not_found` ([#89](https://github.com/hlan-net/aisa/issues/89)) | In review |
 
 ## Direction: decided, not scheduled
 

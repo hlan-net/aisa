@@ -32,13 +32,14 @@ POST /v1/decide            (GET is accepted too, for gateways that cannot send a
        (or the JSON request body, when the header is absent)
        X-Forwarded-Uri / -Method / -Host   the original request, where the gateway sends them
   out: 200 + headers   X-Aisa-Consumer: batch-jobs
-                       X-Aisa-Model: qwen3              (possibly rewritten, e.g. budget downgrade)
+                       X-Aisa-Model: qwen3              (possibly rewritten: an alias resolved, or a budget downgrade)
                        X-Aisa-Budget-Remaining: 1200000  (tokens; only when the consumer has a budget)
                          The unit was a currency amount until 2026-10. No release of aisa has sent
                          the header, only the dev stub, so v1 is corrected instead of versioned.
        400 no model in the header or the body, or a model name longer than 256 bytes
        401 unknown or invalid credential
        403 the consumer has no quota profile and aisa has no default (no_quota)
+       404 the model is neither a model nor an alias of one (model_not_found)
        413 no model in the header, and the body is larger than 16 MiB
        429 quota exhausted (rate_limit_exceeded), with Retry-After in seconds; or the monthly
            budget exhausted on a priced model (budget_exhausted, type insufficient_quota), or
@@ -61,8 +62,8 @@ Spike S8 showed that these must hold for the decision to be safe and for downgra
 1. **Strip client-supplied `X-Aisa-*` headers** before the decision. Some forward-auth implementations clear them only on a successful answer, so a client could otherwise choose the model itself when aisa is unreachable and the proxy fails open.
 2. **Set `X-Aisa-Requested-Model` from the body**, overwriting any client value, or forward the body.
 3. **Route by `X-Aisa-Model` and forward the request with that model**, not the one the client asked for. A downgrade changes both the backend and the model name in the forwarded body.
-4. **Pass every answer aisa returns to the client unchanged**: 400, 401, 403, 413, 429 and 503, with `Retry-After` when aisa sets it. A 503 from aisa is a decision (fail closed: it cannot verify credentials or quotas), not an outage, and must never lead to fail-open routing. aisa is *unreachable* only when the gateway gets no answer from it: the connection fails or the request times out. Then the gateway answers 503 itself when the requested model has no backend with `fail_policy = "open"`.
-5. **When aisa is unreachable, route by `X-Aisa-Requested-Model`** (rule 2), and only to the model's backends with `fail_policy = "open"`. Never route by `X-Aisa-Model` then: no decision set it. There is no downgrade, and any credential is accepted, including an unknown one. The usage events of these requests have an empty `consumer`; aisa counts them under the consumer `unknown` and charges no quota or budget.
+4. **Pass every answer aisa returns to the client unchanged**: 400, 401, 403, 404, 413, 429 and 503, with `Retry-After` when aisa sets it. A 503 from aisa is a decision (fail closed: it cannot verify credentials or quotas), not an outage, and must never lead to fail-open routing. aisa is *unreachable* only when the gateway gets no answer from it: the connection fails or the request times out. Then the gateway answers 503 itself when the requested model has no backend with `fail_policy = "open"`.
+5. **When aisa is unreachable, route by `X-Aisa-Requested-Model`** (rule 2), and only to the model's backends with `fail_policy = "open"`. Never route by `X-Aisa-Model` then: no decision set it. There is no downgrade and no alias is resolved (an alias is a name without a route, [`CONSUL.md`](./CONSUL.md#model-descriptions-consul-kv)), and any credential is accepted, including an unknown one. The usage events of these requests have an empty `consumer`; aisa counts them under the consumer `unknown` and charges no quota or budget.
 6. **Copy `X-Aisa-Budget-Remaining` from the decision to the client's response**, and only from the decision: the client's own `X-Aisa-*` headers are removed by rule 1, so the header a client sees is what aisa said. When aisa sent none, the consumer has no budget, and the response carries none. The header never reaches a provider ([account isolation](#account-isolation)).
 
 ## 2. Usage events (after the request)

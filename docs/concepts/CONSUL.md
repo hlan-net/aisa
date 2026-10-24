@@ -137,10 +137,14 @@ A consumer is declared here by the holder, and Vault holds only the hashes of it
 ## Model descriptions: Consul KV
 
 ```
-aisa/models/<model>   {"features": ["TextGeneration"], "contextLength": 32768, "capabilities": ["tools"]}
+aisa/models/<model>   {"features": ["TextGeneration"], "contextLength": 32768, "capabilities": ["tools"], "aliases": ["llama3.2:3b"]}
 ```
 
-What a model can do, for its `Model` object ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)); `<model>` is the exact name in the backends' `models`. Every field is optional: `features` from `TextGeneration`, `TextEmbedding`, `Reranking` and `SpeechToText` (`TextGeneration` when absent), `contextLength` in tokens, `capabilities` from `tools`, `vision` and `json_mode`. A model without a description, or with one that cannot be read, gets `features: [TextGeneration]`; the latter is logged and counted in `aisa_model_descriptions_invalid`.
+What a model can do, for its `Model` object ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#model)); `<model>` is the exact name in the backends' `models`. Every field is optional: `features` from `TextGeneration`, `TextEmbedding`, `Reranking` and `SpeechToText` (`TextGeneration` when absent), `contextLength` in tokens, `capabilities` from `tools`, `vision` and `json_mode`, and `aliases`. A model without a description, or with one that cannot be read, gets `features: [TextGeneration]`; the latter is logged and counted in `aisa_model_descriptions_invalid`.
+
+`aliases` are other names the model is asked for under ([#89](https://github.com/hlan-net/aisa/issues/89)), typically the tags under which Ollama serves the same weights: `llama3.2:latest` and `llama3.2:3b` for a model offered as `llama3.2`. Applications that come from Ollama carry such names in their settings. The decision resolves an alias to its model and names the model in `X-Aisa-Model`, so after the decision everything speaks the model's name: the backend, usage events, quotas, budgets, prices, the `Model` object and `GET /v1/models`; only the usage event's `requested_model` keeps the alias. Which tag is the same weights is the holder's knowledge, so aisa never strips a tag by itself: `llama3.2:1b` is not `llama3.2`. An alias is 1 to 256 bytes without surrounding white space. A description whose alias is a model's name (in the catalog, or with a description of its own) or that claims an alias another description claims too is invalid: logged, counted in `aisa_model_descriptions_invalid`, and none of its aliases is resolved. When aisa is unreachable and the proxy fails open, an alias is not resolved: it gets the proxy's 503 as any name without a route.
+
+A name that is neither a model nor an alias is answered by the decision with 404 `model_not_found`. A model is a name in a backend's `models`, passing or not, or one with a description here: a model the holder described before any backend serves it is a model, and gets the proxy's 503 `no_backend` until one does. aisa reads the catalog every 30 s for this and follows `aisa/models/` as it changes; until it has read both once, it lets every name through, and `/readyz` reports `models` as not ready.
 
 ## Prices and budgets: Consul KV
 
@@ -167,7 +171,7 @@ Terraform-managed Consul policies. The tokens come from Vault's Consul secrets e
 
 | Role | Rules |
 |---|---|
-| `aisa` | `key_prefix "aisa/" { policy = "write" }`, `service "aisa-backend" { policy = "read" }`, `node_prefix "" { policy = "read" }`: aisa reads the backends' health for the `Model` objects, and Consul leaves out the instances on nodes the token may not read |
+| `aisa` | `key_prefix "aisa/" { policy = "write" }`, `service "aisa-backend" { policy = "read" }`, `node_prefix "" { policy = "read" }`: aisa reads the backends' health for the `Model` objects, the provider budgets and the model names of the decision, and Consul leaves out the instances on nodes the token may not read |
 | `aisa-render` | `service "aisa-backend" { policy = "read" }`, `node_prefix "" { policy = "read" }` |
 
 **How often the tokens rotate is the holder's choice.** A token from `consul/creds/<role>` lives as long as its lease: the role's `ttl` and `max_ttl`, both bounded by the `max_lease_ttl` of the `consul/` mount. The Vault Agent renews the lease until its `max_ttl`, then reads a new token and writes it to the file; Vault deletes the old token in Consul when the old lease ends. With a mount bounded to 1 h, the proxy's token was replaced about every 44 minutes. The Kubernetes auth role's token does not set this: a periodic login token changed nothing ([#90](https://github.com/hlan-net/aisa/issues/90)).

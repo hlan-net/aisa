@@ -23,6 +23,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/hlan-net/aisa/internal/consul"
+	"github.com/hlan-net/aisa/internal/models"
 )
 
 // ModelGVR is the resource of the Model objects (KUBERNETES_OBJECTS.md, Model). The CRD is in
@@ -35,12 +36,6 @@ const modelKind = "Model"
 const (
 	labelFeature    = "feature.aisa.hlan.net/"
 	labelCapability = "capability.aisa.hlan.net/"
-)
-
-// The vocabularies of a model's description: KubeAI's features, and capabilities.
-var (
-	knownFeatures     = []string{"TextGeneration", "TextEmbedding", "Reranking", "SpeechToText"}
-	knownCapabilities = []string{"tools", "vision", "json_mode"}
 )
 
 // timeoutMeta is what the proxy's template takes as a backend's timeout; a backend with another
@@ -114,18 +109,11 @@ func NewModels(catalog HealthReader, dyn dynamic.Interface, log *slog.Logger, op
 	return &Models{catalog: catalog, dyn: dyn, opts: opts, log: log}
 }
 
-// description is a model's description in Consul KV.
-type description struct {
-	Features      []string `json:"features"`
-	ContextLength int64    `json:"contextLength"`
-	Capabilities  []string `json:"capabilities"`
-}
-
 // offered is a model on offer, as its object is to say.
 type offered struct {
 	name      string
 	available bool
-	desc      description
+	desc      models.Description
 }
 
 // Reconcile makes one pass: it reads the catalog and the descriptions, then creates, updates and
@@ -141,12 +129,12 @@ func (m *Models) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("read the model descriptions: %w", err)
 	}
 	stats := ModelStats{}
-	descs := m.descriptions(pairs, &stats)
-	models := offeredModels(instances, descs)
-	if m.holdEmpty(len(models)) {
+	ix := m.descriptions(pairs, instances, &stats)
+	offer := offeredModels(instances, ix)
+	if m.holdEmpty(len(offer)) {
 		return nil
 	}
-	keep, errs := m.applyAll(ctx, models, &stats)
+	keep, errs := m.applyAll(ctx, offer, &stats)
 
 	if err := m.removeStale(ctx, keep); err != nil {
 		errs = append(errs, err)
@@ -176,29 +164,21 @@ func (m *Models) holdEmpty(offered int) bool {
 	return false
 }
 
-// descriptions reads the models' descriptions; one that cannot be read is logged and counted,
-// and its model gets the default one.
-func (m *Models) descriptions(pairs []consul.Pair, stats *ModelStats) map[string]description {
-	descs := map[string]description{}
-	for _, p := range pairs {
-		if p.Key == "" || strings.HasSuffix(p.Key, "/") {
-			continue
-		}
-		d, err := parseDescription(p.Value)
-		if err != nil {
-			m.log.Error("invalid model description; the model gets the default one", "model", p.Key, "error", err)
-			stats.InvalidDescriptions++
-			continue
-		}
-		descs[p.Key] = d
+// descriptions reads the models' descriptions against the catalog; one that cannot be read, or
+// whose aliases collide (#89), is logged and counted, and its model gets the default one.
+func (m *Models) descriptions(pairs []consul.Pair, instances []consul.Instance, stats *ModelStats) models.Index {
+	ix := models.NewIndex(pairs, models.Names(instances))
+	for _, name := range ix.InvalidNames {
+		m.log.Error("invalid model description; the model gets the default one", "model", name, "error", ix.Invalid[name])
 	}
-	return descs
+	stats.InvalidDescriptions = len(ix.Invalid)
+	return ix
 }
 
 // offeredModels returns the models of the backends the proxy renders, each available when one
 // of its backends passes its checks.
-func offeredModels(instances []consul.Instance, descs map[string]description) map[string]*offered {
-	models := map[string]*offered{}
+func offeredModels(instances []consul.Instance, ix models.Index) map[string]*offered {
+	offer := map[string]*offered{}
 	for _, in := range instances {
 		if !usable(in.Meta) {
 			continue
@@ -208,23 +188,15 @@ func offeredModels(instances []consul.Instance, descs map[string]description) ma
 			if name == "" {
 				continue
 			}
-			o, ok := models[name]
+			o, ok := offer[name]
 			if !ok {
-				o = newOffered(name, descs)
-				models[name] = o
+				o = &offered{name: name, desc: ix.Of(name)}
+				offer[name] = o
 			}
 			o.available = o.available || in.Passing
 		}
 	}
-	return models
-}
-
-// newOffered is a model with its description, or the default one.
-func newOffered(name string, descs map[string]description) *offered {
-	if d, ok := descs[name]; ok {
-		return &offered{name: name, desc: d}
-	}
-	return &offered{name: name, desc: description{Features: []string{"TextGeneration"}}}
+	return offer
 }
 
 // applyAll creates or updates the object of each model, except for names that derive to one
@@ -300,33 +272,6 @@ func validPath(p string) bool {
 		return true
 	}
 	return pathMeta.MatchString(p) && !hasDotSegment(p)
-}
-
-func parseDescription(value []byte) (description, error) {
-	var d description
-	// json.Unmarshal takes null as well, as an empty description.
-	if trimmed := bytes.TrimSpace(value); len(trimmed) == 0 || trimmed[0] != '{' || json.Unmarshal(value, &d) != nil {
-		return description{}, errors.New(`want a JSON object such as {"features": ["TextGeneration"], "contextLength": 32768, "capabilities": ["tools"]}`)
-	}
-	if len(d.Features) == 0 {
-		d.Features = []string{"TextGeneration"}
-	}
-	for _, f := range d.Features {
-		if !slices.Contains(knownFeatures, f) {
-			return description{}, fmt.Errorf("unknown feature %q, want one of %v", f, knownFeatures)
-		}
-	}
-	for _, c := range d.Capabilities {
-		if !slices.Contains(knownCapabilities, c) {
-			return description{}, fmt.Errorf("unknown capability %q, want one of %v", c, knownCapabilities)
-		}
-	}
-	if d.ContextLength < 0 {
-		return description{}, errors.New("contextLength may not be negative")
-	}
-	d.Features = slices.Compact(slices.Sorted(slices.Values(d.Features)))
-	d.Capabilities = slices.Compact(slices.Sorted(slices.Values(d.Capabilities)))
-	return d, nil
 }
 
 // desired returns the object's spec and the labels aisa sets on it.

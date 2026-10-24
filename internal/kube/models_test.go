@@ -320,30 +320,6 @@ func TestNormalizeKeepsIntegersExact(t *testing.T) {
 	}
 }
 
-func TestParseDescription(t *testing.T) {
-	for name, tc := range map[string]struct {
-		value string
-		ok    bool
-	}{
-		"full":             {`{"features": ["TextEmbedding"], "contextLength": 8192, "capabilities": ["vision"]}`, true},
-		"empty":            {`{}`, true},
-		"null":             {`null`, false},
-		"not json":         {`tools`, false},
-		"unknown feature":  {`{"features": ["Dancing"]}`, false},
-		"negative context": {`{"contextLength": -1}`, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			d, err := parseDescription([]byte(tc.value))
-			if (err == nil) != tc.ok {
-				t.Fatalf("err = %v, want ok %v", err, tc.ok)
-			}
-			if tc.ok && len(d.Features) == 0 {
-				t.Error("no features: want TextGeneration by default")
-			}
-		})
-	}
-}
-
 // The backends the proxy's template renders (#91): a path, when there is one, is a prefix.
 func TestUsablePath(t *testing.T) {
 	for path, want := range map[string]bool{
