@@ -447,3 +447,40 @@ func TestObserveRemovesGoneBudgets(t *testing.T) {
 		t.Errorf("chat-ui's limit = %v", n)
 	}
 }
+
+func TestParseAndValue(t *testing.T) {
+	for _, bud := range []Budget{
+		{MonthlyTokens: 20000000, SoftRatio: 0.9, OnExhausted: Reject},
+		{MonthlyTokens: 0, SoftRatio: DefaultSoftRatio, OnExhausted: Reject},
+		{MonthlyTokens: 5000000, SoftRatio: 1, OnExhausted: Downgrade, DowngradeTo: "qwen3"},
+	} {
+		got, err := Parse(bud.Value())
+		if err != nil || got != bud {
+			t.Errorf("Parse(%s) = %+v, %v; want %+v", bud.Value(), got, err, bud)
+		}
+	}
+	// Parse is the loader's: the same value is refused with the same message.
+	value := []byte(`{"monthly_tokens": 1, "on_exhausted": "downgrade"}`)
+	_, want := parseBudget(value)
+	if _, err := Parse(value); err == nil || err.Error() != want.Error() {
+		t.Errorf("Parse = %v, want %v", err, want)
+	}
+}
+
+func TestUsage(t *testing.T) {
+	ctx := context.Background()
+	mo, _, _ := newMonthly(t, &fakeKV{})
+	if period, used := mo.Usage(ctx, "chat-ui"); period != "2026-10" || used != 0 {
+		t.Errorf("fresh: %s %d", period, used)
+	}
+	if err := mo.Charge(ctx, "chat-ui", 300, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, used := mo.Usage(ctx, "chat-ui"); used != 300 {
+		t.Errorf("used = %d, want 300", used)
+	}
+	// A consumer without a budget still has its month counted, as Charge counts it.
+	if _, used := mo.Usage(ctx, "nobody"); used != 0 {
+		t.Errorf("nobody used = %d", used)
+	}
+}

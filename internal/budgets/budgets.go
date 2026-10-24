@@ -158,6 +158,23 @@ func (b *Budgets) apply(pairs []consul.Pair) {
 	}
 }
 
+// Parse reads a budget's JSON value as the loader does, so that a budget written elsewhere,
+// such as by the admin interface, is refused with the same message as a load would log.
+func Parse(value []byte) (Budget, error) { return parseBudget(value) }
+
+// Value is the budget's JSON value in Consul KV, with every field named, which Parse reads
+// back as the same budget.
+func (b Budget) Value() []byte {
+	v := struct {
+		MonthlyTokens int64   `json:"monthly_tokens"`
+		SoftRatio     float64 `json:"soft_ratio"`
+		OnExhausted   string  `json:"on_exhausted"`
+		DowngradeTo   string  `json:"downgrade_to,omitempty"`
+	}{b.MonthlyTokens, b.SoftRatio, b.OnExhausted, b.DowngradeTo}
+	out, _ := json.Marshal(v)
+	return out
+}
+
 // parseBudget reads a budget's JSON value, such as {"monthly_tokens": 5000000, "soft_ratio":
 // 0.8, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}. monthly_tokens must be there;
 // the others have defaults, and downgrade_to is required with on_exhausted "downgrade". Fields

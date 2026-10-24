@@ -214,6 +214,13 @@ func (mo *Monthly) used(ctx context.Context, consumer, period string) int64 {
 	return max(total, mo.floor(consumer, period))
 }
 
+// Usage returns the current month and the tokens a consumer has used in it, as Check counts
+// them, whether or not the consumer has a budget; for the admin interface.
+func (mo *Monthly) Usage(ctx context.Context, consumer string) (string, int64) {
+	period, _ := mo.Period(mo.opts.Now())
+	return period, mo.used(ctx, consumer, period)
+}
+
 // counterBackoff is how long after a failed read of the counter the persisted total is used
 // without asking again.
 const counterBackoff = time.Second

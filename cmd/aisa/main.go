@@ -174,6 +174,7 @@ func run(args []string) error {
 		budgetCharger   ledger.Charger
 		provider        decide.ProviderChecker
 		providerCharger ledger.ProviderCharger
+		budgetUsage     admin.BudgetUsage
 	)
 	if cfg.QuotasEnabled() {
 		q, profiles, rdb, closeQuotas := newQuotas(cfg, cc, declarations, m, log.With("component", "quotas"))
@@ -190,7 +191,7 @@ func run(args []string) error {
 		monthly, budgetSet := newBudgets(cfg, cc, rdb, prices, m, log.With("component", "budgets"))
 		go budgetSet.Run(ctx)
 		go monthly.Run(ctx)
-		budget, budgetCharger = monthly, monthly
+		budget, budgetCharger, budgetUsage = monthly, monthly, monthly
 		checks = append(checks, server.Check{Name: "budgets", Probe: budgetSet.Ready})
 
 		// The ceiling above the consumers (#33): a budget per provider key, applied through
@@ -208,7 +209,7 @@ func run(args []string) error {
 	var adminHandler http.Handler
 	if cfg.Admin.Enabled {
 		adminHandler = admin.New(cc, vc, m, log.With("component", "admin"),
-			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix},
+			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix, Budgets: budgetUsage},
 			checks...)
 	}
 

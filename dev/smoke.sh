@@ -325,6 +325,33 @@ curl -fsS -X POST -H "$JSON" \
 expect "admin: created quota profile listed" "$admin_quota" \
     "$(curl -fsS "$AISA/admin/api/quotas" | jq -r ".[] | select(.name == \"$admin_quota\") | .name")"
 
+# A budget set through the admin API applies to the next decisions: a month of 0 tokens sends
+# the consumer's priced requests to the downgrade model, and without the budget they pass again.
+admin_budget() { # admin_budget <method> [body]: the status of the call on the consumer's budget
+    local args=(-X "$1" -H "$JSON")
+    if [[ $# -gt 1 ]]; then args+=(-d "$2"); fi
+    curl -sS -o /dev/null -w "$HTTP_CODE" "${args[@]}" "$AISA/admin/api/budgets/$admin_consumer"
+}
+expect "admin: a budget aisa would refuse is not saved" "400" \
+    "$(admin_budget PUT '{"monthly_tokens": 0, "on_exhausted": "downgrade"}')"
+expect "admin: budget set" "200" \
+    "$(admin_budget PUT '{"monthly_tokens": 0, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}')"
+expect "admin: the budget is listed with the month's use" "0 $period" \
+    "$(curl -fsS "$AISA/admin/api/budgets" | jq -r ".[] | select(.consumer == \"$admin_consumer\") | \"\(.monthly_tokens) \(.usage.period)\"")"
+for _ in $(seq 1 30); do
+    [[ "$(decide "$rotated_key" '{"model":"cloud-large"}')" == "200 $admin_consumer qwen3" ]] && break
+    sleep 1
+done
+expect "admin: the budget set through the API applies to the next decision" "200 $admin_consumer qwen3" \
+    "$(decide "$rotated_key" '{"model":"cloud-large"}')"
+expect "admin: budget removed" "200" "$(admin_budget DELETE)"
+for _ in $(seq 1 30); do
+    [[ "$(decide "$rotated_key" '{"model":"cloud-large"}')" == "200 $admin_consumer cloud-large" ]] && break
+    sleep 1
+done
+expect "admin: without the budget the priced model is served again" "200 $admin_consumer cloud-large" \
+    "$(decide "$rotated_key" '{"model":"cloud-large"}')"
+
 curl -fsS -X DELETE "$AISA/admin/api/consumers/$admin_consumer" >/dev/null
 expect "admin: deleted consumer no longer listed" "" \
     "$(curl -fsS "$AISA/admin/api/consumers" | jq -r ".[] | select(.name == \"$admin_consumer\") | .name")"
