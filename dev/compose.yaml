@@ -29,7 +29,7 @@ services:
       retries: 30
 
   consul:
-    image: hashicorp/consul:2.0.4
+    image: hashicorp/consul:2.1.0
     command: ["agent", "-dev", "-client=0.0.0.0", "-log-level=warn"]
     ports: ["127.0.0.1:8500:8500"]
     healthcheck:
@@ -60,7 +60,7 @@ services:
       retries: 60
 
   seed-consul:
-    image: hashicorp/consul:2.0.4
+    image: hashicorp/consul:2.1.0
     entrypoint: ["/seed/consul.sh"]
     volumes: ["./seed:/seed:ro"]
     depends_on:
