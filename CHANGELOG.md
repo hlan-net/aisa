@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-31
+
+Models under their other names, such as Ollama's tags, with a 404 `model_not_found` for a name aisa does not know; the consumers' monthly budgets in the admin interface; and the proxy's consul-template container fixed for Kubernetes: its Consul token watch now runs, and it no longer fills with zombies. The aliases are an addition to contract 1, in `/v1/`; a catalog without them works as before.
+
 ### Added
 - **Model aliases** ([#89](https://github.com/hlan-net/aisa/issues/89)): a model's description in Consul KV, `aisa/models/<model>`, takes `aliases`, other names it is asked for under, such as the Ollama tags `llama3.2:3b` and `llama3.2:latest` of a model offered as `llama3.2`. The decision resolves an alias to its model and names the model in `X-Aisa-Model`, so an application that comes from Ollama with tagged names in its settings works once the holder adds them, and the alias is one model to usage, quotas, budgets, prices, the `Model` objects and `GET /v1/models`; the proxy template does not change. A budget's `downgrade_to` may name an alias too. A description whose alias is a model's name, or that claims an alias another description claims, is invalid, logged and counted in `aisa_model_descriptions_invalid`. aisa reads the catalog every 30 s and follows `aisa/models/` for the names; `/readyz` checks `models`. When aisa is unreachable and the proxy fails open, aliases are not resolved. An addition to contract 1, in `/v1/`.
 - **Budgets in the admin interface** ([#86](https://github.com/hlan-net/aisa/issues/86)): `GET /admin/api/budgets` lists the consumers' monthly budgets, and `GET`, `PUT` and `DELETE /admin/api/budgets/{consumer}` read, set and remove one in Consul KV (`aisa/budgets/<consumer>`), so a holder no longer writes them in Consul directly. A budget is validated as aisa validates it when it reads the budgets, and refused with the same message, so a budget that would deny the consumer with 503 cannot be saved; only a declared consumer gets one. Each budget comes with the month's use as the decision counts it (`used`, `remaining`, `soft`, `exhausted`) and its soft limit in tokens, and a stored budget that cannot be read is shown as invalid with the reason. In `/admin`, the consumers table has a monthly budget column and a Budget button that edits or removes it.
@@ -133,7 +137,8 @@ The first release: the design, the answered spikes, the dev stack and the start 
 - **Decision API** (unstable `/v1`): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
 - **CI actions**: `actions/setup-go` v6 → v7 and `golangci/golangci-lint-action` v8 → v9 (golangci-lint pinned to v2.14). The other actions were checked against their published tags and are current. Dependabot also watches the dev stack's Dockerfile and Compose images.
 
-[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/hlan-net/aisa/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/hlan-net/aisa/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/hlan-net/aisa/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/hlan-net/aisa/compare/v0.2.0...v0.2.1
