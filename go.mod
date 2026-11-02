@@ -11,7 +11,7 @@ require (
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/yuin/goldmark v1.8.6
 	k8s.io/api v0.37.1
-	k8s.io/apimachinery v0.37.1
+	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.1
 	k8s.io/klog/v2 v2.140.0
 )
