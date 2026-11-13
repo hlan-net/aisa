@@ -142,11 +142,13 @@ func newMonthly(t *testing.T, kv *fakeKV) (*Monthly, *miniredis.Miniredis, *metr
 	if err != nil {
 		t.Fatal(err)
 	}
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, loc)
+	mr.SetTime(now) // for the expiry of the month counters
 	m := metrics.New("test")
 	mo := NewMonthly(b, NewMonths(rdb, "aisa:"), kv, paidModels{"cloud-large": true}, m, discard, MonthlyOptions{
 		Location:    loc,
 		StatePrefix: "aisa/state/",
-		Now:         func() time.Time { return time.Date(2026, 10, 21, 12, 0, 0, 0, loc) },
+		Now:         func() time.Time { return now },
 	})
 	return mo, mr, m
 }

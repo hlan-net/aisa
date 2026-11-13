@@ -129,11 +129,13 @@ func newCeiling(t *testing.T) (*Ceiling, *Monthly, *metrics.Metrics) {
 		{Key: "anthropic", Value: []byte(`{"monthly_tokens": 50, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}`)},
 		{Key: "broken", Value: []byte(`{"monthly_tokens": -1}`)},
 	})
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	mr.SetTime(now) // for the expiry of the month counters
 	m := metrics.New("test")
 	mo := NewMonthly(b, NewMonths(rdb, "aisa:provider-"), &fakeKV{}, Always{}, m, discard, MonthlyOptions{
 		StatePrefix: "aisa/state/providers/",
 		Limit:       m.ProviderBudgetLimit, Spent: m.ProviderBudgetSpent,
-		Now: func() time.Time { return time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC) },
+		Now: func() time.Time { return now },
 	})
 	c := NewCatalog(&fakeHealth{instances: append(slices.Clone(devBackends), consul.Instance{
 		ID: "cloud-d", Address: "10.0.0.8", Port: 443, Meta: map[string]string{"models": "odd", "key": "broken"},
