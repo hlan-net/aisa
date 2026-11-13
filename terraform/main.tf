@@ -240,6 +240,13 @@ resource "consul_node" "backend" {
 
   name    = each.key
   address = each.value
+
+  lifecycle {
+    precondition {
+      condition     = length(distinct([for k, b in var.backends : b.address if b.create_node && b.node_name == each.key])) == 1
+      error_message = "Backends sharing a node_name with create_node = true must have the same address."
+    }
+  }
 }
 
 resource "consul_service" "backend" {
@@ -283,8 +290,8 @@ resource "consul_service" "backend" {
 
   lifecycle {
     precondition {
-      condition     = length(distinct([for k, b in var.backends : "${b.node_name}:${coalesce(b.service_id, k)}"])) == length(var.backends)
-      error_message = "Resolved backend service_id values must be distinct per node."
+      condition     = length(distinct([for k, b in var.backends : coalesce(b.service_id, k)])) == length(var.backends)
+      error_message = "Resolved backend service_id values must be unique across the catalog."
     }
   }
 }
