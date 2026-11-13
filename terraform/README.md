@@ -3,7 +3,7 @@
 Configures Vault and Consul for [`aisa`](../docs/concepts/ARCHITECTURE.md) and its proxy, as specified in [`VAULT.md`](../docs/concepts/VAULT.md) and [`CONSUL.md`](../docs/concepts/CONSUL.md):
 
 - **Vault policies** (`aisa` and `aisa-render`) for consumer key hashes (`<kv_mount>/data/<kv_prefix>/consumers/*`), provider credentials (`<kv_mount>/data/<kv_prefix>/providers/*`), Vault-issued provider credentials (`extra_render_read_paths`), and Consul ACL tokens (`<consul_mount>/creds/*`).
-- **Vault Kubernetes auth roles** (`aisa` and `aisa-render`) bound to the service accounts of aisa and its proxy in the release namespace, with `audience = "vault"` by default.
+- **Vault Kubernetes auth roles** (`aisa` and `aisa-render`) bound to the service accounts of aisa and its proxy in the release namespace, with `audience = "vault"` by default. When installing the Helm chart with this default, set `apisix.vaultAgent.auth.audience=vault` alongside `vault.auth.audience=vault` (the proxy chart defaults `vaultAgent.auth.audience` to empty).
 - **Consul ACL policies** (`aisa` and `aisa-render`) and matching **Vault Consul secrets engine roles** (`enable_consul_acls = true` by default).
 - **Consul KV entries** under `<consul_kv_prefix>/`: quota profiles (`quotas/`), consumer declarations (`consumers/`), model descriptions and aliases (`models/`), model prices (`pricing/`), consumer monthly budgets (`budgets/`), and provider-account monthly budgets (`budgets/providers/`).
 - **Consul catalog registrations** for inference backends (`service = "aisa-backend"`), with `status = "passing"` on catalog health checks by default ([#69](https://github.com/hlan-net/aisa/issues/69)).

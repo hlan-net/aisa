@@ -41,7 +41,7 @@ variable "vault_kubernetes_mount" {
 }
 
 variable "vault_kubernetes_audience" {
-  description = "Token audience required by the Vault Kubernetes auth roles (matches chart vault.auth.audience)."
+  description = "Token audience required by the Vault Kubernetes auth roles. Must match vault.auth.audience and apisix.vaultAgent.auth.audience in the aisa Helm chart."
   type        = string
   default     = "vault"
 }
@@ -125,6 +125,11 @@ variable "quota_profiles" {
     tokens_per_hour = number
   }))
   default = {}
+
+  validation {
+    condition     = alltrue([for p in values(var.quota_profiles) : p.tokens_per_hour >= 0 && floor(p.tokens_per_hour) == p.tokens_per_hour])
+    error_message = "quota_profiles tokens_per_hour must be a whole number >= 0."
+  }
 }
 
 variable "consumers" {
@@ -167,6 +172,20 @@ variable "budgets" {
     downgrade_to   = optional(string)
   }))
   default = {}
+
+  validation {
+    condition = alltrue([
+      for b in values(var.budgets) : (
+        b.monthly_tokens >= 0 &&
+        floor(b.monthly_tokens) == b.monthly_tokens &&
+        b.soft_ratio > 0 &&
+        b.soft_ratio <= 1 &&
+        contains(["reject", "downgrade"], trimspace(b.on_exhausted)) &&
+        (trimspace(b.on_exhausted) != "downgrade" || (b.downgrade_to != null && trimspace(b.downgrade_to) != ""))
+      )
+    ])
+    error_message = "budgets require whole monthly_tokens >= 0, 0 < soft_ratio <= 1, on_exhausted in [\"reject\", \"downgrade\"], and non-empty downgrade_to when on_exhausted == \"downgrade\"."
+  }
 }
 
 variable "provider_budgets" {
@@ -178,6 +197,20 @@ variable "provider_budgets" {
     downgrade_to   = optional(string)
   }))
   default = {}
+
+  validation {
+    condition = alltrue([
+      for b in values(var.provider_budgets) : (
+        b.monthly_tokens >= 0 &&
+        floor(b.monthly_tokens) == b.monthly_tokens &&
+        b.soft_ratio > 0 &&
+        b.soft_ratio <= 1 &&
+        contains(["reject", "downgrade"], trimspace(b.on_exhausted)) &&
+        (trimspace(b.on_exhausted) != "downgrade" || (b.downgrade_to != null && trimspace(b.downgrade_to) != ""))
+      )
+    ])
+    error_message = "provider_budgets require whole monthly_tokens >= 0, 0 < soft_ratio <= 1, on_exhausted in [\"reject\", \"downgrade\"], and non-empty downgrade_to when on_exhausted == \"downgrade\"."
+  }
 }
 
 variable "backends" {
@@ -212,4 +245,13 @@ variable "backends" {
     }))
   }))
   default = {}
+
+  validation {
+    condition = alltrue([
+      for b in values(var.backends) : (
+        b.timeout == null || (b.timeout >= 1 && floor(b.timeout) == b.timeout)
+      )
+    ])
+    error_message = "backends timeout must be a whole number >= 1 second when set."
+  }
 }

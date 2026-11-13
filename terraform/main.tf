@@ -280,4 +280,11 @@ resource "consul_service" "backend" {
       status   = check.value.status
     }
   }
+
+  lifecycle {
+    precondition {
+      condition     = length(distinct([for k, b in var.backends : "${b.node_name}:${coalesce(b.service_id, k)}"])) == length(var.backends)
+      error_message = "Resolved backend service_id values must be distinct per node."
+    }
+  }
 }
