@@ -6,6 +6,9 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **Grafana dashboard** ([`dashboards/aisa.json`](dashboards/aisa.json), [`dashboards/README.md`](dashboards/README.md)): covers the seven sections of [`docs/features/usage-metrics.md`](docs/features/usage-metrics.md#grafana-dashboard) — tokens per model (stacked prompt and completion, overall and by consumer), forward-auth decisions and decision latency (`aisa_decide_duration_seconds`, `aisa_decide_stage_duration_seconds`), p50/p95 end-to-end and time-to-first-token latency per model and backend, monthly consumer and provider-account budgets (`aisa_budget_spent`, `aisa_budget_limit`, `aisa_provider_budget_spent`, `aisa_provider_budget_limit`) and cost in currency (`aisa_cost_total`), backend and model availability, ledger consistency (aisa vs gateway tokens, missing usage share, exact vs estimated tokens), and top consumers (tokens, cost, and local vs priced share). Primary panels depend only on `aisa_*` metrics.
+
 ## [0.3.2] - 2026-10-31
 
 Models under their other names, such as Ollama's tags, with a 404 `model_not_found` for a name aisa does not know; the consumers' monthly budgets in the admin interface; and the proxy's consul-template container fixed for Kubernetes: its Consul token watch now runs, and it no longer fills with zombies. The aliases are an addition to contract 1, in `/v1/`; a catalog without them works as before.
