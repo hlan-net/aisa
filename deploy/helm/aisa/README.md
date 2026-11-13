@@ -31,7 +31,7 @@ A release name that does not contain `aisa` gets `-aisa` appended to aisa's obje
 
 ## Before the install
 
-The chart creates no Vault or Consul configuration; the Terraform module (ROADMAP v0.2.0 PR 6) is to. Until then, [`../test/install_test.sh`](../test/install_test.sh) shows every step for a test cluster.
+The chart creates no Vault or Consul configuration; the Terraform module in [`../../../terraform`](../../../terraform/) configures both ([`../test/install_test.sh`](../test/install_test.sh) shows the same steps with the `vault` and `consul` CLIs for a test cluster).
 
 - **Vault**, Kubernetes auth: the role `aisa` bound to the service account `<release>` in the release's namespace, reading, creating and updating `secret/aisa/consumers/*` (the consumers' key hashes; aisa writes those of the keys it issues) and reading `consul/creds/aisa`; the role `aisa-render` bound to `<release>-apisix`, reading `secret/aisa/providers/*` and `consul/creds/aisa-render` ([`VAULT.md`](../../../docs/concepts/VAULT.md)).
 - **Consul**, with ACLs: the policies `aisa` and `aisa-render` ([`CONSUL.md`](../../../docs/concepts/CONSUL.md#acls)), as roles of Vault's Consul secrets engine. Without ACLs, set `consul.token.fromVault: false` and `apisix.vaultAgent.consulToken.enabled: false`.
