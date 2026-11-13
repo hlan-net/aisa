@@ -429,7 +429,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "description": "Monthly consumer token budget on priced models: spent, limit, and remaining tokens in the current calendar month.",
+      "description": "Monthly consumer token budget on priced models: spent, limit, and remaining tokens in the selected calendar month ($period).",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -473,7 +473,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "aisa_budget_spent{consumer=~\"$consumer\"}",
+          "expr": "aisa_budget_spent{consumer=~\"$consumer\", period=\"$period\"}",
           "legendFormat": "{{consumer}} ({{period}}) spent",
           "range": true,
           "refId": "A"
@@ -481,7 +481,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "aisa_budget_limit{consumer=~\"$consumer\"}",
+          "expr": "aisa_budget_limit{consumer=~\"$consumer\", period=\"$period\"}",
           "legendFormat": "{{consumer}} ({{period}}) limit",
           "range": true,
           "refId": "B"
@@ -489,7 +489,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "clamp_min(aisa_budget_limit{consumer=~\"$consumer\"} - aisa_budget_spent{consumer=~\"$consumer\"}, 0)",
+          "expr": "clamp_min(aisa_budget_limit{consumer=~\"$consumer\", period=\"$period\"} - aisa_budget_spent{consumer=~\"$consumer\", period=\"$period\"}, 0)",
           "legendFormat": "{{consumer}} ({{period}}) remaining",
           "range": true,
           "refId": "C"
@@ -500,7 +500,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "description": "Monthly provider-account token budget above the consumers: spent, limit, and remaining across all consumers sharing a provider key.",
+      "description": "Monthly provider-account token budget above the consumers: spent, limit, and remaining across all consumers sharing a provider key in the selected calendar month ($period).",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
@@ -544,7 +544,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "aisa_provider_budget_spent",
+          "expr": "aisa_provider_budget_spent{period=\"$period\"}",
           "legendFormat": "{{provider}} ({{period}}) spent",
           "range": true,
           "refId": "A"
@@ -552,7 +552,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "aisa_provider_budget_limit",
+          "expr": "aisa_provider_budget_limit{period=\"$period\"}",
           "legendFormat": "{{provider}} ({{period}}) limit",
           "range": true,
           "refId": "B"
@@ -560,7 +560,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "clamp_min(aisa_provider_budget_limit - aisa_provider_budget_spent, 0)",
+          "expr": "clamp_min(aisa_provider_budget_limit{period=\"$period\"} - aisa_provider_budget_spent{period=\"$period\"}, 0)",
           "legendFormat": "{{provider}} ({{period}}) remaining",
           "range": true,
           "refId": "C"
@@ -1021,7 +1021,7 @@
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "description": "Top consumers over the selected range: total tokens, prompt/completion tokens, cumulative cost, and local (zero-price) vs cloud (priced) token share.",
+      "description": "Top 20 consumers over the selected range: total tokens, prompt/completion tokens, cumulative cost in $currency, and local ($local_backend) vs cloud token share.",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "thresholds" },
@@ -1038,7 +1038,7 @@
         },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "Local (free) share" },
+            "matcher": { "id": "byName", "options": "Local share" },
             "properties": [
               { "id": "unit", "value": "percentunit" }
             ]
@@ -1066,7 +1066,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum by (consumer) (increase(aisa_tokens_total{direction=\"prompt\", consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range]))",
+          "expr": "sum by (consumer) (increase(aisa_tokens_total{direction=\"prompt\", consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])) and on (consumer) topk(20, sum by (consumer) (increase(aisa_tokens_total{consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])))",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -1075,7 +1075,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum by (consumer) (increase(aisa_tokens_total{direction=\"completion\", consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range]))",
+          "expr": "sum by (consumer) (increase(aisa_tokens_total{direction=\"completion\", consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])) and on (consumer) topk(20, sum by (consumer) (increase(aisa_tokens_total{consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])))",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -1084,7 +1084,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "sum by (consumer) (increase(aisa_cost_total{consumer=~\"$consumer\", model=~\"$model\"}[$__range]))",
+          "expr": "sum by (consumer) (increase(aisa_cost_total{consumer=~\"$consumer\", model=~\"$model\", currency=\"$currency\"}[$__range])) and on (consumer) topk(20, sum by (consumer) (increase(aisa_tokens_total{consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])))",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -1093,14 +1093,14 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "editorMode": "code",
-          "expr": "1 - (sum by (consumer) (sum by (consumer, model) (increase(aisa_tokens_total{consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])) and on (consumer, model) (sum by (consumer, model) (increase(aisa_cost_total{consumer=~\"$consumer\", model=~\"$model\"}[$__range])) > 0)) / clamp_min(sum by (consumer) (increase(aisa_tokens_total{consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])), 1))",
+          "expr": "(sum by (consumer) (increase(aisa_tokens_total{consumer=~\"$consumer\", model=~\"$model\", backend=~\"$local_backend\"}[$__range])) / clamp_min(sum by (consumer) (increase(aisa_tokens_total{consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])), 1)) and on (consumer) topk(20, sum by (consumer) (increase(aisa_tokens_total{consumer=~\"$consumer\", model=~\"$model\", backend=~\"$backend\"}[$__range])))",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "E"
         }
       ],
-      "title": "Top consumers (tokens, cost, and local vs cloud share)",
+      "title": "Top consumers (tokens, cost ($currency), and local vs cloud share)",
       "transformations": [
         {
           "id": "seriesToColumns",
@@ -1122,7 +1122,7 @@
               "Value #B": "Prompt tokens",
               "Value #C": "Completion tokens",
               "Value #D": "Cost",
-              "Value #E": "Local (free) share",
+              "Value #E": "Local share",
               "consumer": "Consumer"
             }
           }
@@ -1208,6 +1208,70 @@
         "query": {
           "qryType": 1,
           "query": "label_values(aisa_requests_total, backend)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(aisa_requests_total, backend)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Local backends",
+        "multi": true,
+        "name": "local_backend",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(aisa_requests_total, backend)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "/local|ollama/i",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": { "selected": false, "text": "", "value": "" },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(aisa_budget_limit, period)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Budget month",
+        "multi": false,
+        "name": "period",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(aisa_budget_limit, period)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 2,
+        "type": "query"
+      },
+      {
+        "current": { "selected": false, "text": "EUR", "value": "EUR" },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(aisa_cost_total, currency)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Currency",
+        "multi": false,
+        "name": "currency",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(aisa_cost_total, currency)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
