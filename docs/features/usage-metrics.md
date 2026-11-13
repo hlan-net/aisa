@@ -63,14 +63,14 @@ No dashboard panel or alert depends only on gateway metrics, so swapping the pro
 
 ## Grafana dashboard
 
-To be shipped as JSON in `dashboards/` (`ROADMAP.md`, v0.2.0 PR 7):
+Shipped as [`dashboards/aisa.json`](../../dashboards/aisa.json) (see [`dashboards/README.md`](../../dashboards/README.md) for import instructions):
 
-1. **Tokens per model**, stacked prompt and completion, split by consumer
-2. **Requests and decisions**: allow, deny_quota, deny_budget and downgrade over time
-3. **Latency**: p50/p95 total and time to first token per model and backend
-4. **This month** per consumer: tokens against the budget and what remains, and their cost in currency
-5. **Backends**: Consul health of each `aisa-backend` and, from the proxy, active streams
-6. **Ledger consistency**: aisa tokens vs gateway tokens (should be about 1.0), the share of successful requests with missing usage per backend, and the estimated tokens next to the exact ones
+1. **Tokens per model**, stacked prompt and completion, overall and split by consumer (`aisa_tokens_total`)
+2. **Requests and decisions**: `allow`, `downgrade`, `deny_quota`, `deny_budget`, `deny_provider_budget`, `deny_auth`, `no_quota`, `invalid`, `unknown_model` and `unavailable` over time (`aisa_decisions_total`), plus `POST /v1/decide` total and per-stage latency (`aisa_decide_duration_seconds`, `aisa_decide_stage_duration_seconds`)
+3. **Latency**: p50/p95 total (`aisa_latency_seconds`) and time to first token (`aisa_ttft_seconds`) per model and backend
+4. **This month** per consumer and per provider account: tokens against the budget and what remains (`aisa_budget_spent`, `aisa_budget_limit`, `aisa_provider_budget_spent`, `aisa_provider_budget_limit`), and cost in currency (`aisa_cost_total`)
+5. **Backends**: model and backend availability (`aisa_models_available`, `aisa_models`, `aisa_config_backends`, and Consul health of each `aisa-backend`), requests per backend and HTTP status (`aisa_requests_total`), and, from the proxy, active streams (`apisix_llm_active_connections`)
+6. **Ledger consistency**: aisa tokens vs gateway tokens (should be about 1.0), the share of successful requests with missing usage per backend (`aisa_usage_missing_total`), and the estimated tokens (`aisa_tokens_estimated_total`) next to the exact ones
 7. **Top consumers** table: tokens, cost, and the local vs cloud share
 
 ## Alerts
