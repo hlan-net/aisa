@@ -104,6 +104,10 @@ aisa then:
      OPENAI_API_KEY: <key>
      AISA_BASE_URL: http://<proxy-service>.<namespace>.svc.cluster.local/v1
      AISA_API_KEY: <key>
+     # Optional, written when the consumer declaration or its quota profile sets default_model:
+     OPENAI_MODEL: <model>
+     LLM_MODEL: <model>
+     AISA_MODEL: <model>
    ```
    An application takes it with `envFrom` and calls the proxy with any OpenAI SDK, as it would call a provider (US-1 criterion 2). The plaintext key exists only in this Secret, and it is valid from the moment it appears there.
 3. **Clears the mark**: removes the hash from `unwritten_sha256`, sets `issued_at` to the time of the mark and records the consumer's other hashes with that time in `superseded_sha256`, again in one write. Until then nothing of the old key changes: it stays valid without a grace period running, so a Secret write that keeps failing, such as a move to a namespace that does not exist yet, never locks out the Secret still in use, and a rotation whose Secret write failed stays due and is tried again. A pass that finds the key in the Secret with its mark still set finishes this step.

@@ -154,7 +154,10 @@ resource "consul_keys" "quota_profiles" {
   key {
     path = "${local.consul_kv}/quotas/${each.key}"
     value = jsonencode({
-      tokens_per_hour = each.value.tokens_per_hour
+      for k, v in {
+        tokens_per_hour = each.value.tokens_per_hour
+        default_model   = each.value.default_model
+      } : k => v if v != null
     })
   }
 }
@@ -169,6 +172,7 @@ resource "consul_keys" "consumers" {
         quota_profile = each.value.quota_profile
         namespace     = each.value.namespace
         secret        = each.value.secret
+        default_model = each.value.default_model
       } : k => v if v != null
     })
   }

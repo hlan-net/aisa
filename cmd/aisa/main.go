@@ -186,6 +186,7 @@ func run(args []string) error {
 		provider        decide.ProviderChecker
 		providerCharger ledger.ProviderCharger
 		budgetUsage     admin.UsageReporter
+		profileLookup   kube.ProfileLookup
 	)
 	if cfg.QuotasEnabled() {
 		q, profiles, rdb, closeQuotas := newQuotas(cfg, cc, declarations, m, log.With("component", "quotas"))
@@ -195,6 +196,7 @@ func run(args []string) error {
 		}
 		go profiles.Run(ctx)
 		quota, charger = q, q
+		profileLookup = profiles
 		checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
 
 		// The budgets count the months in the same Redis, and keep a copy of the totals in
@@ -225,7 +227,7 @@ func run(args []string) error {
 	}
 
 	if cfg.Kubernetes.Enabled {
-		src := kubeSources{vault: vc, consul: cc, declarations: declarations, declared: declared}
+		src := kubeSources{vault: vc, consul: cc, declarations: declarations, declared: declared, profiles: profileLookup}
 		if err := runKubernetes(ctx, cfg, src, m, log.With("component", "kubernetes")); err != nil {
 			return err
 		}
@@ -342,6 +344,7 @@ type kubeSources struct {
 	consul       *consul.Client
 	declarations *consumers.Declarations
 	declared     <-chan struct{}
+	profiles     kube.ProfileLookup
 }
 
 // runKubernetes starts the passes over the consumers' Secrets and the Model objects, on the
@@ -368,6 +371,7 @@ func runKubernetes(ctx context.Context, cfg config.Config, src kubeSources, m *m
 	obs := newKubeObserver(m)
 	keys := kube.NewKeys(src.vault, k8s, src.declarations, log, kube.KeysOptions{
 		Mount: cfg.Vault.KVMount, Prefix: cfg.Vault.Prefix, BaseURL: k.ProxyURL, Install: k.Namespace,
+		Profiles: src.profiles, DefaultQuotaProfile: cfg.DefaultQuotaProfile,
 		Rotation: k.Rotation, Grace: k.Grace, OnIssue: obs.issued, OnPass: obs.secrets,
 	})
 	models := kube.NewModels(src.consul, dyn, log, kube.ModelsOptions{

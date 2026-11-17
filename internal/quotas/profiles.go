@@ -25,6 +25,9 @@ import (
 type Profile struct {
 	// TokensPerHour is how many tokens a consumer may use in any hour. 0 allows none.
 	TokensPerHour int64
+	// DefaultModel is an optional model written into the Secrets of consumers using this
+	// profile when the consumer declaration does not specify one.
+	DefaultModel string
 }
 
 // Lister reads the quota profiles, from Consul KV outside tests; see consul.Lister.
@@ -138,6 +141,20 @@ func (p *Profiles) Get(name string) (Profile, error) {
 		return Profile{}, fmt.Errorf("quota profile %q: %w", name, err)
 	}
 	return Profile{}, fmt.Errorf("%w %q", ErrUnknownProfile, name)
+}
+
+// DefaultModel returns the default model configured on the named profile, or "" if the profile
+// is not loaded, unknown, invalid, or has no default_model.
+func (p *Profiles) DefaultModel(name string) string {
+	if p == nil || name == "" {
+		return ""
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if !p.loaded {
+		return ""
+	}
+	return p.valid[name].DefaultModel
 }
 
 // Ready returns nil once the profiles have been read and, when a default profile is set, it
@@ -278,7 +295,8 @@ func (p *Profiles) apply(pairs []consul.Pair) {
 // does not know are ignored, so a later version can add some, but tokens_per_hour must be there.
 func parseProfile(value []byte) (Profile, error) {
 	var raw struct {
-		TokensPerHour *int64 `json:"tokens_per_hour"`
+		TokensPerHour *int64  `json:"tokens_per_hour"`
+		DefaultModel  *string `json:"default_model"`
 	}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return Profile{}, fmt.Errorf("want a JSON object with tokens_per_hour: %w", err)
@@ -289,5 +307,9 @@ func parseProfile(value []byte) (Profile, error) {
 	if *raw.TokensPerHour < 0 {
 		return Profile{}, fmt.Errorf("tokens_per_hour is negative: %d", *raw.TokensPerHour)
 	}
-	return Profile{TokensPerHour: *raw.TokensPerHour}, nil
+	var defaultModel string
+	if raw.DefaultModel != nil {
+		defaultModel = strings.TrimSpace(*raw.DefaultModel)
+	}
+	return Profile{TokensPerHour: *raw.TokensPerHour, DefaultModel: defaultModel}, nil
 }

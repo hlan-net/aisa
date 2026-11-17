@@ -41,7 +41,7 @@ To ensure forward compatibility, client applications should treat the Secret con
 | `OPENAI_API_KEY` | **Mandatory** | Plaintext API key issued and rotated by AISA | `aisa-1a2b3c...` |
 | `AISA_BASE_URL` | *Recommended Alias* | Namespaced alias to prevent collision with direct OpenAI | `http://aisa-apisix.aisa.svc.cluster.local/v1` |
 | `AISA_API_KEY` | *Recommended Alias* | Namespaced alias to prevent collision with direct OpenAI | `aisa-1a2b3c...` |
-| `OPENAI_MODEL` / `AISA_MODEL` / `LLM_MODEL` | *Optional (Reserved)* | Default model assigned to this consumer or quota profile | `qwen3:8b` |
+| `OPENAI_MODEL` / `AISA_MODEL` / `LLM_MODEL` | *Optional* | Default model assigned to this consumer or quota profile (`default_model` in Consul) | `qwen3:8b` |
 
 > [!NOTE]
 > Client applications must ignore unknown keys in the Secret so future AISA additions (such as telemetry tags or key rotation metadata) do not break existing deployments.

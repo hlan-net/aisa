@@ -133,6 +133,7 @@ type ConsumerItem struct {
 	QuotaProfile string `json:"quota_profile"`
 	Namespace    string `json:"namespace,omitempty"`
 	Secret       string `json:"secret,omitempty"`
+	DefaultModel string `json:"default_model,omitempty"`
 	HasKey       bool   `json:"has_key"`
 	Status       string `json:"status"` // ready, undeclared, missing_key, invalid
 }
@@ -146,6 +147,7 @@ func parseConsumerItem(p consul.Pair, prefix string, vaultKeys map[string]bool) 
 		QuotaProfile string `json:"quota_profile"`
 		Namespace    string `json:"namespace"`
 		Secret       string `json:"secret"`
+		DefaultModel string `json:"default_model"`
 	}
 	status := "ready"
 	if err := json.Unmarshal(p.Value, &decl); err != nil {
@@ -160,6 +162,7 @@ func parseConsumerItem(p consul.Pair, prefix string, vaultKeys map[string]bool) 
 		QuotaProfile: decl.QuotaProfile,
 		Namespace:    decl.Namespace,
 		Secret:       decl.Secret,
+		DefaultModel: strings.TrimSpace(decl.DefaultModel),
 		HasKey:       hasKey,
 		Status:       status,
 	}, true
@@ -228,6 +231,7 @@ type CreateConsumerRequest struct {
 	QuotaProfile string `json:"quota_profile"`
 	Namespace    string `json:"namespace"`
 	Secret       string `json:"secret"`
+	DefaultModel string `json:"default_model"`
 	GenerateKey  bool   `json:"generate_key"`
 	CustomKey    string `json:"custom_key"`
 }
@@ -267,6 +271,9 @@ func encodeConsumerDeclaration(req CreateConsumerRequest) ([]byte, error) {
 	if req.Namespace != "" && req.Secret != "" {
 		decl["namespace"] = strings.TrimSpace(req.Namespace)
 		decl["secret"] = strings.TrimSpace(req.Secret)
+	}
+	if dm := strings.TrimSpace(req.DefaultModel); dm != "" {
+		decl["default_model"] = dm
 	}
 	return json.Marshal(decl)
 }
@@ -405,6 +412,7 @@ func (h *Handler) createConsumer(w http.ResponseWriter, r *http.Request) {
 			QuotaProfile: req.QuotaProfile,
 			Namespace:    req.Namespace,
 			Secret:       req.Secret,
+			DefaultModel: strings.TrimSpace(req.DefaultModel),
 			HasKey:       hasKey,
 			Status:       "ready",
 		},
@@ -550,6 +558,7 @@ func (h *Handler) rotateConsumerKey(w http.ResponseWriter, r *http.Request) {
 type QuotaItem struct {
 	Name          string `json:"name"`
 	TokensPerHour int64  `json:"tokens_per_hour"`
+	DefaultModel  string `json:"default_model,omitempty"`
 	Status        string `json:"status,omitempty"` // ready, invalid
 }
 
@@ -566,13 +575,19 @@ func (h *Handler) fetchQuotas(ctx context.Context) ([]QuotaItem, error) {
 			continue
 		}
 		var q struct {
-			TokensPerHour int64 `json:"tokens_per_hour"`
+			TokensPerHour int64  `json:"tokens_per_hour"`
+			DefaultModel  string `json:"default_model"`
 		}
 		if err := json.Unmarshal(p.Value, &q); err != nil {
 			items = append(items, QuotaItem{Name: name, Status: "invalid"})
 			continue
 		}
-		items = append(items, QuotaItem{Name: name, TokensPerHour: q.TokensPerHour, Status: "ready"})
+		items = append(items, QuotaItem{
+			Name:          name,
+			TokensPerHour: q.TokensPerHour,
+			DefaultModel:  strings.TrimSpace(q.DefaultModel),
+			Status:        "ready",
+		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items, nil
@@ -609,7 +624,12 @@ func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]int64{"tokens_per_hour": req.TokensPerHour})
+	profilePayload := map[string]any{"tokens_per_hour": req.TokensPerHour}
+	defaultModel := strings.TrimSpace(req.DefaultModel)
+	if defaultModel != "" {
+		profilePayload["default_model"] = defaultModel
+	}
+	payload, _ := json.Marshal(profilePayload)
 	key := h.opts.ConsulPrefix + pathQuotas + name
 	if err := h.consul.PutCAS(ctx, key, payload, 0); err != nil {
 		if errors.Is(err, consul.ErrConflict) {
@@ -621,7 +641,12 @@ func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, QuotaItem{Name: name, TokensPerHour: req.TokensPerHour, Status: "ready"})
+	writeJSON(w, http.StatusCreated, QuotaItem{
+		Name:          name,
+		TokensPerHour: req.TokensPerHour,
+		DefaultModel:  defaultModel,
+		Status:        "ready",
+	})
 }
 
 func (h *Handler) deleteQuota(w http.ResponseWriter, r *http.Request) {

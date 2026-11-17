@@ -838,3 +838,59 @@ func TestAConsumerRemovedAfterItsSecretLosesItsHashes(t *testing.T) {
 		t.Error("a consumer with a broken declaration lost its keys")
 	}
 }
+
+type fakeProfiles map[string]string
+
+func (f fakeProfiles) DefaultModel(name string) string { return f[name] }
+
+func TestDefaultModelInSecret(t *testing.T) {
+	profiles := fakeProfiles{"interactive": "qwen3", "batch": "llama3.2"}
+	kt := newKeysTest(t, map[string]consumers.Declaration{
+		"chat-ui": {QuotaProfile: "interactive", Namespace: "chat", Secret: "aisa", DefaultModel: "gpt-4o"},
+		"jobs":    {QuotaProfile: "batch", Namespace: "jobs", Secret: "aisa"},
+		"cli":     {Namespace: "cli", Secret: "aisa"},
+	})
+	kt.keys.opts.Profiles = profiles
+	kt.keys.opts.DefaultQuotaProfile = "interactive"
+	kt.pass()
+
+	checkModels := func(ns, want string) {
+		t.Helper()
+		s := kt.secret(ns, "aisa")
+		if s == nil {
+			t.Fatalf("%s/aisa missing", ns)
+		}
+		for _, field := range []string{SecretModel, SecretLLMModel, SecretAisaModel} {
+			got, ok := s.Data[field]
+			if want == "" {
+				if ok {
+					t.Errorf("%s %s = %q, want absent", ns, field, got)
+				}
+			} else if string(got) != want {
+				t.Errorf("%s %s = %q, want %q", ns, field, got, want)
+			}
+		}
+	}
+
+	// Declaration default_model overrides profile default_model.
+	checkModels("chat", "gpt-4o")
+	// Quota profile supplies default_model when declaration omits it.
+	checkModels("jobs", "llama3.2")
+	// DefaultQuotaProfile supplies default_model when consumer names no profile.
+	checkModels("cli", "qwen3")
+
+	// Tampered model fields are restored.
+	s := kt.secret("chat", "aisa").DeepCopy()
+	s.Data[SecretModel] = []byte("wrong")
+	delete(s.Data, SecretLLMModel)
+	if _, err := kt.k8s.CoreV1().Secrets("chat").Update(context.Background(), s, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	kt.pass()
+	checkModels("chat", "gpt-4o")
+
+	// Clearing default_model removes OPENAI_MODEL, LLM_MODEL, and AISA_MODEL from the Secret.
+	kt.decls.valid["chat-ui"] = consumers.Declaration{QuotaProfile: "unknown", Namespace: "chat", Secret: "aisa"}
+	kt.pass()
+	checkModels("chat", "")
+}
