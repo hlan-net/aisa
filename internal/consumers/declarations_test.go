@@ -27,9 +27,9 @@ func TestParseDeclaration(t *testing.T) {
 		"empty":              {``, Declaration{}, true},
 		"a number":           {`{"quota_profile": 5}`, Declaration{}, true},
 		"default_model num":  {`{"default_model": 5}`, Declaration{}, true},
-		"namespace alone": {`{"namespace": "news"}`, Declaration{}, true},
-		"secret alone":    {`{"secret": "aisa"}`, Declaration{}, true},
-		"empty namespace": {`{"namespace": " ", "secret": "aisa"}`, Declaration{}, true},
+		"namespace alone":    {`{"namespace": "news"}`, Declaration{}, true},
+		"secret alone":       {`{"secret": "aisa"}`, Declaration{}, true},
+		"empty namespace":    {`{"namespace": " ", "secret": "aisa"}`, Declaration{}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := parseDeclaration([]byte(tc.value))

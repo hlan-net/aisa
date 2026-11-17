@@ -188,6 +188,11 @@ func run(args []string) error {
 		budgetUsage     admin.UsageReporter
 		profileLookup   kube.ProfileLookup
 	)
+	if !cfg.QuotasEnabled() {
+		log.Warn("token quotas and budgets are off: set AISA_REDIS_ADDR to turn them on")
+	}
+	// The profiles are read without quotas too when aisa writes Secrets: a profile carries
+	// the default model of its consumers (docs/concepts/KUBERNETES_OBJECTS.md).
 	if cfg.QuotasEnabled() || cfg.Kubernetes.Enabled {
 		profiles := newQuotaProfiles(cfg, cc, declarations, m, log.With("component", "quotas"))
 		if err := m.Register(profiles.Collectors()...); err != nil {
@@ -221,11 +226,7 @@ func run(args []string) error {
 			go catalog.Run(ctx)
 			provider, providerCharger = ceiling, ceiling
 			checks = append(checks, server.Check{Name: "provider_budgets", Probe: ceiling.Ready})
-		} else {
-			log.Warn("token quotas and budgets are off: set AISA_REDIS_ADDR to turn them on")
 		}
-	} else {
-		log.Warn("token quotas and budgets are off: set AISA_REDIS_ADDR to turn them on")
 	}
 
 	var adminHandler http.Handler

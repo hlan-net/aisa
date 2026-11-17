@@ -25,7 +25,7 @@ module "aisa" {
   vault_consul_mount     = "consul"
 
   quota_profiles = {
-    interactive = { tokens_per_hour = 200000 }
+    interactive = { tokens_per_hour = 200000, default_model = "qwen3" }
     batch       = { tokens_per_hour = 50000 }
   }
 

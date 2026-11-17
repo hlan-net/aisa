@@ -559,11 +559,11 @@ func TestProfileDefaultModel(t *testing.T) {
 	if got, loaded := p.DefaultModel("interactive"); !loaded || got != "" {
 		t.Errorf("DefaultModel(interactive) = (%q, %v), want (\"\", true)", got, loaded)
 	}
-	if got, loaded := p.DefaultModel("unknown"); !loaded || got != "" {
-		t.Errorf("DefaultModel(unknown) = (%q, %v), want (\"\", true)", got, loaded)
-	}
-	if got, loaded := p.DefaultModel("bad"); !loaded || got != "" {
-		t.Errorf("DefaultModel(bad) = (%q, %v), want (\"\", true)", got, loaded)
+	// A profile that is not there or cannot be read says nothing about the model.
+	for _, name := range []string{"unknown", "bad", ""} {
+		if got, known := p.DefaultModel(name); known || got != "" {
+			t.Errorf("DefaultModel(%q) = (%q, %v), want (\"\", false)", name, got, known)
+		}
 	}
 	if _, err := p.Get("bad"); err == nil {
 		t.Error("expected invalid profile error for non-string default_model")

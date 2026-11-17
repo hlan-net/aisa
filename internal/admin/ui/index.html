@@ -92,6 +92,7 @@
             <tr>
               <th>Consumer Name</th>
               <th>Quota Profile</th>
+              <th>Default Model</th>
               <th>Monthly Budget</th>
               <th>Kubernetes Target</th>
               <th>Vault Hash</th>
@@ -122,6 +123,7 @@
             <tr>
               <th>Profile Name</th>
               <th>Tokens Per Hour</th>
+              <th>Default Model</th>
               <th class="text-right">Actions</th>
             </tr>
           </thead>
@@ -211,6 +213,10 @@
           </div>
         </div>
         <div class="form-group">
+          <label for="consumer-default-model">Default Model (optional)</label>
+          <input type="text" id="consumer-default-model" placeholder="e.g. qwen3; empty takes the quota profile's">
+        </div>
+        <div class="form-group">
           <label class="checkbox-label">
             <input type="checkbox" id="consumer-gen-key" checked onchange="toggleCustomKeyInput()">
             Generate secure API key automatically
@@ -249,6 +255,10 @@
             <button type="button" class="btn-chip" onclick="setQuotaPreset(1000000)">1M</button>
             <button type="button" class="btn-chip" onclick="setQuotaPreset(5000000)">5M</button>
           </div>
+        </div>
+        <div class="form-group">
+          <label for="quota-default-model">Default Model (optional)</label>
+          <input type="text" id="quota-default-model" placeholder="e.g. qwen3; for consumers that name none">
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="closeModal('modal-add-quota')">Cancel</button>

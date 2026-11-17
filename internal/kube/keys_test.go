@@ -28,7 +28,6 @@ import (
 func splitHashes(v string) []string { return apikey.SplitHashes(v) }
 func hashKey(key string) string     { return apikey.Hash(key) }
 
-
 // memKV is Vault's KV v2 in memory: data goes through JSON, as it does to and from Vault.
 type memKV struct {
 	data     map[string][]byte
@@ -844,17 +843,17 @@ type fakeProfiles struct {
 	models map[string]string
 }
 
+// DefaultModel answers as quotas.Profiles does: a profile that is not among the models is
+// not known.
 func (f *fakeProfiles) DefaultModel(name string) (string, bool) {
-	if !f.loaded {
-		return "", false
-	}
-	return f.models[name], true
+	model, ok := f.models[name]
+	return model, f.loaded && ok
 }
 
 func TestDefaultModelInSecret(t *testing.T) {
 	profiles := &fakeProfiles{
 		loaded: true,
-		models: map[string]string{"interactive": "qwen3", "batch": "llama3.2"},
+		models: map[string]string{"interactive": "qwen3", "batch": "llama3.2", "plain": ""},
 	}
 	kt := newKeysTest(t, map[string]consumers.Declaration{
 		"chat-ui": {QuotaProfile: "interactive", Namespace: "chat", Secret: "aisa", DefaultModel: "gpt-4o"},
@@ -906,8 +905,21 @@ func TestDefaultModelInSecret(t *testing.T) {
 	kt.pass()
 	checkModels("chat", "gpt-4o")
 
-	// Clearing default_model removes OPENAI_MODEL, LLM_MODEL, and AISA_MODEL from the Secret.
-	kt.decls.valid["chat-ui"] = consumers.Declaration{QuotaProfile: "unknown", Namespace: "chat", Secret: "aisa"}
+	// A profile that is removed or broken says nothing about the model: the keys stay.
+	delete(profiles.models, "batch")
+	kt.pass()
+	checkModels("jobs", "llama3.2")
+	// A Secret created meanwhile has no model keys, and gets them once the profile is back.
+	kt.decls.valid["late"] = consumers.Declaration{QuotaProfile: "batch", Namespace: "late", Secret: "aisa"}
+	kt.pass()
+	checkModels("late", "")
+	profiles.models["batch"] = "llama3.2"
+	kt.pass()
+	checkModels("late", "llama3.2")
+
+	// Clearing default_model removes OPENAI_MODEL, LLM_MODEL, and AISA_MODEL from the Secret:
+	// the declaration no longer names a model, and its profile is there and names none.
+	kt.decls.valid["chat-ui"] = consumers.Declaration{QuotaProfile: "plain", Namespace: "chat", Secret: "aisa"}
 	kt.pass()
 	checkModels("chat", "")
 }
