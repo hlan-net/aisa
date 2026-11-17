@@ -26,6 +26,9 @@ type Declaration struct {
 	// Namespace and Secret say where the consumer's application runs and the Secret aisa is to
 	// write its key into (docs/concepts/KUBERNETES_OBJECTS.md); both or neither.
 	Namespace, Secret string
+	// DefaultModel is an optional model written into the consumer's Secret as OPENAI_MODEL,
+	// LLM_MODEL, and AISA_MODEL; when empty, the consumer's quota profile may supply one.
+	DefaultModel string
 }
 
 // Declared answers which consumers are declared; Declarations implements it.
@@ -181,6 +184,7 @@ func parseDeclaration(value []byte) (Declaration, error) {
 		QuotaProfile *string `json:"quota_profile"`
 		Namespace    *string `json:"namespace"`
 		Secret       *string `json:"secret"`
+		DefaultModel *string `json:"default_model"`
 	}
 	// json.Unmarshal takes null as well, and leaves raw empty: a declaration without a quota.
 	if trimmed := bytes.TrimSpace(value); len(trimmed) == 0 || trimmed[0] != '{' {
@@ -195,7 +199,12 @@ func parseDeclaration(value []byte) (Declaration, error) {
 		}
 		return strings.TrimSpace(*p)
 	}
-	decl := Declaration{QuotaProfile: str(raw.QuotaProfile), Namespace: str(raw.Namespace), Secret: str(raw.Secret)}
+	decl := Declaration{
+		QuotaProfile: str(raw.QuotaProfile),
+		Namespace:    str(raw.Namespace),
+		Secret:       str(raw.Secret),
+		DefaultModel: str(raw.DefaultModel),
+	}
 	if (decl.Namespace == "") != (decl.Secret == "") {
 		return Declaration{}, errors.New("namespace and secret come together")
 	}

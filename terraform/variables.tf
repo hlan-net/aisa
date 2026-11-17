@@ -123,6 +123,7 @@ variable "quota_profiles" {
   description = "Quota profiles stored at <consul_kv_prefix>/quotas/<name>."
   type = map(object({
     tokens_per_hour = number
+    default_model   = optional(string)
   }))
   default = {}
 
@@ -138,6 +139,7 @@ variable "consumers" {
     quota_profile = optional(string)
     namespace     = optional(string)
     secret        = optional(string)
+    default_model = optional(string)
   }))
   default = {}
 }

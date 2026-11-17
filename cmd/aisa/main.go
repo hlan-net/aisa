@@ -186,35 +186,47 @@ func run(args []string) error {
 		provider        decide.ProviderChecker
 		providerCharger ledger.ProviderCharger
 		budgetUsage     admin.UsageReporter
+		profileLookup   kube.ProfileLookup
 	)
-	if cfg.QuotasEnabled() {
-		q, profiles, rdb, closeQuotas := newQuotas(cfg, cc, declarations, m, log.With("component", "quotas"))
-		defer closeQuotas()
+	if !cfg.QuotasEnabled() {
+		log.Warn("token quotas and budgets are off: set AISA_REDIS_ADDR to turn them on")
+	}
+	// The profiles are read without quotas too when aisa writes Secrets: a profile carries
+	// the default model of its consumers (docs/concepts/KUBERNETES_OBJECTS.md).
+	if cfg.QuotasEnabled() || cfg.Kubernetes.Enabled {
+		profiles := newQuotaProfiles(cfg, cc, declarations, m, log.With("component", "quotas"))
 		if err := m.Register(profiles.Collectors()...); err != nil {
 			return fmt.Errorf("quota profile metrics: %w", err)
 		}
 		go profiles.Run(ctx)
-		quota, charger = q, q
-		checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
+		profileLookup = profiles
 
-		// The budgets count the months in the same Redis, and keep a copy of the totals in
-		// Consul KV (docs/features/quotas-and-budgets.md, Budgets).
-		monthly, budgetSet := newBudgets(cfg, cc, rdb, prices, m, log.With("component", "budgets"))
-		go budgetSet.Run(ctx)
-		go monthly.Run(ctx)
-		budget, budgetCharger, budgetUsage = monthly, monthly, monthly
-		checks = append(checks, server.Check{Name: "budgets", Probe: budgetSet.Ready})
+		if cfg.QuotasEnabled() {
+			rdb := redis.NewClient(&redis.Options{
+				Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password,
+			})
+			defer func() { _ = rdb.Close() }()
+			q := quotas.New(profiles, quotas.NewWindow(rdb, "aisa:"), m, log.With("component", "quotas"), quotas.Options{})
+			quota, charger = q, q
+			checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
 
-		// The ceiling above the consumers (#33): a budget per provider key, applied through
-		// the catalog, which says which keys serve a model.
-		ceiling, providerSet, providerMonthly, catalog := newCeiling(cfg, cc, rdb, m, log.With("component", "budgets"))
-		go providerSet.Run(ctx)
-		go providerMonthly.Run(ctx)
-		go catalog.Run(ctx)
-		provider, providerCharger = ceiling, ceiling
-		checks = append(checks, server.Check{Name: "provider_budgets", Probe: ceiling.Ready})
-	} else {
-		log.Warn("token quotas and budgets are off: set AISA_REDIS_ADDR to turn them on")
+			// The budgets count the months in the same Redis, and keep a copy of the totals in
+			// Consul KV (docs/features/quotas-and-budgets.md, Budgets).
+			monthly, budgetSet := newBudgets(cfg, cc, rdb, prices, m, log.With("component", "budgets"))
+			go budgetSet.Run(ctx)
+			go monthly.Run(ctx)
+			budget, budgetCharger, budgetUsage = monthly, monthly, monthly
+			checks = append(checks, server.Check{Name: "budgets", Probe: budgetSet.Ready})
+
+			// The ceiling above the consumers (#33): a budget per provider key, applied through
+			// the catalog, which says which keys serve a model.
+			ceiling, providerSet, providerMonthly, catalog := newCeiling(cfg, cc, rdb, m, log.With("component", "budgets"))
+			go providerSet.Run(ctx)
+			go providerMonthly.Run(ctx)
+			go catalog.Run(ctx)
+			provider, providerCharger = ceiling, ceiling
+			checks = append(checks, server.Check{Name: "provider_budgets", Probe: ceiling.Ready})
+		}
 	}
 
 	var adminHandler http.Handler
@@ -225,7 +237,7 @@ func run(args []string) error {
 	}
 
 	if cfg.Kubernetes.Enabled {
-		src := kubeSources{vault: vc, consul: cc, declarations: declarations, declared: declared}
+		src := kubeSources{vault: vc, consul: cc, declarations: declarations, declared: declared, profiles: profileLookup}
 		if err := runKubernetes(ctx, cfg, src, m, log.With("component", "kubernetes")); err != nil {
 			return err
 		}
@@ -248,12 +260,10 @@ func run(args []string) error {
 	return nil
 }
 
-// newQuotas returns the token quotas with their profiles from Consul and counters in Redis,
-// the Redis client, and a function that closes the connections to Redis. The profiles know
-// the default and the consumers' declarations, to report a profile that is named and not
-// there (#82).
-func newQuotas(cfg config.Config, cc *consul.Client, declarations *consumers.Declarations, m *metrics.Metrics, log *slog.Logger) (*quotas.Quota, *quotas.Profiles, *redis.Client, func()) {
-	profiles := quotas.NewProfiles(
+// newQuotaProfiles returns the quota profiles watched from Consul KV. The profiles know the
+// default and the consumers' declarations, to report a profile that is named and not there (#82).
+func newQuotaProfiles(cfg config.Config, cc *consul.Client, declarations *consumers.Declarations, m *metrics.Metrics, log *slog.Logger) *quotas.Profiles {
+	return quotas.NewProfiles(
 		quotas.ConsulSource{Client: cc, Prefix: cfg.Consul.Prefix + "/quotas/"},
 		log,
 		quotas.ProfileOptions{
@@ -261,11 +271,6 @@ func newQuotas(cfg config.Config, cc *consul.Client, declarations *consumers.Dec
 			Default:   cfg.DefaultQuotaProfile,
 			Consumers: declarations,
 		})
-	rdb := redis.NewClient(&redis.Options{
-		Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password,
-	})
-	q := quotas.New(profiles, quotas.NewWindow(rdb, "aisa:"), m, log, quotas.Options{})
-	return q, profiles, rdb, func() { _ = rdb.Close() }
 }
 
 // newBudgets returns the monthly budgets with their definitions from Consul, counters in
@@ -342,6 +347,7 @@ type kubeSources struct {
 	consul       *consul.Client
 	declarations *consumers.Declarations
 	declared     <-chan struct{}
+	profiles     kube.ProfileLookup
 }
 
 // runKubernetes starts the passes over the consumers' Secrets and the Model objects, on the
@@ -368,6 +374,7 @@ func runKubernetes(ctx context.Context, cfg config.Config, src kubeSources, m *m
 	obs := newKubeObserver(m)
 	keys := kube.NewKeys(src.vault, k8s, src.declarations, log, kube.KeysOptions{
 		Mount: cfg.Vault.KVMount, Prefix: cfg.Vault.Prefix, BaseURL: k.ProxyURL, Install: k.Namespace,
+		Profiles: src.profiles, DefaultQuotaProfile: cfg.DefaultQuotaProfile,
 		Rotation: k.Rotation, Grace: k.Grace, OnIssue: obs.issued, OnPass: obs.secrets,
 	})
 	models := kube.NewModels(src.consul, dyn, log, kube.ModelsOptions{

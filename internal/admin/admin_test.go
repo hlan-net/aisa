@@ -1128,3 +1128,71 @@ func TestCorruptedQuotaProfile(t *testing.T) {
 	}
 }
 
+
+// TestDefaultModel covers default_model on consumers and quota profiles: it is stored
+// trimmed, left out when empty, and returned by the lists.
+func TestDefaultModel(t *testing.T) {
+	h, mc, _ := setupTestHandler()
+	post := func(path, body string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, newJSONRequest(http.MethodPost, path, body))
+		if w.Code != http.StatusCreated {
+			t.Fatalf("POST %s status = %d: %s", path, w.Code, w.Body.String())
+		}
+	}
+	stored := func(key string) map[string]any {
+		t.Helper()
+		var v map[string]any
+		if err := json.Unmarshal(mc.pairs[key], &v); err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		return v
+	}
+
+	post("/admin/api/consumers", `{"name":"with-model","default_model":" qwen3 ","generate_key":true}`)
+	post("/admin/api/consumers", `{"name":"without-model","default_model":"  ","generate_key":true}`)
+	post("/admin/api/quotas", `{"name":"modelled","tokens_per_hour":1000,"default_model":" llama3.2 "}`)
+	post("/admin/api/quotas", `{"name":"bare","tokens_per_hour":1000}`)
+
+	if got := stored("aisa/consumers/with-model")["default_model"]; got != "qwen3" {
+		t.Errorf("consumer default_model in Consul = %v, want qwen3", got)
+	}
+	if _, ok := stored("aisa/consumers/without-model")["default_model"]; ok {
+		t.Error("an empty default_model was written to the consumer's declaration")
+	}
+	if got := stored("aisa/quotas/modelled")["default_model"]; got != "llama3.2" {
+		t.Errorf("quota default_model in Consul = %v, want llama3.2", got)
+	}
+	if _, ok := stored("aisa/quotas/bare")["default_model"]; ok {
+		t.Error("a profile without default_model got one in Consul")
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/api/consumers", nil))
+	var cs []ConsumerItem
+	if err := json.Unmarshal(w.Body.Bytes(), &cs); err != nil {
+		t.Fatal(err)
+	}
+	models := map[string]string{}
+	for _, c := range cs {
+		models[c.Name] = c.DefaultModel
+	}
+	if models["with-model"] != "qwen3" || models["without-model"] != "" {
+		t.Errorf("listed consumer models = %v", models)
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/api/quotas", nil))
+	var qs []QuotaItem
+	if err := json.Unmarshal(w.Body.Bytes(), &qs); err != nil {
+		t.Fatal(err)
+	}
+	models = map[string]string{}
+	for _, q := range qs {
+		models[q.Name] = q.DefaultModel
+	}
+	if models["modelled"] != "llama3.2" || models["bare"] != "" {
+		t.Errorf("listed quota models = %v", models)
+	}
+}

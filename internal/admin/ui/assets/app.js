@@ -149,7 +149,7 @@ async function loadConsumers() {
       quotas.map(q => `<option value="${escapeHTML(q.name)}">${escapeHTML(q.name)} (${formatTokens(q.tokens_per_hour)}/h)</option>`).join('');
 
     if (consumers.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="text-center" style="color:var(--text-muted); padding:24px;">No consumers declared.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center" style="color:var(--text-muted); padding:24px;">No consumers declared.</td></tr>';
       return;
     }
 
@@ -157,6 +157,7 @@ async function loadConsumers() {
       <tr>
         <td><strong>${escapeHTML(c.name)}</strong></td>
         <td>${c.quota_profile ? `<span class="badge badge-accent">${escapeHTML(c.quota_profile)}</span>` : '<span style="color:var(--text-muted)">None</span>'}</td>
+        <td>${renderModel(c.default_model)}</td>
         <td>${renderBudget(budgetsByConsumer[c.name])}</td>
         <td>${c.namespace ? `${escapeHTML(c.namespace)} / <code>${escapeHTML(c.secret)}</code>` : '<span style="color:var(--text-muted)">-</span>'}</td>
         <td>${c.has_key ? '<span class="badge badge-ready">Key Present</span>' : '<span class="badge badge-warning">Missing Hash</span>'}</td>
@@ -169,7 +170,7 @@ async function loadConsumers() {
       </tr>
     `).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="7" class="text-center" style="color:var(--danger)">Failed to load consumers: ${escapeHTML(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center" style="color:var(--danger)">Failed to load consumers: ${escapeHTML(err.message)}</td></tr>`;
   }
 }
 
@@ -277,12 +278,18 @@ function toggleCustomKeyInput() {
   }
 }
 
+// renderModel shows a default_model, of a consumer or of a quota profile.
+function renderModel(model) {
+  return model ? `<code>${escapeHTML(model)}</code>` : '<span style="color:var(--text-muted)">-</span>';
+}
+
 async function handleCreateConsumer(e) {
   e.preventDefault();
   const name = document.getElementById('consumer-name').value.trim();
   const quota = document.getElementById('consumer-quota').value;
   const ns = document.getElementById('consumer-namespace').value.trim();
   const sec = document.getElementById('consumer-secret').value.trim();
+  const defaultModel = document.getElementById('consumer-default-model').value.trim();
   const genKey = document.getElementById('consumer-gen-key').checked;
   const customKey = document.getElementById('consumer-custom-key').value.trim();
 
@@ -294,6 +301,7 @@ async function handleCreateConsumer(e) {
         quota_profile: quota,
         namespace: ns,
         secret: sec,
+        default_model: defaultModel,
         generate_key: genKey,
         custom_key: genKey ? '' : customKey
       })
@@ -358,7 +366,7 @@ async function loadQuotas() {
   try {
     const quotas = await api('/quotas');
     if (quotas.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" class="text-center" style="color:var(--text-muted); padding:24px;">No quota profiles found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="4" class="text-center" style="color:var(--text-muted); padding:24px;">No quota profiles found.</td></tr>';
       return;
     }
 
@@ -371,6 +379,7 @@ async function loadQuotas() {
       <tr>
         <td><strong>${escapeHTML(q.name)}</strong></td>
         <td>${limitDisplay}</td>
+        <td>${renderModel(q.default_model)}</td>
         <td class="text-right">
           <button class="btn btn-danger" data-action="delete-quota" data-name="${escapeHTML(q.name)}">Delete</button>
         </td>
@@ -378,7 +387,7 @@ async function loadQuotas() {
     `;
     }).join('');
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="3" class="text-center" style="color:var(--danger)">Failed to load quotas: ${escapeHTML(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" class="text-center" style="color:var(--danger)">Failed to load quotas: ${escapeHTML(err.message)}</td></tr>`;
   }
 }
 
@@ -390,6 +399,7 @@ async function handleCreateQuota(e) {
   e.preventDefault();
   const name = document.getElementById('quota-name').value.trim();
   const tokens = Number.parseInt(document.getElementById('quota-tokens').value, 10);
+  const defaultModel = document.getElementById('quota-default-model').value.trim();
   if (Number.isNaN(tokens) || tokens < 0) {
     showToast('Tokens per hour must be a non-negative number', 'error');
     return;
@@ -398,7 +408,7 @@ async function handleCreateQuota(e) {
   try {
     await api('/quotas', {
       method: 'POST',
-      body: JSON.stringify({ name, tokens_per_hour: tokens })
+      body: JSON.stringify({ name, tokens_per_hour: tokens, default_model: defaultModel })
     });
     closeModal('modal-add-quota');
     document.getElementById('form-add-quota').reset();

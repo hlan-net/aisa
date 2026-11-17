@@ -16,18 +16,20 @@ func TestParseDeclaration(t *testing.T) {
 		want  Declaration
 		bad   bool
 	}{
-		"full":            {`{"quota_profile": "batch", "namespace": "news", "secret": "aisa"}`, Declaration{"batch", "news", "aisa"}, false},
-		"quota only":      {`{"quota_profile": " interactive "}`, Declaration{QuotaProfile: "interactive"}, false},
-		"empty object":    {`{}`, Declaration{}, false},
-		"unknown fields":  {`{"quota_profile": "batch", "owner": "team-news"}`, Declaration{QuotaProfile: "batch"}, false},
-		"not JSON":        {`batch`, Declaration{}, true},
-		"an array":        {`["batch"]`, Declaration{}, true},
-		"null":            {` null `, Declaration{}, true},
-		"empty":           {``, Declaration{}, true},
-		"a number":        {`{"quota_profile": 5}`, Declaration{}, true},
-		"namespace alone": {`{"namespace": "news"}`, Declaration{}, true},
-		"secret alone":    {`{"secret": "aisa"}`, Declaration{}, true},
-		"empty namespace": {`{"namespace": " ", "secret": "aisa"}`, Declaration{}, true},
+		"full":               {`{"quota_profile": "batch", "namespace": "news", "secret": "aisa", "default_model": "qwen3"}`, Declaration{QuotaProfile: "batch", Namespace: "news", Secret: "aisa", DefaultModel: "qwen3"}, false},
+		"quota only":         {`{"quota_profile": " interactive "}`, Declaration{QuotaProfile: "interactive"}, false},
+		"default model trim": {`{"default_model": " llama3.2 "}`, Declaration{DefaultModel: "llama3.2"}, false},
+		"empty object":       {`{}`, Declaration{}, false},
+		"unknown fields":     {`{"quota_profile": "batch", "owner": "team-news"}`, Declaration{QuotaProfile: "batch"}, false},
+		"not JSON":           {`batch`, Declaration{}, true},
+		"an array":           {`["batch"]`, Declaration{}, true},
+		"null":               {` null `, Declaration{}, true},
+		"empty":              {``, Declaration{}, true},
+		"a number":           {`{"quota_profile": 5}`, Declaration{}, true},
+		"default_model num":  {`{"default_model": 5}`, Declaration{}, true},
+		"namespace alone":    {`{"namespace": "news"}`, Declaration{}, true},
+		"secret alone":       {`{"secret": "aisa"}`, Declaration{}, true},
+		"empty namespace":    {`{"namespace": " ", "secret": "aisa"}`, Declaration{}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := parseDeclaration([]byte(tc.value))

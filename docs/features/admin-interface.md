@@ -41,14 +41,14 @@ API Client       ──▶ /admin/api/* ──────▶ REST Administratio
 Displays real-time system readiness checks (Vault connectivity, Consul declarations, Redis quota store, and loaded consumers), as well as live gauges for declared consumers, keys present, quota profiles, active backends, and registered models.
 
 ### 2. Consumer Management
-- **List consumers**: Displays declared consumers in Consul KV (`aisa/consumers/<name>`), their assigned quota profile, Kubernetes namespace and Secret binding, Vault key hash status, and synchronization state (`ready`, `missing_key`, `undeclared`, `invalid`).
-- **Create consumer**: Declares a consumer in Consul KV with optional quota profile, Kubernetes target Secret, and either automated key generation or custom key specification (minimum 16 characters). Key issuance is supported for standalone consumers; consumers bound to a Kubernetes Secret have their keys managed by Kubernetes reconciliation. Checks existence with check-and-set (CAS) and returns 409 Conflict if the consumer already exists.
+- **List consumers**: Displays declared consumers in Consul KV (`aisa/consumers/<name>`), their assigned quota profile, default model, Kubernetes namespace and Secret binding, Vault key hash status, and synchronization state (`ready`, `missing_key`, `undeclared`, `invalid`).
+- **Create consumer**: Declares a consumer in Consul KV with optional quota profile, default model (`default_model`, written to the consumer's Secret), Kubernetes target Secret, and either automated key generation or custom key specification (minimum 16 characters). Key issuance is supported for standalone consumers; consumers bound to a Kubernetes Secret have their keys managed by Kubernetes reconciliation. Checks existence with check-and-set (CAS) and returns 409 Conflict if the consumer already exists.
 - **Rotate key**: Generates a new API key for standalone consumers, replaces the key hash in Vault with check-and-set concurrency protection, and reveals the plaintext key once. Refuses rotation for Kubernetes-managed consumers (handled via Secret reconciliation).
 - **Delete consumer**: Removes the declaration from Consul KV and permanently deletes the key metadata and versions from Vault KV v2.
 
 ### 3. Quota Profiles
-- **List quota profiles**: Inspects rate-limiting profiles configured in Consul KV (`aisa/quotas/<name>`).
-- **Create quota profile**: Creates hourly token limits (`tokens_per_hour`) using check-and-set (returns 409 Conflict if already exists), with preset buttons (100k, 500k, 1M, 5M).
+- **List quota profiles**: Inspects rate-limiting profiles configured in Consul KV (`aisa/quotas/<name>`), with their default model.
+- **Create quota profile**: Creates hourly token limits (`tokens_per_hour`), with an optional default model (`default_model`) for the consumers that name none, using check-and-set (returns 409 Conflict if already exists), with preset buttons (100k, 500k, 1M, 5M).
 - **Delete quota profile**: Deletes profiles no longer in use.
 
 ### 4. Budgets
@@ -88,6 +88,7 @@ Returns system status, readiness probe states, and entity counts.
     "quota_profile": "interactive",
     "namespace": "frontend",
     "secret": "aisa-token",
+    "default_model": "qwen3",
     "generate_key": true
   }
   ```
@@ -116,11 +117,14 @@ Returns system status, readiness probe states, and entity counts.
   ```json
   {
     "name": "interactive",
-    "tokens_per_hour": 1000000
+    "tokens_per_hour": 1000000,
+    "default_model": "qwen3"
   }
   ```
 - `DELETE /admin/api/quotas/{name}`
   Deletes a quota profile from Consul KV.
+
+`default_model` is optional in both payloads and is returned by the lists when set ([`CONSUL.md`](../concepts/CONSUL.md#consumers-consul-kv)).
 
 ### Budgets
 - `GET /admin/api/budgets`

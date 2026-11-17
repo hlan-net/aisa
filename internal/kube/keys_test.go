@@ -28,7 +28,6 @@ import (
 func splitHashes(v string) []string { return apikey.SplitHashes(v) }
 func hashKey(key string) string     { return apikey.Hash(key) }
 
-
 // memKV is Vault's KV v2 in memory: data goes through JSON, as it does to and from Vault.
 type memKV struct {
 	data     map[string][]byte
@@ -837,4 +836,90 @@ func TestAConsumerRemovedAfterItsSecretLosesItsHashes(t *testing.T) {
 	if got := kt.kv.hashes(t, "batch-jobs"); len(got) == 0 {
 		t.Error("a consumer with a broken declaration lost its keys")
 	}
+}
+
+type fakeProfiles struct {
+	loaded bool
+	models map[string]string
+}
+
+// DefaultModel answers as quotas.Profiles does: a profile that is not among the models is
+// not known.
+func (f *fakeProfiles) DefaultModel(name string) (string, bool) {
+	model, ok := f.models[name]
+	return model, f.loaded && ok
+}
+
+func TestDefaultModelInSecret(t *testing.T) {
+	profiles := &fakeProfiles{
+		loaded: true,
+		models: map[string]string{"interactive": "qwen3", "batch": "llama3.2", "plain": ""},
+	}
+	kt := newKeysTest(t, map[string]consumers.Declaration{
+		"chat-ui": {QuotaProfile: "interactive", Namespace: "chat", Secret: "aisa", DefaultModel: "gpt-4o"},
+		"jobs":    {QuotaProfile: "batch", Namespace: "jobs", Secret: "aisa"},
+		"cli":     {Namespace: "cli", Secret: "aisa"},
+	})
+	kt.keys.opts.Profiles = profiles
+	kt.keys.opts.DefaultQuotaProfile = "interactive"
+	kt.pass()
+
+	checkModels := func(ns, want string) {
+		t.Helper()
+		s := kt.secret(ns, "aisa")
+		if s == nil {
+			t.Fatalf("%s/aisa missing", ns)
+		}
+		for _, field := range []string{SecretModel, SecretLLMModel, SecretAisaModel} {
+			got, ok := s.Data[field]
+			if want == "" {
+				if ok {
+					t.Errorf("%s %s = %q, want absent", ns, field, got)
+				}
+			} else if string(got) != want {
+				t.Errorf("%s %s = %q, want %q", ns, field, got, want)
+			}
+		}
+	}
+
+	// Declaration default_model overrides profile default_model.
+	checkModels("chat", "gpt-4o")
+	// Quota profile supplies default_model when declaration omits it.
+	checkModels("jobs", "llama3.2")
+	// DefaultQuotaProfile supplies default_model when consumer names no profile.
+	checkModels("cli", "qwen3")
+
+	// Before profiles finish loading, existing model fields are preserved (not cleared).
+	profiles.loaded = false
+	kt.pass()
+	checkModels("jobs", "llama3.2")
+	profiles.loaded = true
+
+	// Tampered model fields are restored.
+	s := kt.secret("chat", "aisa").DeepCopy()
+	s.Data[SecretModel] = []byte("wrong")
+	delete(s.Data, SecretLLMModel)
+	if _, err := kt.k8s.CoreV1().Secrets("chat").Update(context.Background(), s, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	kt.pass()
+	checkModels("chat", "gpt-4o")
+
+	// A profile that is removed or broken says nothing about the model: the keys stay.
+	delete(profiles.models, "batch")
+	kt.pass()
+	checkModels("jobs", "llama3.2")
+	// A Secret created meanwhile has no model keys, and gets them once the profile is back.
+	kt.decls.valid["late"] = consumers.Declaration{QuotaProfile: "batch", Namespace: "late", Secret: "aisa"}
+	kt.pass()
+	checkModels("late", "")
+	profiles.models["batch"] = "llama3.2"
+	kt.pass()
+	checkModels("late", "llama3.2")
+
+	// Clearing default_model removes OPENAI_MODEL, LLM_MODEL, and AISA_MODEL from the Secret:
+	// the declaration no longer names a model, and its profile is there and names none.
+	kt.decls.valid["chat-ui"] = consumers.Declaration{QuotaProfile: "plain", Namespace: "chat", Secret: "aisa"}
+	kt.pass()
+	checkModels("chat", "")
 }

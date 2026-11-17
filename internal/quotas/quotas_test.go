@@ -539,3 +539,37 @@ aisa_quota_profiles_missing{source="default"} 0
 		t.Errorf("without a default: missing = %+v", m)
 	}
 }
+
+func TestProfileDefaultModel(t *testing.T) {
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := NewProfiles(nil, discard, ProfileOptions{})
+	if got, loaded := p.DefaultModel("batch"); loaded || got != "" {
+		t.Fatalf("before load: DefaultModel = (%q, %v), want (\"\", false)", got, loaded)
+	}
+
+	p.apply([]consul.Pair{
+		{Key: "batch", Value: []byte(`{"tokens_per_hour": 50000, "default_model": " llama3.2 "}`)},
+		{Key: "interactive", Value: []byte(`{"tokens_per_hour": 200000}`)},
+		{Key: "bad", Value: []byte(`{"tokens_per_hour": 100, "default_model": 123}`)},
+	})
+
+	if got, loaded := p.DefaultModel("batch"); !loaded || got != "llama3.2" {
+		t.Errorf("DefaultModel(batch) = (%q, %v), want (\"llama3.2\", true)", got, loaded)
+	}
+	if got, loaded := p.DefaultModel("interactive"); !loaded || got != "" {
+		t.Errorf("DefaultModel(interactive) = (%q, %v), want (\"\", true)", got, loaded)
+	}
+	// A profile that is not there or cannot be read says nothing about the model.
+	for _, name := range []string{"unknown", "bad", ""} {
+		if got, known := p.DefaultModel(name); known || got != "" {
+			t.Errorf("DefaultModel(%q) = (%q, %v), want (\"\", false)", name, got, known)
+		}
+	}
+	if _, err := p.Get("bad"); err == nil {
+		t.Error("expected invalid profile error for non-string default_model")
+	}
+	var nilProfiles *Profiles
+	if got, loaded := nilProfiles.DefaultModel("batch"); !loaded || got != "" {
+		t.Errorf("nil Profiles.DefaultModel = (%q, %v), want (\"\", true)", got, loaded)
+	}
+}

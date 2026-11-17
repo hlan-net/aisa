@@ -124,13 +124,14 @@ The proxy's chart must read the token again well before it expires: `apisix.cons
 ## Consumers: Consul KV
 
 ```
-aisa/consumers/<name>   {"quota_profile": "batch", "namespace": "news", "secret": "aisa"}
+aisa/consumers/<name>   {"quota_profile": "batch", "namespace": "news", "secret": "aisa", "default_model": "qwen3"}
 ```
 
 A consumer is declared here by the holder, and Vault holds only the hashes of its keys ([`VAULT.md`](./VAULT.md#consumer-credentials)). The declaration is a JSON object; every field is optional, and fields aisa does not know are ignored:
 
 - `quota_profile` names the consumer's token quota, `aisa/quotas/<profile>` below. Without it the consumer is denied (403 `no_quota`), unless `AISA_DEFAULT_QUOTA_PROFILE` names a default ([`quotas-and-budgets.md`](../features/quotas-and-budgets.md#token-quotas-v020)).
 - `namespace` and `secret`, together, say where the consumer's application runs and the Secret aisa writes its key into ([`KUBERNETES_OBJECTS.md`](./KUBERNETES_OBJECTS.md#the-consumers-secret)); one without the other is invalid. aisa issues the key, so its hash in Vault is aisa's to write; a consumer without them gets its key by hand.
+- `default_model` is an optional model name written into the consumer's Secret as `OPENAI_MODEL`, `LLM_MODEL` and `AISA_MODEL`; when omitted, the consumer's quota profile may supply one.
 - A key whose consumer is not declared does not authenticate, however valid its hash in Vault: the declaration is what makes a consumer exist. A declaration that is not valid JSON, or named `unknown`, is logged, counted in `aisa_consumer_declarations_invalid`, and its consumer's keys are answered 503 until it is fixed, so a typo does not lift a quota.
 - aisa follows the prefix with blocking queries, so a consumer declared or changed in Consul applies within seconds; its key, added in Vault, is picked up on the next reload or the first request with it ([`VAULT.md`](./VAULT.md#consumer-credentials)).
 
@@ -152,12 +153,12 @@ A name that is neither a model nor an alias is answered by the decision with 404
 aisa/pricing/<model>              {"input_per_1k": 0.0, "output_per_1k": 0.0, "currency": "EUR"}   for display only
 aisa/budgets/<consumer>           {"monthly_tokens": 5000000, "soft_ratio": 0.8, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}
 aisa/budgets/providers/<key>      the same, for everything that goes through a provider key (the ceiling above the consumers)
-aisa/quotas/<profile>             {"tokens_per_hour": 200000}
+aisa/quotas/<profile>             {"tokens_per_hour": 200000, "default_model": "qwen3"}
 aisa/state/<consumer>/<YYYY-MM>   persisted monthly tokens (written by aisa)
 ```
 
 - A model price (`aisa/pricing/<model>`) is a JSON object with `input_per_1k` and `output_per_1k` (non-negative numbers) and `currency` (a non-empty string such as `"EUR"`); other fields are ignored. A price entry that is not valid JSON or lacks these fields is logged and counted in `aisa_model_prices_invalid`, and its model has no `aisa_cost_total` series until it is fixed. `/readyz` reports `model_prices` until the first read.
-- A quota profile is a JSON object with `tokens_per_hour`, a non-negative integer; other fields are ignored. A profile without it, or one that is not valid JSON, is logged and counted in `aisa_quota_profiles_invalid`, and its consumers are denied with 503 until it is fixed; a profile that a consumer or the default names and that is not there is counted in `aisa_quota_profiles_missing`, with the same answer ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#token-quotas-v020)).
+- A quota profile is a JSON object with `tokens_per_hour`, a non-negative integer, and an optional string `default_model`; other fields are ignored. A profile without `tokens_per_hour`, or one that is not valid JSON, is logged and counted in `aisa_quota_profiles_invalid`, and its consumers are denied with 503 until it is fixed; a profile that a consumer or the default names and that is not there is counted in `aisa_quota_profiles_missing`, with the same answer ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#token-quotas-v020)).
 - A budget (`aisa/budgets/<consumer>`) is a JSON object with `monthly_tokens`, a non-negative integer; optionally `soft_ratio` (above 0, at most 1; 0.8 by default), `on_exhausted` (`reject`, the default, or `downgrade`) and `downgrade_to` (a model, required with `downgrade`); other fields are ignored. A budget that is not valid JSON or breaks a rule is logged and counted in `aisa_budgets_invalid`, and its consumer is denied with 503 on priced models until it is fixed. Budgets are in tokens; prices only turn tokens into currency for reports ([`../features/quotas-and-budgets.md`](../features/quotas-and-budgets.md#budgets-v030)).
 - A provider budget (`aisa/budgets/providers/<key>`) has the same fields and rules; `<key>` is the service meta `key` of the backends it bounds, the name of their secret under `secret/aisa/providers/`. It is not a consumer: a consumer named `providers` cannot have a budget.
 - `aisa/state/<consumer>/<YYYY-MM>` and `aisa/state/providers/<key>/<YYYY-MM>` are written by aisa, once a minute, with `{"tokens": N}`: the month's tokens, a copy of the counter in Redis. They are read at start and whenever Redis cannot be, and must not be edited by hand while aisa runs.

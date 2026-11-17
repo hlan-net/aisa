@@ -29,8 +29,11 @@ import (
 const (
 	SecretBaseURL     = "OPENAI_BASE_URL"
 	SecretKey         = "OPENAI_API_KEY"
+	SecretModel       = "OPENAI_MODEL"
+	SecretLLMModel    = "LLM_MODEL"
 	SecretAisaBaseURL = "AISA_BASE_URL"
 	SecretAisaKey     = "AISA_API_KEY"
+	SecretAisaModel   = "AISA_MODEL"
 )
 
 // The fields of a consumer's secret in Vault that aisa writes besides key_sha256, which the
@@ -74,6 +77,13 @@ type Snapshotter interface {
 	Snapshot() (valid map[string]consumers.Declaration, invalid map[string]bool, loaded bool)
 }
 
+// ProfileLookup returns the default model of a quota profile and whether it is known: false
+// while the profiles have not been read, or when the profile is not there or cannot be read.
+// quotas.Profiles implements it.
+type ProfileLookup interface {
+	DefaultModel(name string) (string, bool)
+}
+
 // KeysOptions configure Keys.
 type KeysOptions struct {
 	// Mount and Prefix name the consumers in Vault: <Mount>/<Prefix>/consumers/<name>.
@@ -82,6 +92,11 @@ type KeysOptions struct {
 	BaseURL string
 	// Install names this aisa install on the objects it writes: the namespace it runs in.
 	Install string
+	// Profiles and DefaultQuotaProfile supply a fallback default_model when the consumer
+	// declaration omits one. Optional: when Profiles is nil, only declaration default_model
+	// is used.
+	Profiles            ProfileLookup
+	DefaultQuotaProfile string
 	// Rotation is the age at which a key is replaced; 0 never replaces one for its age.
 	Rotation time.Duration
 	// Grace is how long a replaced key stays valid, so that pods that hold it can restart.
@@ -177,7 +192,8 @@ func (k *Keys) Reconcile(ctx context.Context) error {
 			}
 			continue
 		}
-		state, err := k.reconcileConsumer(ctx, names[0], t)
+		model := k.defaultModelFor(valid[names[0]])
+		state, err := k.reconcileConsumer(ctx, names[0], t, model)
 		if state != StateOK {
 			hold[names[0]] = true
 		}
@@ -243,9 +259,62 @@ func sortedTargets(m map[target][]string) []target {
 	return ts
 }
 
+// modelSetting is the default model a consumer's Secret is to carry. While it is not known
+// the Secret's model keys are left as they are: a profile that has not been read yet, is not
+// in Consul or cannot be parsed says nothing about the model, and must not remove one.
+type modelSetting struct {
+	value string
+	known bool
+}
+
+// apply sets the three model keys in data, or removes them when no model is set.
+func (m modelSetting) apply(data map[string][]byte) {
+	if !m.known {
+		return
+	}
+	for _, field := range []string{SecretModel, SecretLLMModel, SecretAisaModel} {
+		if m.value == "" {
+			delete(data, field)
+			continue
+		}
+		data[field] = []byte(m.value)
+	}
+}
+
+// inSync reports whether data carries what apply would write.
+func (m modelSetting) inSync(data map[string][]byte) bool {
+	if !m.known {
+		return true
+	}
+	for _, field := range []string{SecretModel, SecretLLMModel, SecretAisaModel} {
+		got, ok := data[field]
+		if m.value == "" && ok || m.value != "" && string(got) != m.value {
+			return false
+		}
+	}
+	return true
+}
+
+// defaultModelFor resolves the default model of a consumer: the one in its declaration, or
+// else the one of its quota profile, which is the default profile when it names none.
+func (k *Keys) defaultModelFor(decl consumers.Declaration) modelSetting {
+	if decl.DefaultModel != "" {
+		return modelSetting{value: decl.DefaultModel, known: true}
+	}
+	profile := decl.QuotaProfile
+	if profile == "" {
+		profile = k.opts.DefaultQuotaProfile
+	}
+	if k.opts.Profiles == nil || profile == "" {
+		return modelSetting{known: true}
+	}
+	value, known := k.opts.Profiles.DefaultModel(profile)
+	return modelSetting{value: value, known: known}
+}
+
 // reconcileConsumer brings one consumer's Secret and hashes in step
 // (KUBERNETES_OBJECTS.md, the table of states).
-func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (string, error) {
+func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target, model modelSetting) (string, error) {
 	if strings.Contains(name, "/") {
 		// Vault would put it under a folder, where the decision API does not look.
 		return StateError, errors.New("a consumer with a Secret may not have '/' in its name")
@@ -278,7 +347,7 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (st
 	changed := rec.clean(now, current, k.opts.Unwritten, k.opts.Grace)
 
 	if current != "" && slices.Contains(rec.hashes, current) {
-		return k.keep(ctx, name, t, rec, secret, current, changed)
+		return k.keep(ctx, name, t, rec, secret, current, changed, model)
 	}
 
 	reason := IssueMissing
@@ -289,7 +358,7 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (st
 	case rec.version == 0:
 		reason = IssueNew
 	}
-	if err := k.issue(ctx, name, t, rec, secret, reason); err != nil {
+	if err := k.issue(ctx, name, t, rec, secret, reason, model); err != nil {
 		return StateError, err
 	}
 	return StateOK, nil
@@ -297,7 +366,7 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target) (st
 
 // keep handles a Secret that holds a key aisa issued: it clears the key's marks, restores what
 // else was changed, and replaces the key when it is due.
-func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, current string, changed bool) (string, error) {
+func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, current string, changed bool, model modelSetting) (string, error) {
 	now := k.opts.Now()
 	if at, ok := rec.unwritten[current]; ok {
 		// The key reached the Secret, and the pass that wrote it did not clear its mark: it
@@ -321,12 +390,12 @@ func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, sec
 			return StateError, err
 		}
 	}
-	secret, err := k.restore(ctx, secret, name)
+	secret, err := k.restore(ctx, secret, name, model)
 	if err != nil {
 		return StateError, err
 	}
 	if k.opts.Rotation > 0 && now.Sub(rec.issuedAt) >= k.opts.Rotation {
-		if err := k.issue(ctx, name, t, rec, secret, IssueRotation); err != nil {
+		if err := k.issue(ctx, name, t, rec, secret, IssueRotation, model); err != nil {
 			return StateError, err
 		}
 	}
@@ -339,7 +408,7 @@ func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, sec
 // grace period. Until the key reaches the Secret nothing else changes: the key that the
 // consumer's Secret holds, the new one's or, while a move fails, the old one's, stays valid and,
 // when it is due, due, so a failed rotation is tried again.
-func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, reason string) error {
+func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, reason string, model modelSetting) error {
 	if r, ok := k.backoff[name]; ok && k.opts.Now().Before(r.at) {
 		return fmt.Errorf("the last attempt to write the Secret failed; the next one is at %s", r.at.UTC().Format(time.RFC3339))
 	}
@@ -354,7 +423,7 @@ func (k *Keys) issue(ctx context.Context, name string, t target, rec *record, se
 	if err := k.write(ctx, name, rec); err != nil {
 		return fmt.Errorf("make the new key valid: %w", err)
 	}
-	if err := k.writeSecret(ctx, name, t, secret, key); err != nil {
+	if err := k.writeSecret(ctx, name, t, secret, key, model); err != nil {
 		wait := min(max(k.backoff[name].wait*2, minRetry), maxRetry)
 		k.backoff[name] = retry{at: k.opts.Now().Add(wait), wait: wait}
 		return fmt.Errorf("write the new key to the Secret (next attempt in %s): %w", wait, err)
@@ -447,9 +516,9 @@ func (k *Keys) owns(s *corev1.Secret, name string) bool {
 }
 
 // restore puts back what aisa manages in a Secret it owns: both the OpenAI-compatible names
-// (OPENAI_BASE_URL, OPENAI_API_KEY) and the namespaced names (AISA_BASE_URL, AISA_API_KEY). It
-// returns the Secret as it is now.
-func (k *Keys) restore(ctx context.Context, s *corev1.Secret, name string) (*corev1.Secret, error) {
+// (OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL, LLM_MODEL) and the namespaced names
+// (AISA_BASE_URL, AISA_API_KEY, AISA_MODEL). It returns the Secret as it is now.
+func (k *Keys) restore(ctx context.Context, s *corev1.Secret, name string, model modelSetting) (*corev1.Secret, error) {
 	key := s.Data[SecretKey]
 	if len(key) == 0 {
 		key = s.Data[SecretAisaKey]
@@ -457,7 +526,8 @@ func (k *Keys) restore(ctx context.Context, s *corev1.Secret, name string) (*cor
 	if string(s.Data[SecretBaseURL]) == k.opts.BaseURL &&
 		string(s.Data[SecretAisaBaseURL]) == k.opts.BaseURL &&
 		bytes.Equal(s.Data[SecretKey], key) &&
-		bytes.Equal(s.Data[SecretAisaKey], key) {
+		bytes.Equal(s.Data[SecretAisaKey], key) &&
+		model.inSync(s.Data) {
 		return s, nil
 	}
 	next := s.DeepCopy()
@@ -468,6 +538,7 @@ func (k *Keys) restore(ctx context.Context, s *corev1.Secret, name string) (*cor
 	next.Data[SecretAisaBaseURL] = []byte(k.opts.BaseURL)
 	next.Data[SecretKey] = key
 	next.Data[SecretAisaKey] = key
+	model.apply(next.Data)
 	updated, err := k.k8s.CoreV1().Secrets(s.Namespace).Update(ctx, next, metav1.UpdateOptions{})
 	if err != nil {
 		return s, fmt.Errorf("restore the Secret: %w", err)
@@ -478,7 +549,7 @@ func (k *Keys) restore(ctx context.Context, s *corev1.Secret, name string) (*cor
 
 // writeSecret creates the Secret, or updates the one aisa owns, with the key. An update is
 // made on the version read, so it fails rather than undo a change it did not see.
-func (k *Keys) writeSecret(ctx context.Context, name string, t target, existing *corev1.Secret, key string) error {
+func (k *Keys) writeSecret(ctx context.Context, name string, t target, existing *corev1.Secret, key string, model modelSetting) error {
 	meta := metav1.ObjectMeta{
 		Name:      t.name,
 		Namespace: t.namespace,
@@ -497,6 +568,7 @@ func (k *Keys) writeSecret(ctx context.Context, name string, t target, existing 
 	}
 	secrets := k.k8s.CoreV1().Secrets(t.namespace)
 	if existing == nil {
+		model.apply(data)
 		_, err := secrets.Create(ctx, &corev1.Secret{ObjectMeta: meta, Type: corev1.SecretTypeOpaque, Data: data}, metav1.CreateOptions{})
 		return err
 	}
@@ -510,6 +582,7 @@ func (k *Keys) writeSecret(ctx context.Context, name string, t target, existing 
 		s.Data = map[string][]byte{}
 	}
 	maps.Copy(s.Data, data)
+	model.apply(s.Data)
 	_, err := secrets.Update(ctx, s, metav1.UpdateOptions{})
 	return err
 }
@@ -633,4 +706,3 @@ func setMarks(data map[string]any, field string, marks map[string]time.Time) {
 	}
 	data[field] = m
 }
-
