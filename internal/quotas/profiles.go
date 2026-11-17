@@ -143,18 +143,22 @@ func (p *Profiles) Get(name string) (Profile, error) {
 	return Profile{}, fmt.Errorf("%w %q", ErrUnknownProfile, name)
 }
 
-// DefaultModel returns the default model configured on the named profile, or "" if the profile
-// is not loaded, unknown, invalid, or has no default_model.
-func (p *Profiles) DefaultModel(name string) string {
-	if p == nil || name == "" {
-		return ""
+// DefaultModel returns the default model configured on the named profile and whether the
+// profiles have completed their first load. Before the first load it returns ("", false) so
+// callers can avoid clearing existing Secret fields during startup.
+func (p *Profiles) DefaultModel(name string) (string, bool) {
+	if p == nil {
+		return "", true
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if !p.loaded {
-		return ""
+		return "", false
 	}
-	return p.valid[name].DefaultModel
+	if name == "" {
+		return "", true
+	}
+	return p.valid[name].DefaultModel, true
 }
 
 // Ready returns nil once the profiles have been read and, when a default profile is set, it

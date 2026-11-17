@@ -839,12 +839,23 @@ func TestAConsumerRemovedAfterItsSecretLosesItsHashes(t *testing.T) {
 	}
 }
 
-type fakeProfiles map[string]string
+type fakeProfiles struct {
+	loaded bool
+	models map[string]string
+}
 
-func (f fakeProfiles) DefaultModel(name string) string { return f[name] }
+func (f *fakeProfiles) DefaultModel(name string) (string, bool) {
+	if !f.loaded {
+		return "", false
+	}
+	return f.models[name], true
+}
 
 func TestDefaultModelInSecret(t *testing.T) {
-	profiles := fakeProfiles{"interactive": "qwen3", "batch": "llama3.2"}
+	profiles := &fakeProfiles{
+		loaded: true,
+		models: map[string]string{"interactive": "qwen3", "batch": "llama3.2"},
+	}
 	kt := newKeysTest(t, map[string]consumers.Declaration{
 		"chat-ui": {QuotaProfile: "interactive", Namespace: "chat", Secret: "aisa", DefaultModel: "gpt-4o"},
 		"jobs":    {QuotaProfile: "batch", Namespace: "jobs", Secret: "aisa"},
@@ -878,6 +889,12 @@ func TestDefaultModelInSecret(t *testing.T) {
 	checkModels("jobs", "llama3.2")
 	// DefaultQuotaProfile supplies default_model when consumer names no profile.
 	checkModels("cli", "qwen3")
+
+	// Before profiles finish loading, existing model fields are preserved (not cleared).
+	profiles.loaded = false
+	kt.pass()
+	checkModels("jobs", "llama3.2")
+	profiles.loaded = true
 
 	// Tampered model fields are restored.
 	s := kt.secret("chat", "aisa").DeepCopy()
