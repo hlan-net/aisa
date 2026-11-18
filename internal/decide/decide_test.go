@@ -881,7 +881,7 @@ func checkAnswer(t *testing.T, rec *httptest.ResponseRecorder, m *metrics.Metric
 }
 
 func TestQuotaResponseHeaders(t *testing.T) {
-	l := &fakeLookup{consumers: map[string]consumers.Consumer{
+	l := fakeLookup{keys: map[string]consumers.Consumer{
 		"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"},
 	}}
 	for name, tc := range map[string]struct {
