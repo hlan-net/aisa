@@ -25,6 +25,10 @@ type RegistryOptions struct {
 	// RetryMin and RetryMax are the waits after a failed read of the descriptions; see
 	// consul.FollowOptions.
 	RetryMin, RetryMax time.Duration
+	// DefaultModelConsumers and DefaultModelProfiles supply configured default_model values
+	// to check against known models and aliases when the registry refreshes. Optional.
+	DefaultModelConsumers DefaultModelSource
+	DefaultModelProfiles  DefaultModelSource
 }
 
 // Outcome is what Resolve found for a name.
@@ -58,6 +62,9 @@ type Registry struct {
 	index       Index
 	// reported is the invalid descriptions last logged, so a change is logged once.
 	reported map[string]string
+	// unknownMu guards reportedUnknown, the unknown default_model entries last logged.
+	unknownMu       sync.Mutex
+	reportedUnknown map[string]string
 }
 
 // NewRegistry returns an empty registry. Call Run to fill it and keep it current.
@@ -68,7 +75,15 @@ func NewRegistry(catalog HealthReader, descs consul.Lister, log *slog.Logger, op
 	if opts.Refresh <= 0 {
 		opts.Refresh = 30 * time.Second
 	}
-	return &Registry{catalog: catalog, descs: descs, log: log, opts: opts, names: map[string]bool{}, reported: map[string]string{}}
+	return &Registry{
+		catalog:         catalog,
+		descs:           descs,
+		log:             log,
+		opts:            opts,
+		names:           map[string]bool{},
+		reported:        map[string]string{},
+		reportedUnknown: map[string]string{},
+	}
 }
 
 // Run reads the catalog and the descriptions, and keeps them current until ctx is done. When
@@ -100,17 +115,19 @@ func (r *Registry) Refresh(ctx context.Context) bool {
 		return false
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.names, r.catalogRead = Names(instances), true
 	r.reindex()
+	r.mu.Unlock()
+	r.logUnknownDefaultModels()
 	return true
 }
 
 func (r *Registry) applyDescriptions(pairs []consul.Pair) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.pairs, r.descsRead = pairs, true
 	r.reindex()
+	r.mu.Unlock()
+	r.logUnknownDefaultModels()
 }
 
 // reindex reads the descriptions against the catalog's names, with r.mu held, and logs the
@@ -134,6 +151,10 @@ func (r *Registry) reindex() {
 func (r *Registry) Resolve(name string) (string, Outcome) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.resolveLocked(name)
+}
+
+func (r *Registry) resolveLocked(name string) (string, Outcome) {
 	if !r.catalogRead || !r.descsRead {
 		return name, NotLoaded
 	}

@@ -126,6 +126,17 @@ spec:
               The config the proxy last promoted has no model route, so every model gets 503. The
               gauge is absent until the first promoted report after an aisa restart, so this is a
               promoted empty config, not a restart.
+        - alert: AisaDefaultModelUnknown
+          expr: aisa_default_models_unknown > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ `{{ $value }}` }} {{ `{{ $labels.source }}` }} default_model(s) are not known in Consul"
+            description: >-
+              A consumer declaration (source consumer) or quota profile (source profile) sets
+              default_model to a name that matches no known model or alias in Consul. Requests using
+              that fallback will fail with 404 model_not_found; aisa's log names it.
     - name: aisa.usage
       rules:
         - alert: AisaUsageMissing
