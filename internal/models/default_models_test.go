@@ -91,8 +91,18 @@ aisa_default_models_unknown{source="profile"} 1
 
 	// Fixing the profile model clears it on the next scrape.
 	profileModels["broken"] = "qwen3:8b"
+	consumerModels["empty"] = ""
 	r.logUnknownDefaultModels()
 	if got := r.UnknownDefaultModels(r.opts.DefaultModelProfiles); len(got) != 0 {
 		t.Errorf("after fix: profiles unknown = %v, want empty", got)
+	}
+
+	// Nil receiver or nil source returns nil safely.
+	var nilReg *Registry
+	if got := nilReg.UnknownDefaultModels(r.opts.DefaultModelConsumers); got != nil {
+		t.Errorf("nil Registry.UnknownDefaultModels = %v, want nil", got)
+	}
+	if got := r.UnknownDefaultModels(nil); got != nil {
+		t.Errorf("nil source UnknownDefaultModels = %v, want nil", got)
 	}
 }

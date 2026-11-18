@@ -573,3 +573,28 @@ func TestProfileDefaultModel(t *testing.T) {
 		t.Errorf("nil Profiles.DefaultModel = (%q, %v), want (\"\", true)", got, loaded)
 	}
 }
+
+func TestProfilesDefaultModels(t *testing.T) {
+	var nilProfiles *Profiles
+	if got, loaded := nilProfiles.DefaultModels(); loaded || got != nil {
+		t.Fatalf("nil Profiles.DefaultModels = (%v, %v), want (nil, false)", got, loaded)
+	}
+
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	p := NewProfiles(nil, discard, ProfileOptions{})
+	if got, loaded := p.DefaultModels(); loaded || got != nil {
+		t.Fatalf("before load: DefaultModels = (%v, %v), want (nil, false)", got, loaded)
+	}
+
+	p.apply([]consul.Pair{
+		{Key: "interactive", Value: []byte(`{"tokens_per_hour":200000,"default_model":"qwen3"}`)},
+		{Key: "batch", Value: []byte(`{"tokens_per_hour":50000}`)},
+		{Key: "bad", Value: []byte(`{not-json`)},
+	})
+
+	got, loaded := p.DefaultModels()
+	want := map[string]string{"interactive": "qwen3"}
+	if !loaded || !maps.Equal(got, want) {
+		t.Errorf("DefaultModels = (%v, %v), want (%v, true)", got, loaded, want)
+	}
+}

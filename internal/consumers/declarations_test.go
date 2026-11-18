@@ -3,6 +3,7 @@ package consumers
 import (
 	"context"
 	"errors"
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -199,5 +200,29 @@ func TestDeclarationsSnapshot(t *testing.T) {
 	delete(valid, "batch-jobs")
 	if again, _, _ := d.Snapshot(); len(again) != 1 {
 		t.Fatal("the snapshot shares its map with the declarations")
+	}
+}
+
+func TestDeclarationsDefaultModels(t *testing.T) {
+	var nilDecls *Declarations
+	if got, loaded := nilDecls.DefaultModels(); loaded || got != nil {
+		t.Fatalf("nil Declarations.DefaultModels = (%v, %v), want (nil, false)", got, loaded)
+	}
+
+	d := NewDeclarations(nil, quiet(), DeclarationOptions{})
+	if got, loaded := d.DefaultModels(); loaded || got != nil {
+		t.Fatalf("before load: DefaultModels = (%v, %v), want (nil, false)", got, loaded)
+	}
+
+	d.apply([]consul.Pair{
+		{Key: "chat-ui", Value: []byte(`{"quota_profile":"interactive","default_model":"qwen3"}`)},
+		{Key: "cli", Value: []byte(`{"quota_profile":"batch"}`)},
+		{Key: "bad", Value: []byte(`{not-json`)},
+	})
+
+	got, loaded := d.DefaultModels()
+	want := map[string]string{"chat-ui": "qwen3"}
+	if !loaded || !maps.Equal(got, want) {
+		t.Errorf("DefaultModels = (%v, %v), want (%v, true)", got, loaded, want)
 	}
 }
