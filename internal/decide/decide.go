@@ -33,6 +33,8 @@ const (
 	HeaderConsumer        = "X-Aisa-Consumer"
 	HeaderModel           = "X-Aisa-Model"
 	HeaderBudgetRemaining = "X-Aisa-Budget-Remaining"
+	HeaderQuotaRemaining  = "X-Aisa-Quota-Remaining"
+	HeaderQuotaReset      = "X-Aisa-Quota-Reset"
 	HeaderRequestID       = "X-Request-Id"
 )
 
@@ -173,7 +175,8 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 		}
 		consumer.QuotaProfile = h.opts.DefaultQuotaProfile
 	}
-	if d, denied := h.checkQuota(r.Context(), log, consumer); denied {
+	qh, d, denied := h.checkQuota(r.Context(), log, consumer)
+	if denied {
 		return h.deny(w, log, consumer.Name, d)
 	}
 	result := metrics.ResultAllow
@@ -244,6 +247,10 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 	if remaining != "" {
 		w.Header().Set(HeaderBudgetRemaining, remaining)
 	}
+	if qh.remaining != "" {
+		w.Header().Set(HeaderQuotaRemaining, qh.remaining)
+		w.Header().Set(HeaderQuotaReset, qh.reset)
+	}
 	w.WriteHeader(http.StatusOK)
 	h.metrics.Decisions.WithLabelValues(consumer.Name, result).Inc()
 	if result == metrics.ResultAllow {
@@ -263,17 +270,22 @@ func (h *Handler) resolve(name string) (string, bool) {
 	return model, outcome != models.Unknown
 }
 
-// checkQuota returns the denial of a consumer whose quota is exhausted or cannot be known.
-func (h *Handler) checkQuota(ctx context.Context, log *slog.Logger, c consumers.Consumer) (denial, bool) {
+type quotaHeaders struct {
+	remaining, reset string
+}
+
+// checkQuota returns the quota headers on allow, or the denial of a consumer whose quota is
+// exhausted or cannot be known.
+func (h *Handler) checkQuota(ctx context.Context, log *slog.Logger, c consumers.Consumer) (quotaHeaders, denial, bool) {
 	if h.quota == nil {
-		return denial{}, false
+		return quotaHeaders{}, denial{}, false
 	}
 	start := time.Now()
 	v := h.quota.Check(ctx, c)
 	h.metrics.DecideStageDuration.WithLabelValues(metrics.StageQuota).Observe(time.Since(start).Seconds())
 	switch v.Outcome {
 	case quotas.Exhausted:
-		return denial{
+		return quotaHeaders{}, denial{
 			status: http.StatusTooManyRequests, result: metrics.ResultDenyQuota,
 			typ: "tokens", code: "rate_limit_exceeded",
 			msg:        fmt.Sprintf("token quota exhausted: %d of %d tokens per hour used", v.Used, v.Limit),
@@ -282,12 +294,20 @@ func (h *Handler) checkQuota(ctx context.Context, log *slog.Logger, c consumers.
 	case quotas.Unavailable:
 		// Fail closed: a missing or broken profile must not lift the limit unnoticed.
 		log.Error("cannot check the quota", "consumer", c.Name, "profile", c.QuotaProfile, "error", v.Err)
-		return denial{
+		return quotaHeaders{}, denial{
 			status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
 			typ: "server_error", code: "quota_unavailable", msg: "aisa cannot check the token quota at the moment",
 		}, true
 	}
-	return denial{}, false
+	if v.Err != nil || c.QuotaProfile == "" {
+		return quotaHeaders{}, denial{}, false
+	}
+	rem := max(v.Limit-v.Used, 0)
+	reset := max(int64(math.Ceil(v.ResetAfter.Seconds())), 0)
+	return quotaHeaders{
+		remaining: strconv.FormatInt(rem, 10),
+		reset:     strconv.FormatInt(reset, 10),
+	}, denial{}, false
 }
 
 // denial is a negative answer: its status, its aisa_decisions_total result and its error body.

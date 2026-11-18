@@ -37,10 +37,12 @@ type Verdict struct {
 	// Limit and Used are the consumer's tokens per hour and those used in the window, when
 	// known.
 	Limit, Used int64
+	// ResetAfter is when the oldest non-zero bucket leaves the window (0 when Used == 0).
+	ResetAfter time.Duration
 	// RetryAfter is when enough tokens leave the window for the consumer to be allowed again;
 	// set when Exhausted.
 	RetryAfter time.Duration
-	// Err says why the quota is Unavailable.
+	// Err says why the quota is Unavailable (or why usage could not be read on fail-open Allow).
 	Err error
 }
 
@@ -94,10 +96,10 @@ func (q *Quota) Check(ctx context.Context, c consumers.Consumer) Verdict {
 	if err != nil {
 		q.metrics.QuotaErrors.WithLabelValues(metrics.QuotaOpCheck).Inc()
 		q.log.Warn("cannot read quota usage; allowing the request", "consumer", c.Name, "error", err)
-		return Verdict{Outcome: Allow, Limit: prof.TokensPerHour}
+		return Verdict{Outcome: Allow, Limit: prof.TokensPerHour, Err: err}
 	}
 	used := sum(usage)
-	v := Verdict{Outcome: Allow, Limit: prof.TokensPerHour, Used: used}
+	v := Verdict{Outcome: Allow, Limit: prof.TokensPerHour, Used: used, ResetAfter: resetAfter(usage, now)}
 	if used >= prof.TokensPerHour {
 		v.Outcome = Exhausted
 		v.RetryAfter = retryAfter(usage, prof.TokensPerHour, now)
@@ -105,20 +107,33 @@ func (q *Quota) Check(ctx context.Context, c consumers.Consumer) Verdict {
 	return v
 }
 
+func bucketExit(i, length int, now time.Time) time.Duration {
+	first := minute(now) - int64(length) + 1
+	leaves := time.Unix((first+int64(i)+buckets)*int64(bucket/time.Second), 0)
+	return max(leaves.Sub(now), time.Second)
+}
+
+// resetAfter is how long until the oldest non-zero bucket leaves the window, or 0 if empty.
+func resetAfter(usage []int64, now time.Time) time.Duration {
+	for i, n := range usage {
+		if n > 0 {
+			return bucketExit(i, len(usage), now)
+		}
+	}
+	return 0
+}
+
 // retryAfter is how long until the oldest buckets leave the window and take the usage below
 // limit. A limit of 0 is never reached, so it is the whole window.
 func retryAfter(usage []int64, limit int64, now time.Time) time.Duration {
 	used := sum(usage)
-	first := minute(now) - int64(len(usage)) + 1
 	for i, n := range usage {
 		// A saturated sum stays saturated: the true usage is not known below it.
 		if used < math.MaxInt64 {
 			used -= n
 		}
 		if used < limit {
-			// Bucket i counts until the minute that begins a window after its own.
-			leaves := time.Unix((first+int64(i)+buckets)*int64(bucket/time.Second), 0)
-			return max(leaves.Sub(now), time.Second)
+			return bucketExit(i, len(usage), now)
 		}
 	}
 	return window

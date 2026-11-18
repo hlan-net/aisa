@@ -95,11 +95,21 @@ func TestDecide(t *testing.T) {
 				t.Errorf("X-Aisa-Model = %q, want %q", got, tt.wantModel)
 			}
 			wantBudget := ""
+			wantQuotaRemaining := ""
+			wantQuotaReset := ""
 			if tt.wantStatus == http.StatusOK {
 				wantBudget = "1000000" // tokens
+				wantQuotaRemaining = "200000"
+				wantQuotaReset = "3600"
 			}
 			if got := resp.Header.Get("X-Aisa-Budget-Remaining"); got != wantBudget {
 				t.Errorf("X-Aisa-Budget-Remaining = %q, want %q", got, wantBudget)
+			}
+			if got := resp.Header.Get("X-Aisa-Quota-Remaining"); got != wantQuotaRemaining {
+				t.Errorf("X-Aisa-Quota-Remaining = %q, want %q", got, wantQuotaRemaining)
+			}
+			if got := resp.Header.Get("X-Aisa-Quota-Reset"); got != wantQuotaReset {
+				t.Errorf("X-Aisa-Quota-Reset = %q, want %q", got, wantQuotaReset)
 			}
 			if tt.wantStatus != http.StatusOK {
 				var e struct {

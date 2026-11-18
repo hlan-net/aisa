@@ -165,8 +165,12 @@ expect_in_route() {
     echo "ok: $what"
 }
 expect_in_route "the default timeout of 300 s" "$QWEN3_ROUTE" '^        timeout: 300000$'
-expect_in_route "the budget header goes upstream from the decision" 'client' 'upstream_headers: .X-Aisa-Consumer, X-Aisa-Model, X-Aisa-Budget-Remaining.$'
-expect_in_route "the budget header is copied to the client's response" 'client' '^            X-Aisa-Budget-Remaining: \$http_x_aisa_budget_remaining$'
+expect_in_route "the budget and quota headers go upstream from the decision" 'client' 'upstream_headers: .X-Aisa-Consumer, X-Aisa-Model, X-Aisa-Budget-Remaining, X-Aisa-Quota-Remaining, X-Aisa-Quota-Reset.$'
+expect_in_route "the request ID is copied to every client response" 'client' '^            X-Aisa-Request-Id: \$request_id$'
+expect_in_route "the budget header is copied to the client's response" "$QWEN3_ROUTE" 'set_if("X-Aisa-Budget-Remaining", ctx.var.aisa_budget_remaining)'
+expect_in_route "the quota remaining header is copied to the client's response" "$QWEN3_ROUTE" 'set_if("X-Aisa-Quota-Remaining", ctx.var.aisa_quota_remaining)'
+expect_in_route "the quota reset header is copied to the client's response" "$QWEN3_ROUTE" 'set_if("X-Aisa-Quota-Reset", ctx.var.aisa_quota_reset)'
+expect_in_route "the quota remaining header is copied on no-backend responses" 'no-backend' 'set_if("X-Aisa-Quota-Remaining", ngx.var.http_x_aisa_quota_remaining)'
 expect_in_route "a fast failure is retried on another instance (S11)" "$QWEN3_ROUTE" '^        fallback_strategy: \[http_5xx\]$'
 expect_in_route "a slow failure is not retried (S11)" "$QWEN3_ROUTE" '^        retry_on_failure_within_ms: 5000$'
 expect_in_route "a chat route calls the backend's chat path" "$QWEN3_ROUTE" 'endpoint: "http://mock-local:8080/v1/chat/completions"'

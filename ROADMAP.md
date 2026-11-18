@@ -93,9 +93,9 @@ Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/conc
 | Default model in Secret | Consumer declaration or quota profile carries `default_model`, written to Secret as `OPENAI_MODEL` / `LLM_MODEL` / `AISA_MODEL` for clean client fallbacks | US-1 (done, [#119](https://github.com/hlan-net/aisa/pull/119)) |
 | Namespaced keys in Secret | Secret publishes `AISA_BASE_URL` / `AISA_API_KEY` / `AISA_MODEL` alongside `OPENAI_*` to prevent collisions with direct provider credentials | US-1 (`AISA_BASE_URL` and `AISA_API_KEY` in v0.2.1; `AISA_MODEL` with `default_model`, [#119](https://github.com/hlan-net/aisa/pull/119)) |
 | Enriched Level 1 discovery | Return `capabilities` (e.g. tools, vision) and `context_length` in `GET /v1/models` so pods with `automountServiceAccountToken: false` need no CRD access | US-1 |
-| Pre-emptive quota headers | Return `X-Aisa-Quota-Remaining` and `X-Aisa-Quota-Reset` on inference responses; add consumer quota inspection endpoint | US-1 |
+| Pre-emptive quota headers | Return `X-Aisa-Quota-Remaining` and `X-Aisa-Quota-Reset` on inference responses; add consumer quota inspection endpoint | US-1 (response headers done; consumer quota inspection endpoint remains) |
 | Key deprecation warning | Return `X-Aisa-Key-Deprecated: <expiry>` during the rotation grace window, and publish `AISA_KEY_ROTATED_AT` in Secret | US-1 |
-| Trace correlation | Pass `X-Aisa-Request-Id` on proxy responses to correlate application traces with AISA access logs and metrics | US-1 |
+| Trace correlation | Pass `X-Aisa-Request-Id` on proxy responses to correlate application traces with AISA access logs and metrics | US-1 (done) |
 | Consumer self-declaration | Namespace-scoped `Consumer` CRD or Deployment annotation (`aisa.hlan.net/consumer`) for GitOps-native registration from app charts | US-1 |
 | Anthropic-native passthrough | `/v1/messages` endpoint preserving prompt caching (`cache_control`) for long system prompts | US-1, US-2 |
 

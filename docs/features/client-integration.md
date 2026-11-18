@@ -184,6 +184,15 @@ AISA automatically rotates consumer API keys on a configured schedule (default: 
        return OpenAI(api_key=api_key, base_url=base_url)
    ```
 
+### Response Headers
+
+Every inference response from the proxy includes headers for tracing and client-side rate/budget awareness:
+
+- `X-Aisa-Request-Id`: The proxy-generated request ID (sent on every response, including errors and fail-open responses), matching `request_id` in AISA access logs and usage events.
+- `X-Aisa-Budget-Remaining`: Remaining tokens in the consumer's monthly budget (when the consumer has a budget).
+- `X-Aisa-Quota-Remaining`: Remaining tokens in the consumer's sliding quota window (when quotas are enabled and Redis answered).
+- `X-Aisa-Quota-Reset`: Whole seconds until the oldest usage in the current sliding window expires (`0` when the window is empty; omitted when quotas are disabled or Redis failed open).
+
 ### Helm Chart Values (`values.yaml`)
 
 Allow operators to toggle between in-cluster AISA and direct provider configuration:
