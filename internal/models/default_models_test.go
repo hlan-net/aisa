@@ -26,7 +26,7 @@ func TestUnknownDefaultModels(t *testing.T) {
 	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
 	catalog := fakeHealthReader{
 		instances: []consul.Instance{
-			{ID: "b1", Status: "passing", Meta: map[string]string{"models": "qwen3"}},
+			{Meta: map[string]string{"models": "qwen3"}},
 		},
 	}
 	consumerModels := map[string]string{

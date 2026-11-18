@@ -66,22 +66,26 @@ func (r *Registry) logUnknownDefaultModels() {
 	if r.opts.DefaultModelConsumers == nil && r.opts.DefaultModelProfiles == nil {
 		return
 	}
+	r.unknownMu.Lock()
+	defer r.unknownMu.Unlock()
 	current := map[string]string{}
-	recordSource := func(source string, src DefaultModelSource) {
-		unknown := r.UnknownDefaultModels(src)
+	for _, entry := range []struct {
+		source string
+		src    DefaultModelSource
+	}{
+		{"consumer", r.opts.DefaultModelConsumers},
+		{"profile", r.opts.DefaultModelProfiles},
+	} {
+		unknown := r.UnknownDefaultModels(entry.src)
 		for _, owner := range slices.Sorted(maps.Keys(unknown)) {
 			model := unknown[owner]
-			key := source + ":" + owner
+			key := entry.source + ":" + owner
 			current[key] = model
 			if r.reportedUnknown[key] != model {
 				r.log.Warn("default_model matches no known model or alias in Consul",
-					"source", source, "name", owner, "default_model", model)
+					"source", entry.source, "name", owner, "default_model", model)
 			}
 		}
 	}
-	r.unknownMu.Lock()
-	defer r.unknownMu.Unlock()
-	recordSource("consumer", r.opts.DefaultModelConsumers)
-	recordSource("profile", r.opts.DefaultModelProfiles)
 	r.reportedUnknown = current
 }
