@@ -280,8 +280,8 @@ response_header() {
 expect "the client gets X-Aisa-Budget-Remaining from the decision" "1000000" "$(response_header x-aisa-budget-remaining)"
 expect "the client gets X-Aisa-Quota-Remaining from the decision" "200000" "$(response_header x-aisa-quota-remaining)"
 expect "the client gets X-Aisa-Quota-Reset from the decision" "3600" "$(response_header x-aisa-quota-reset)"
-req_id=$(response_header x-aisa-request-id -H 'X-Aisa-Request-Id: spoofed-id')
-if [ -z "$req_id" ] || [ "$req_id" = "spoofed-id" ]; then
+req_id=$(response_header x-aisa-request-id -H 'X-Aisa-Request-Id: spoofed-id' -H 'X-Request-Id: spoofed-req-id')
+if [ -z "$req_id" ] || [ "$req_id" = "spoofed-id" ] || [ "$req_id" = "spoofed-req-id" ]; then
     fail "expected proxy-generated X-Aisa-Request-Id, got '$req_id'"
 fi
 ok "the client gets X-Aisa-Request-Id from the proxy (spoofed value replaced)"
