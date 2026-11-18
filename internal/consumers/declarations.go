@@ -113,6 +113,25 @@ func (d *Declarations) Snapshot() (valid map[string]Declaration, invalid map[str
 	return valid, invalid, d.loaded
 }
 
+// DefaultModels returns each valid consumer declaration's non-empty default_model, and
+// whether declarations have been read at least once.
+func (d *Declarations) DefaultModels() (map[string]string, bool) {
+	if d == nil {
+		return nil, false
+	}
+	valid, _, loaded := d.Snapshot()
+	if !loaded {
+		return nil, false
+	}
+	out := make(map[string]string)
+	for name, decl := range valid {
+		if decl.DefaultModel != "" {
+			out[name] = decl.DefaultModel
+		}
+	}
+	return out, true
+}
+
 // Ready returns nil once the declarations have been read, for aisa's readiness.
 func (d *Declarations) Ready(context.Context) error {
 	d.mu.RLock()

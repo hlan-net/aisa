@@ -165,18 +165,6 @@ func run(args []string) error {
 		pricing.Options{OnLoad: func(s pricing.LoadStats) { observePrices(m, s) }})
 	go prices.Run(ctx)
 
-	// The model names: which are models, and which are aliases of one (#89).
-	registry := models.NewRegistry(cc,
-		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
-		log.With("component", "models"), models.RegistryOptions{Service: backendService})
-	go registry.Run(ctx)
-
-	checks := []server.Check{
-		{Name: "consumers", Probe: store.Ready},
-		{Name: "consumer_declarations", Probe: declarations.Ready},
-		{Name: "model_prices", Probe: prices.Ready},
-		{Name: "models", Probe: registry.Ready},
-	}
 	// Interfaces stay nil without quotas, not a nil *quotas.Quota inside them.
 	var (
 		quota           decide.QuotaChecker
@@ -187,6 +175,7 @@ func run(args []string) error {
 		providerCharger ledger.ProviderCharger
 		budgetUsage     admin.UsageReporter
 		profileLookup   kube.ProfileLookup
+		profiles        *quotas.Profiles
 	)
 	if !cfg.QuotasEnabled() {
 		log.Warn("token quotas and budgets are off: set AISA_REDIS_ADDR to turn them on")
@@ -194,39 +183,59 @@ func run(args []string) error {
 	// The profiles are read without quotas too when aisa writes Secrets: a profile carries
 	// the default model of its consumers (docs/concepts/KUBERNETES_OBJECTS.md).
 	if cfg.QuotasEnabled() || cfg.Kubernetes.Enabled {
-		profiles := newQuotaProfiles(cfg, cc, declarations, m, log.With("component", "quotas"))
+		profiles = newQuotaProfiles(cfg, cc, declarations, m, log.With("component", "quotas"))
 		if err := m.Register(profiles.Collectors()...); err != nil {
 			return fmt.Errorf("quota profile metrics: %w", err)
 		}
 		go profiles.Run(ctx)
 		profileLookup = profiles
+	}
 
-		if cfg.QuotasEnabled() {
-			rdb := redis.NewClient(&redis.Options{
-				Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password,
-			})
-			defer func() { _ = rdb.Close() }()
-			q := quotas.New(profiles, quotas.NewWindow(rdb, "aisa:"), m, log.With("component", "quotas"), quotas.Options{})
-			quota, charger = q, q
-			checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
+	// The model names: which are models, and which are aliases of one (#89).
+	registry := models.NewRegistry(cc,
+		consul.KVPrefix{Client: cc, Prefix: cfg.Consul.Prefix + "/models/", What: "model descriptions"},
+		log.With("component", "models"), models.RegistryOptions{
+			Service:               backendService,
+			DefaultModelConsumers: declarations.DefaultModels,
+			DefaultModelProfiles:  profiles.DefaultModels,
+		})
+	if err := m.Register(registry.DefaultModelCollectors(declarations.DefaultModels, profiles.DefaultModels)...); err != nil {
+		return fmt.Errorf("default model metrics: %w", err)
+	}
+	go registry.Run(ctx)
 
-			// The budgets count the months in the same Redis, and keep a copy of the totals in
-			// Consul KV (docs/features/quotas-and-budgets.md, Budgets).
-			monthly, budgetSet := newBudgets(cfg, cc, rdb, prices, m, log.With("component", "budgets"))
-			go budgetSet.Run(ctx)
-			go monthly.Run(ctx)
-			budget, budgetCharger, budgetUsage = monthly, monthly, monthly
-			checks = append(checks, server.Check{Name: "budgets", Probe: budgetSet.Ready})
+	checks := []server.Check{
+		{Name: "consumers", Probe: store.Ready},
+		{Name: "consumer_declarations", Probe: declarations.Ready},
+		{Name: "model_prices", Probe: prices.Ready},
+		{Name: "models", Probe: registry.Ready},
+	}
 
-			// The ceiling above the consumers (#33): a budget per provider key, applied through
-			// the catalog, which says which keys serve a model.
-			ceiling, providerSet, providerMonthly, catalog := newCeiling(cfg, cc, rdb, m, log.With("component", "budgets"))
-			go providerSet.Run(ctx)
-			go providerMonthly.Run(ctx)
-			go catalog.Run(ctx)
-			provider, providerCharger = ceiling, ceiling
-			checks = append(checks, server.Check{Name: "provider_budgets", Probe: ceiling.Ready})
-		}
+	if cfg.QuotasEnabled() {
+		rdb := redis.NewClient(&redis.Options{
+			Addr: cfg.Redis.Addr, Username: cfg.Redis.Username, Password: cfg.Redis.Password,
+		})
+		defer func() { _ = rdb.Close() }()
+		q := quotas.New(profiles, quotas.NewWindow(rdb, "aisa:"), m, log.With("component", "quotas"), quotas.Options{})
+		quota, charger = q, q
+		checks = append(checks, server.Check{Name: "quota_profiles", Probe: profiles.Ready})
+
+		// The budgets count the months in the same Redis, and keep a copy of the totals in
+		// Consul KV (docs/features/quotas-and-budgets.md, Budgets).
+		monthly, budgetSet := newBudgets(cfg, cc, rdb, prices, m, log.With("component", "budgets"))
+		go budgetSet.Run(ctx)
+		go monthly.Run(ctx)
+		budget, budgetCharger, budgetUsage = monthly, monthly, monthly
+		checks = append(checks, server.Check{Name: "budgets", Probe: budgetSet.Ready})
+
+		// The ceiling above the consumers (#33): a budget per provider key, applied through
+		// the catalog, which says which keys serve a model.
+		ceiling, providerSet, providerMonthly, catalog := newCeiling(cfg, cc, rdb, m, log.With("component", "budgets"))
+		go providerSet.Run(ctx)
+		go providerMonthly.Run(ctx)
+		go catalog.Run(ctx)
+		provider, providerCharger = ceiling, ceiling
+		checks = append(checks, server.Check{Name: "provider_budgets", Probe: ceiling.Ready})
 	}
 
 	var adminHandler http.Handler

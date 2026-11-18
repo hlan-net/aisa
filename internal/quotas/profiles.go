@@ -157,6 +157,26 @@ func (p *Profiles) DefaultModel(name string) (string, bool) {
 	return pr.DefaultModel, p.loaded && ok
 }
 
+// DefaultModels returns each valid quota profile's non-empty default_model, and whether
+// profiles have been read at least once.
+func (p *Profiles) DefaultModels() (map[string]string, bool) {
+	if p == nil {
+		return nil, false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if !p.loaded {
+		return nil, false
+	}
+	out := make(map[string]string)
+	for name, pr := range p.valid {
+		if pr.DefaultModel != "" {
+			out[name] = pr.DefaultModel
+		}
+	}
+	return out, true
+}
+
 // Ready returns nil once the profiles have been read and, when a default profile is set, it
 // has been among them at some load, for aisa's readiness: a fresh install whose default names
 // no profile never becomes ready. A default that is removed later is reported by Missing, not
