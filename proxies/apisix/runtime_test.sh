@@ -265,19 +265,32 @@ grep -q 'provider error 401, answered as 502 provider_error' <<<"$logs" ||
 ok "account isolation: what the provider's error was is in the gateway's log, for the holder"
 expect "account isolation: no text of the provider's in the gateway's log" "0" "$(grep -c -E 'sk-mock|org-mock' <<<"$logs" || true)"
 
-echo "== the budget header (contract 1, proxy rule 6)"
-# The stub answers every decision with X-Aisa-Budget-Remaining: 1000000. The client gets it on
-# the answer, and only aisa's: a client's own value is removed before the decision (rule 1).
-budget_header() {
+echo "== budget, quota and request-id headers (contract 1, proxy rule 6)"
+# The stub answers every decision with X-Aisa-Budget-Remaining: 1000000,
+# X-Aisa-Quota-Remaining: 200000, and X-Aisa-Quota-Reset: 3600. The client gets them
+# and X-Aisa-Request-Id on the answer, and only aisa/proxy's: a client's own X-Aisa-*
+# headers are removed before the decision (rule 1).
+response_header() {
+    local hdr=$1
+    shift
     curl -sS -o /dev/null -D - -H "$CHAT_UI" -H "$JSON" "$@" \
         -d '{"model":"qwen3","messages":[{"role":"user","content":"hello there"}]}' \
-        "$PROXY/v1/chat/completions" | tr -d '\r' | awk -F': ' 'tolower($1) == "x-aisa-budget-remaining" { print $2 }'
+        "$PROXY/v1/chat/completions" | tr -d '\r' | awk -F': ' -v h="$hdr" 'tolower($1) == h { print $2 }'
 }
-expect "the client gets X-Aisa-Budget-Remaining from the decision" "1000000" "$(budget_header)"
+expect "the client gets X-Aisa-Budget-Remaining from the decision" "1000000" "$(response_header x-aisa-budget-remaining)"
+expect "the client gets X-Aisa-Quota-Remaining from the decision" "200000" "$(response_header x-aisa-quota-remaining)"
+expect "the client gets X-Aisa-Quota-Reset from the decision" "3600" "$(response_header x-aisa-quota-reset)"
+req_id=$(response_header x-aisa-request-id -H 'X-Aisa-Request-Id: spoofed-id')
+if [ -z "$req_id" ] || [ "$req_id" = "spoofed-id" ]; then
+    fail "expected proxy-generated X-Aisa-Request-Id, got '$req_id'"
+fi
+ok "the client gets X-Aisa-Request-Id from the proxy (spoofed value replaced)"
 expect "a client's own X-Aisa-Budget-Remaining is replaced by the decision's" "1000000" \
-    "$(budget_header -H 'X-Aisa-Budget-Remaining: 999')"
-expect "the backend does not get X-Aisa-Budget-Remaining" "" \
-    "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase | select(. == "x-aisa-budget-remaining")')"
+    "$(response_header x-aisa-budget-remaining -H 'X-Aisa-Budget-Remaining: 999')"
+expect "a client's own X-Aisa-Quota-Remaining is replaced by the decision's" "200000" \
+    "$(response_header x-aisa-quota-remaining -H 'X-Aisa-Quota-Remaining: 999')"
+expect "the backend does not get X-Aisa-* headers" "" \
+    "$(curl -fsS "$MOCK_LOCAL/debug/last-request" | jq -r '.headers | keys[] | ascii_downcase | select(startswith("x-aisa-"))')"
 
 echo "== a model loses its last backend"
 curl -fsS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/runtime-test"

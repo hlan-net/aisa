@@ -879,3 +879,52 @@ func checkAnswer(t *testing.T, rec *httptest.ResponseRecorder, m *metrics.Metric
 		t.Errorf("aisa_decisions_total{chat-ui,%s} = %v, want 1", result, n)
 	}
 }
+
+func TestQuotaResponseHeaders(t *testing.T) {
+	l := &fakeLookup{consumers: map[string]consumers.Consumer{
+		"key-chat": {Name: "chat-ui", QuotaProfile: "interactive"},
+	}}
+	for name, tc := range map[string]struct {
+		quota         QuotaChecker
+		wantRemaining string
+		wantReset     string
+	}{
+		"allow with usage": {
+			quota:         &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Allow, Limit: 1000, Used: 250, ResetAfter: 125 * time.Second}},
+			wantRemaining: "750",
+			wantReset:     "125",
+		},
+		"allow empty window": {
+			quota:         &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Allow, Limit: 1000, Used: 0, ResetAfter: 0}},
+			wantRemaining: "1000",
+			wantReset:     "0",
+		},
+		"fail-open redis error omits headers": {
+			quota:         &fakeQuota{verdict: quotas.Verdict{Outcome: quotas.Allow, Limit: 1000, Err: errors.New("redis down")}},
+			wantRemaining: "",
+			wantReset:     "",
+		},
+		"quotas disabled omits headers": {
+			quota:         nil,
+			wantRemaining: "",
+			wantReset:     "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := New(l, tc.quota, metrics.New("test"), slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
+			req := httptest.NewRequest(http.MethodPost, "/v1/decide", strings.NewReader(`{"model":"qwen3"}`))
+			req.Header.Set("Authorization", "Bearer key-chat")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if got := rec.Header().Get(HeaderQuotaRemaining); got != tc.wantRemaining {
+				t.Errorf("%s = %q, want %q", HeaderQuotaRemaining, got, tc.wantRemaining)
+			}
+			if got := rec.Header().Get(HeaderQuotaReset); got != tc.wantReset {
+				t.Errorf("%s = %q, want %q", HeaderQuotaReset, got, tc.wantReset)
+			}
+		})
+	}
+}

@@ -598,3 +598,31 @@ func TestProfilesDefaultModels(t *testing.T) {
 		t.Errorf("DefaultModels = (%v, %v), want (%v, true)", got, loaded, want)
 	}
 }
+
+func TestQuotaResetAfter(t *testing.T) {
+	now := time.Date(2026, 9, 29, 12, 30, 20, 0, time.UTC)
+	c := &fakeCounter{}
+	q := New(loaded(consul.Pair{Key: "batch", Value: []byte(`{"tokens_per_hour": 100}`)}), c,
+		metrics.New("test"), discard, Options{Now: func() time.Time { return now }})
+	cons := consumers.Consumer{Name: "chat-ui", QuotaProfile: "batch"}
+
+	// Empty window: ResetAfter == 0.
+	c.usage = make([]int64, buckets)
+	if v := q.Check(context.Background(), cons); v.Outcome != Allow || v.ResetAfter != 0 || v.Err != nil {
+		t.Fatalf("empty window: %+v", v)
+	}
+
+	// Oldest non-zero bucket 30 minutes ago -> leaves in 29m40s (12:30:20 -> 13:00:00).
+	c.usage[buckets-31] = 25
+	v := q.Check(context.Background(), cons)
+	want := 30*time.Minute - 20*time.Second
+	if v.Outcome != Allow || v.Used != 25 || v.ResetAfter != want {
+		t.Fatalf("non-empty window: got (%+v), want ResetAfter=%v", v, want)
+	}
+
+	// Redis error: Err != nil so callers do not emit stale/estimated quota headers.
+	c.err = errors.New("redis down")
+	if v := q.Check(context.Background(), cons); v.Outcome != Allow || v.Err == nil {
+		t.Fatalf("redis error: %+v", v)
+	}
+}
