@@ -238,7 +238,7 @@ func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.stream(w, r, id, created, req.Model, u, finish, includeUsage)
+	s.stream(w, r, completion{id: id, created: created, model: req.Model, usage: u, finish: finish, includeUsage: includeUsage})
 }
 
 // embeddingVector is the vector of every input: the mock models no meaning, only the shape.
@@ -298,9 +298,20 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// completion is what a streamed answer is made of.
+type completion struct {
+	id      string
+	created int64
+	model   string
+	usage   usage
+	finish  string
+	// includeUsage: the client asked for the usage, which comes in a last chunk.
+	includeUsage bool
+}
+
 // stream writes an OpenAI-style server-sent event stream with one chunk per token.
-func (s *server) stream(w http.ResponseWriter, r *http.Request, id string, created int64, model string,
-	u usage, finish string, includeUsage bool) {
+func (s *server) stream(w http.ResponseWriter, r *http.Request, ans completion) {
+	id, created, model, u, finish, includeUsage := ans.id, ans.created, ans.model, ans.usage, ans.finish, ans.includeUsage
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		devutil.WriteOpenAIError(w, http.StatusInternalServerError, "server_error", "no_flush", "streaming unsupported")
