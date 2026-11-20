@@ -9,7 +9,10 @@ export VAULT_TOKEN="${VAULT_TOKEN:-dev-root}"
 
 until vault status >/dev/null 2>&1; do sleep 1; done
 
-sha256() { printf %s "$1" | sha256sum | cut -d' ' -f1; }
+sha256() {
+    sha256_of=$1
+    printf %s "$sha256_of" | sha256sum | cut -d' ' -f1
+}
 
 vault kv put secret/aisa/consumers/chat-ui key_sha256="$(sha256 dev-key-chat-ui)"
 vault kv put secret/aisa/consumers/batch-jobs key_sha256="$(sha256 dev-key-batch-jobs)"

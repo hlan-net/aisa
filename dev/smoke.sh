@@ -26,7 +26,8 @@ fail() { echo "FAIL $*" >&2; exit 1; }
 
 # expect <description> <expected> <actual>
 expect() {
-    if [[ "$2" = "$3" ]]; then ok "$1"; else fail "$1: want '$2', got '$3'"; fi
+    local what=$1 want=$2 got=$3
+    if [[ "$want" = "$got" ]]; then ok "$what"; else fail "$what: want '$want', got '$got'"; fi
 }
 
 # chat <key> <json body> [extra curl args...]: prints "<status>\n<body>"
@@ -150,7 +151,8 @@ cost_before=${cost_before:-0.000000}
 # The budgets count the calendar month in aisa's time zone, UTC in the dev stack.
 period=$(date -u +%Y-%m)
 budget_metric() { # budget_metric <metric> <consumer>: the consumer's gauge for this month
-    curl -fsS "$AISA/metrics" | awk -v n="$1" -v c="$2" -v p="$period" '
+    local metric=$1 consumer=$2
+    curl -fsS "$AISA/metrics" | awk -v n="$metric" -v c="$consumer" -v p="$period" '
         $1 ~ "^" n "{" && $1 ~ "consumer=\"" c "\"" && $1 ~ "period=\"" p "\"" { print $2 + 0 }' | head -n1
 }
 spent_before=$(budget_metric aisa_budget_spent chat-ui)
@@ -167,7 +169,8 @@ expect "aisa: the priced tokens count towards the budget, the free ones above di
     "$((spent_before + 3000))" "$(budget_metric aisa_budget_spent chat-ui)"
 # decide_remaining <key> <json body>: the X-Aisa-Budget-Remaining of the decision
 decide_remaining() {
-    curl -sS -o /dev/null -D - -H "Authorization: Bearer $1" -H "$JSON" -d "$2" "$AISA/v1/decide" |
+    local key=$1 body=$2
+    curl -sS -o /dev/null -D - -H "Authorization: Bearer $key" -H "$JSON" -d "$body" "$AISA/v1/decide" |
         tr -d '\r' | awk -F': ' 'tolower($1) == "x-aisa-budget-remaining" { print $2 }'
 }
 expect "aisa: the decision says what remains of the budget" \
@@ -178,7 +181,10 @@ expect "aisa: a consumer without a budget gets no such header" "" \
 # its free ones served, and with on_exhausted reject the priced ones are refused. aisa follows
 # aisa/budgets/ with a blocking query, so a change applies within seconds.
 batch_budget=$(curl -fsS "$CONSUL/v1/kv/aisa/budgets/batch-jobs?raw")
-budget_put() { curl -fsS -o /dev/null -X PUT -d "$1" "$CONSUL/v1/kv/aisa/budgets/batch-jobs"; }
+budget_put() {
+    local budget=$1
+    curl -fsS -o /dev/null -X PUT -d "$budget" "$CONSUL/v1/kv/aisa/budgets/batch-jobs"
+}
 budget_put '{"monthly_tokens": 1, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}'
 expect "aisa: usage of a priced model by batch-jobs accepted" "200" \
     "$(send_usage "{\"request_id\":\"${smoke_run_id}-budget\",\"consumer\":\"batch-jobs\",\"model\":\"cloud-large\",\"backend\":\"mock-cloud\",\"status\":200,\"prompt_tokens\":5,\"completion_tokens\":5}")"
@@ -212,7 +218,8 @@ curl -fsS -o /dev/null -X PUT -H "$JSON" -d "{\"ID\":\"$provider_backend\",\"Nam
     "$CONSUL/v1/agent/service/register"
 curl -fsS -o /dev/null -X PUT -d '{"monthly_tokens": 1}' "$CONSUL/v1/kv/aisa/budgets/providers/smoke"
 provider_metric() { # provider_metric <metric>: the key's gauge for this month
-    curl -fsS "$AISA/metrics" | awk -v n="$1" -v p="$period" '
+    local metric=$1
+    curl -fsS "$AISA/metrics" | awk -v n="$metric" -v p="$period" '
         $1 ~ "^" n "{" && $1 ~ "provider=\"smoke\"" && $1 ~ "period=\"" p "\"" { print $2 + 0 }' | head -n1
 }
 for _ in $(seq 1 30); do

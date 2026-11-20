@@ -78,23 +78,26 @@ release() {
 # pod's loop sends the queue again. Each report carries an id, so a retry of one aisa took but
 # did not answer counts once.
 QUEUE_MAX=100
+# What a queued report's file name ends in, for grep.
+REPORT_FILES='\.json$'
 # send_queue <seconds>: delivers the queued reports in order, within one deadline for the whole
 # queue, and stops at the first aisa does not take, so that they stay in order. A render gives
 # it 3 s, so it never holds a render up for long; a resend gives it most of the loop's 30 s.
 send_queue() {
     [ -n "$AISA_RENDER_URI" ] && [ -d "$TARGET.reports" ] || return 0
-    until_=$(( $(date +%s) + $1 ))
-    for f in $(ls "$TARGET.reports" 2>/dev/null | grep '\.json$' | sort); do
+    send_seconds=$1
+    until_=$(( $(date +%s) + send_seconds ))
+    for f in $(ls "$TARGET.reports" 2>/dev/null | grep "$REPORT_FILES" | sort); do
         left=$(( until_ - $(date +%s) ))
         if [ "$left" -le 0 ]; then
-            echo "guard: warning: $(ls "$TARGET.reports" | grep -c '\.json$') reports still wait for $AISA_RENDER_URI; the pod tries again" >&2
+            echo "guard: warning: $(ls "$TARGET.reports" | grep -c "$REPORT_FILES") reports still wait for $AISA_RENDER_URI; the pod tries again" >&2
             return 0
         fi
         if timeout "$left" wget -q -O /dev/null -T "$left" --header 'Content-Type: application/json' \
             --post-data "$(cat "$TARGET.reports/$f")" "$AISA_RENDER_URI" 2>/dev/null; then
             rm -f "$TARGET.reports/$f"
         else
-            echo "guard: warning: the render was not reported to $AISA_RENDER_URI ($(ls "$TARGET.reports" | grep -c '\.json$') waiting); the pod tries again" >&2
+            echo "guard: warning: the render was not reported to $AISA_RENDER_URI ($(ls "$TARGET.reports" | grep -c "$REPORT_FILES") waiting); the pod tries again" >&2
             return 0
         fi
     done
@@ -104,7 +107,7 @@ if [ "$1" = "--resend" ]; then
     TARGET="$2"
     [ -n "$TARGET" ] || { echo "guard: error: usage: guard.sh --resend <target-file>" >&2; exit 1; }
     # Nothing to send: no lock, no noise.
-    [ -n "$(ls "$TARGET.reports" 2>/dev/null | grep '\.json$')" ] || exit 0
+    [ -n "$(ls "$TARGET.reports" 2>/dev/null | grep "$REPORT_FILES")" ] || exit 0
     # Another guard is running: it sends the queue itself when it reports.
     take_lock || exit 0
     send_queue 25
@@ -139,7 +142,8 @@ take_lock || exit 1
 EMPTY_SINCE="$TARGET.empty-since"
 # hash <file>: names a rendered file.
 hash() {
-    sha256sum < "$1" | cut -c1-64
+    hash_file=$1
+    sha256sum < "$hash_file" | cut -c1-64
 }
 ORIGINAL="$STAGED"
 if [ -n "$GUARD_RECHECK" ]; then
@@ -163,16 +167,19 @@ promote() {
 # route_ids <file>: the IDs of the routes, from the items of the top-level routes section only
 # (global_rules has IDs too).
 route_ids() {
-    awk '/^routes:/ { f = 1; next } /^[^[:space:]#]/ { f = 0 } f && /^[[:space:]]*- id:/' "$1" |
+    route_ids_file=$1
+    awk '/^routes:/ { f = 1; next } /^[^[:space:]#]/ { f = 0 } f && /^[[:space:]]*- id:/' "$route_ids_file" |
         sed -E 's/^[[:space:]]*- id:[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/'
 }
 # model_routes <file>: how many routes serve a model (the template prefixes them with "model-").
 model_routes() {
-    route_ids "$1" | grep -c '^model-' || true
+    model_routes_file=$1
+    route_ids "$model_routes_file" | grep -c '^model-' || true
 }
 # backends <file>: how many backends the routes name (the instances of ai-proxy-multi).
 backends() {
-    grep -E '^[[:space:]]+- name: ' "$1" | sort -u | wc -l | tr -d ' '
+    backends_file=$1
+    grep -E '^[[:space:]]+- name: ' "$backends_file" | sort -u | wc -l | tr -d ' '
 }
 
 # report <result> <reason> <backends> <models>: tells aisa what became of this render, with the
@@ -181,6 +188,10 @@ backends() {
 # warning. The reason is a fixed phrase and route IDs, quoted for JSON anyway and cut to the
 # 1024 bytes aisa takes: a file with many rejected routes names the first ones.
 report() {
+    report_result=$1
+    report_reason=$2
+    report_backends=$3
+    report_models=$4
     [ -n "$AISA_RENDER_URI" ] || return 0
     queue="$TARGET.reports"
     if ! mkdir -p "$queue" 2>/dev/null; then
@@ -188,13 +199,16 @@ report() {
         return 0
     fi
     seq=$(cat "$queue/.seq" 2>/dev/null || echo 0)
-    case "$seq" in ''|*[!0-9]*) seq=0 ;; esac
+    case "$seq" in
+        ''|*[!0-9]*) seq=0 ;;
+        *) ;;
+    esac
     seq=$((seq + 1))
     name=$(printf '%010d' "$seq")
     id="$name-$(head -c 6 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"
-    reason=$(printf '%.1000s' "$2" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
+    reason=$(printf '%.1000s' "$report_reason" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
     if ! printf '{"id":"%s","ts":"%s","result":"%s","reason":"%s","backends":%s,"models":%s}\n' \
-        "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$reason" "$3" "$4" > "$queue/$name.tmp" 2>/dev/null ||
+        "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$report_result" "$reason" "$report_backends" "$report_models" > "$queue/$name.tmp" 2>/dev/null ||
         ! mv -f "$queue/$name.tmp" "$queue/$name.json" 2>/dev/null; then
         echo "guard: warning: the render could not be queued for reporting: cannot write in '$queue'" >&2
         rm -f "$queue/$name.tmp"
@@ -202,19 +216,21 @@ report() {
     fi
     echo "$seq" > "$queue/.seq" 2>/dev/null || true
     # The oldest give way beyond QUEUE_MAX.
-    for old in $(ls "$queue" | grep '\.json$' | sort | head -n -"$QUEUE_MAX"); do
+    for old in $(ls "$queue" | grep "$REPORT_FILES" | sort | head -n -"$QUEUE_MAX"); do
         rm -f "$queue/$old"
     done
     send_queue 3
 }
 # counts <file>: the backends and models of <file>, as two arguments for report.
 counts() {
-    echo "$(backends "$1") $(model_routes "$1")"
+    counts_file=$1
+    echo "$(backends "$counts_file") $(model_routes "$counts_file")"
 }
 # reject <message>: the staged file is not promoted; the current one stays.
 reject() {
-    echo "guard: error: $1" >&2
-    report rejected "$1" $(counts "$STAGED") || true
+    reject_message=$1
+    echo "guard: error: $reject_message" >&2
+    report rejected "$reject_message" $(counts "$STAGED") || true
     exit 1
 }
 
@@ -275,6 +291,7 @@ if [ "$(model_routes "$STAGED")" -eq 0 ] && [ "$(model_routes "$TARGET")" -gt 0 
     SINCE=$(cut -d' ' -f1 "$EMPTY_SINCE" 2>/dev/null || true)
     case "$SINCE" in
         ''|*[!0-9]*) SINCE=$NOW ;;
+        *) ;;
     esac
     if [ -z "$GUARD_RECHECK" ]; then
         echo "$SINCE $(hash "$STAGED")" > "$EMPTY_SINCE"
