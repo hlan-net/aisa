@@ -17,9 +17,72 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request replaces the run of the one before it. Runs on main are never
+# cancelled: each is the only test of what was merged. They are grouped by commit, not by
+# branch, because a group holds one waiting run at most and cancels the one that waited when
+# another arrives, which several merges in a row would be.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Fail early: static, lint and charts take well under a minute and catch what does not compile,
+# is not formatted or does not render. The jobs that build images and start a stack or a
+# cluster (dev-stack, install) wait for them, so a typo does not cost five minutes on four
+# runners. The unit tests run beside the heavy jobs, not before them: they take about as long
+# as an image build, and waiting for them would delay every green run by that much.
 jobs:
+  static:
+    # What needs no test to fail: formatting, compiling (vet builds the tests too), the
+    # Terraform module and the dashboard's JSON.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [[ -n "$unformatted" ]]; then
+            echo "::error::not gofmt-formatted: $(tr '\n' ' ' <<<"$unformatted")"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Install Terraform
+        env:
+          TERRAFORM_VERSION: 1.17.2
+        run: |
+          arch=$(dpkg --print-architecture)
+          curl -fsSL --proto =https --proto-redir =https -o /tmp/terraform.zip \
+            "https://releases.hashicorp.com/terraform/$TERRAFORM_VERSION/terraform_${TERRAFORM_VERSION}_linux_$arch.zip"
+          sudo unzip -o -q /tmp/terraform.zip terraform -d /usr/local/bin
+          terraform version
+
+      - name: Terraform module
+        run: |
+          terraform -chdir=terraform fmt -check -diff
+          terraform -chdir=terraform init -backend=false -input=false
+          terraform -chdir=terraform validate
+
+      - name: Dashboard
+        run: |
+          # Valid JSON, and no two panels with one id: Grafana drops one of them without a word.
+          jq -e '[.panels[].id] | length == (unique | length)' dashboards/aisa.json >/dev/null
+
   test:
+    timeout-minutes: 15
     strategy:
+      # Both architectures run to the end: whether a failure is on one of them or on both is
+      # the first thing to know about it.
+      fail-fast: false
       matrix:
         # arm64 is a first-class target, so the tests run natively on both. The amd64 runner is
         # pinned like the arm64 one, so that a new Ubuntu comes in a PR of its own, not with
@@ -36,14 +99,22 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Vet
-        run: go vet ./...
-
       - name: Test
-        run: go test -race ./...
+        # With coverage, for the SonarQube scan below. Only packages with tests: a package
+        # without test files needs the covdata tool, which not every Go toolchain ships.
+        run: go test -race -coverprofile=coverage.out $(go list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...)
+
+      - name: Upload coverage
+        if: matrix.runner == 'ubuntu-24.04'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 1
 
   lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -58,68 +129,10 @@ jobs:
         with:
           version: v2.14
 
-  image:
-    # The product image builds and starts on both architectures.
-    strategy:
-      matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.runner }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Build
-        run: docker build --build-arg VERSION=ci -t aisa:ci .
-
-      - name: Start
-        run: |
-          # aisa reads its consumers' keys from Vault and their declarations from Consul; a
-          # dev-mode Vault and Consul without any are enough here. All start together: aisa
-          # retries until Vault answers, and follows an empty Consul prefix as no consumers.
-          docker network create aisa-ci
-          docker run -d --name vault --network aisa-ci --cap-add IPC_LOCK hashicorp/vault:2.1.1 \
-            server -dev -dev-root-token-id=ci-root -dev-listen-address=0.0.0.0:8200
-          docker run -d --name consul --network aisa-ci hashicorp/consul:2.0.4 \
-            agent -dev -client=0.0.0.0
-          docker run -d --name aisa --network aisa-ci -p 127.0.0.1:8080:8080 \
-            -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN=ci-root \
-            -e CONSUL_HTTP_ADDR=http://consul:8500 aisa:ci
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then break; fi
-            sleep 1
-          done
-
-      - name: Check
-        run: |
-          curl -fsS http://127.0.0.1:8080/healthz
-          curl -fsS http://127.0.0.1:8080/readyz
-          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_build_info{version="ci"} 1'
-          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_consumer_loads_total{result="ok"}'
-          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_consumer_declaration_loads_total{result="ok"}'
-          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_model_price_loads_total{result="ok"}'
-          # No consumers in Vault or Consul: every key is unknown.
-          [[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer x' \
-                -H 'X-Aisa-Requested-Model: m' -X POST http://127.0.0.1:8080/v1/decide)" == 401 ]]
-          [[ "$(docker run --rm aisa:ci -version)" == "ci" ]]
-
-      - name: Stop
-        run: |
-          docker stop aisa
-          [[ "$(docker inspect aisa --format '{{.State.ExitCode}}')" == "0" ]]
-
-      - name: Logs
-        if: always()
-        run: docker logs aisa || true
-
-      - name: Clean up
-        if: always()
-        run: |
-          docker rm -f aisa vault consul || true
-          docker network rm aisa-ci || true
-
   dev-stack:
     # End-to-end check of the dev stack: APISIX, stub aisa, mock backends, Vault, Consul, Redis.
+    needs: [static, lint, charts]
+    timeout-minutes: 20
     strategy:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
@@ -154,6 +167,7 @@ jobs:
   charts:
     # The charts render for the usual values and validate against the Kubernetes schemas.
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -179,7 +193,11 @@ jobs:
 
   install:
     # aisa's chart with its proxy in a kind cluster, with Vault and Consul as the reference
-    # environment has them (deploy/helm/test/install_test.sh).
+    # environment has them (deploy/helm/test/install_test.sh). The product image is built once
+    # here and first started on its own, against a dev-mode Vault and Consul: it builds and
+    # starts on both architectures before a cluster is made for it.
+    needs: [static, lint, charts]
+    timeout-minutes: 25
     strategy:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
@@ -193,6 +211,52 @@ jobs:
         run: |
           docker build --build-arg VERSION=ci -t aisa:ci .
           docker build -f dev/Dockerfile -t aisa-dev-tools:ci .
+
+      - name: Start the image
+        run: |
+          # aisa reads its consumers' keys from Vault and their declarations from Consul; a
+          # dev-mode Vault and Consul without any are enough here. All start together: aisa
+          # retries until Vault answers, and follows an empty Consul prefix as no consumers.
+          docker network create aisa-ci
+          docker run -d --name vault --network aisa-ci --cap-add IPC_LOCK hashicorp/vault:2.1.1 \
+            server -dev -dev-root-token-id=ci-root -dev-listen-address=0.0.0.0:8200
+          docker run -d --name consul --network aisa-ci hashicorp/consul:2.0.4 \
+            agent -dev -client=0.0.0.0
+          docker run -d --name aisa --network aisa-ci -p 127.0.0.1:8080:8080 \
+            -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN=ci-root \
+            -e CONSUL_HTTP_ADDR=http://consul:8500 aisa:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/readyz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+
+      - name: Check the image
+        run: |
+          curl -fsS http://127.0.0.1:8080/healthz
+          curl -fsS http://127.0.0.1:8080/readyz
+          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_build_info{version="ci"} 1'
+          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_consumer_loads_total{result="ok"}'
+          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_consumer_declaration_loads_total{result="ok"}'
+          curl -fsS http://127.0.0.1:8080/metrics | grep -F 'aisa_model_price_loads_total{result="ok"}'
+          # No consumers in Vault or Consul: every key is unknown.
+          [[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer x' \
+                -H 'X-Aisa-Requested-Model: m' -X POST http://127.0.0.1:8080/v1/decide)" == 401 ]]
+          [[ "$(docker run --rm aisa:ci -version)" == "ci" ]]
+
+      - name: Stop the image
+        run: |
+          docker stop aisa
+          [[ "$(docker inspect aisa --format '{{.State.ExitCode}}')" == "0" ]]
+
+      - name: Logs of the image
+        if: failure()
+        run: docker logs aisa || true
+
+      - name: Remove the image's containers
+        if: always()
+        run: |
+          docker rm -f aisa vault consul || true
+          docker network rm aisa-ci || true
 
       - name: Install Helm
         env:
@@ -231,3 +295,43 @@ jobs:
           kubectl -n aisa logs --all-containers --prefix -l app.kubernetes.io/part-of=aisa --tail=200 || true
           kubectl -n aisa logs deploy/vault --tail=100 || true
           kubectl -n aisa get events --sort-by=.lastTimestamp | tail -50 || true
+
+  scan:
+    # SonarQube: static analysis, with the coverage of the amd64 test run. This job holds the
+    # Sonar credentials and never runs the repository's code; the tests that made the coverage
+    # ran in a job without secrets. Needs the SONAR_TOKEN secret. SonarQube Cloud needs nothing
+    # else; a self-hosted SonarQube Server also needs the SONAR_HOST_URL secret. Without
+    # SONAR_TOKEN (fork and Dependabot PRs get no secrets) the scan is skipped, not failed.
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # An empty SONAR_HOST_URL breaks the scanner, so default to SonarQube Cloud.
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+
+    steps:
+      - name: No SONAR_TOKEN, skipping the scan
+        if: env.SONAR_TOKEN == ''
+        run: echo "::notice::SONAR_TOKEN is not available to this run; SonarQube scan skipped."
+
+      - name: Checkout
+        if: env.SONAR_TOKEN != ''
+        uses: actions/checkout@v7
+        with:
+          # Full history for blame data and new-code detection.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download coverage
+        if: env.SONAR_TOKEN != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage
+
+      - name: SonarQube scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0

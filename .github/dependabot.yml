@@ -5,6 +5,17 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # One PR for the minor and patch updates of modules that are released together, so that
+    # each merge does not rebase the others and run CI on them again. A major update still
+    # comes alone, and by its title: the auto-merge sweep reads the versions from the title of
+    # a single update to leave majors to a human, which a group's title does not have.
+    groups:
+      kubernetes:
+        patterns: ["k8s.io/*", "sigs.k8s.io/*"]
+        update-types: ["minor", "patch"]
+      golang-x:
+        patterns: ["golang.org/x/*"]
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -30,3 +41,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      dev-stack:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

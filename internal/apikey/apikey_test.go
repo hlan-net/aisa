@@ -56,4 +56,3 @@ func TestParseHashes(t *testing.T) {
 		t.Errorf("expected [%s %s], got %v", h1, h2, res)
 	}
 }
-

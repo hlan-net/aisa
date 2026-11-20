@@ -11,14 +11,27 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write
-  packages: write
+# Each job asks for what it writes; nothing is granted to the workflow as a whole.
+permissions: {}
+
+# One release at a time, whichever way it was started, and never cancelled half way: a tag and
+# a manual run of the same version have different refs, so the group is not by ref, and a
+# release that stops between the image and the charts leaves a version with one and not the
+# other.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  create-release:
-    name: Create GitHub Release
+  verify:
+    # Before anything is published: the version is one, its commit is on main, the changelog
+    # has its section, and the code vets and passes its tests. CI does not run for a commit that
+    # changes only documentation, which a release preparation is, so the tests run here.
+    name: Verify the release
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
     outputs:
       release-tag: ${{ steps.version.outputs.version }}
     steps:
@@ -29,25 +42,92 @@ jobs:
 
       - name: Get version
         id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            version=$INPUT_VERSION
           else
-            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            version=${GITHUB_REF#refs/tags/}
+          fi
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::not a version: '$version' (want vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: The commit is on main
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$(git rev-parse --short HEAD) is not on main; a release is cut from main"
+            exit 1
           fi
 
-      - name: Generate release notes
+      - name: A tag of the version is this commit
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # Prefer the matching section from CHANGELOG.md; fall back to the commit log.
+          # A manual run may name a version that is tagged already. Its image and charts would
+          # be built again from this commit, so the tag must be this commit: otherwise the
+          # release and what is published under it would be of two different commits.
+          # The peeled line (^{}) of an annotated tag is its commit; a lightweight tag has one line.
+          tagged=$(git ls-remote --tags origin "refs/tags/$VERSION" "refs/tags/$VERSION^{}" | sort -k2 | tail -n1 | cut -f1)
+          if [[ -n "$tagged" && "$tagged" != "$(git rev-parse HEAD)" ]]; then
+            echo "::error::$VERSION is tagged at ${tagged:0:7}, and this run is of $(git rev-parse --short HEAD); run it from the tag"
+            exit 1
+          fi
+
+      - name: The changelog has the version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # The heading as it is written, not as a pattern: the dots of a version match any
+          # character in one.
+          if ! awk -v h="## [${VERSION#v}]" 'index($0, h) == 1 { found = 1 } END { exit !found }' CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section [${VERSION#v}]; prepare the release first"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test ./...
+
+  create-release:
+    name: Create GitHub Release
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      release-tag: ${{ needs.verify.outputs.release-tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        env:
+          VERSION: ${{ needs.verify.outputs.release-tag }}
+        run: |
+          # The matching section from CHANGELOG.md, which verify found to be there; the commit
+          # log only if that section is empty.
           # Write to RELEASE_NOTES.md so the real CHANGELOG.md is never clobbered.
           NOTES_FILE=RELEASE_NOTES.md
           VER="${VERSION#v}"
 
           if [ -f CHANGELOG.md ]; then
-            awk -v ver="$VER" '
-              $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+            awk -v h="## [$VER]" '
+              index($0, h) == 1 { flag=1; next }
               flag && /^## \[/ { flag=0 }
               flag { print }
             ' CHANGELOG.md > "$NOTES_FILE"
@@ -81,18 +161,24 @@ jobs:
       - name: Create or update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.version }}
+          TAG: ${{ needs.verify.outputs.release-tag }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "aisa $TAG" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$TAG" --title "aisa $TAG" --notes-file RELEASE_NOTES.md
+            # A manual run of a version without a tag makes the tag here: at the commit that was
+            # verified, not at the head of the default branch.
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "aisa $TAG" --notes-file RELEASE_NOTES.md
           fi
 
   image:
     name: Build and push multi-arch image
     needs: create-release
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -132,6 +218,10 @@ jobs:
     name: Package and push the Helm charts
     needs: [create-release, image]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
