@@ -599,6 +599,41 @@ func TestProfilesDefaultModels(t *testing.T) {
 	}
 }
 
+// TestProfilesDefaultModelsInUse: with the consumers' declarations, only a profile that gives
+// some consumer its model is returned.
+func TestProfilesDefaultModelsInUse(t *testing.T) {
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	decls := &declared{}
+	p := NewProfiles(nil, discard, ProfileOptions{Default: "fallback", Consumers: decls})
+	p.apply([]consul.Pair{
+		{Key: "interactive", Value: []byte(`{"tokens_per_hour":1,"default_model":"qwen3"}`)},
+		{Key: "batch", Value: []byte(`{"tokens_per_hour":1,"default_model":"llama3.2"}`)},
+		{Key: "fallback", Value: []byte(`{"tokens_per_hour":1,"default_model":"small"}`)},
+		{Key: "unused", Value: []byte(`{"tokens_per_hour":1,"default_model":"gone"}`)},
+	})
+	if got, known := p.DefaultModels(); known || got != nil {
+		t.Fatalf("before the declarations are read: DefaultModels = (%v, %v), want (nil, false)", got, known)
+	}
+
+	decls.loaded = true
+	decls.valid = map[string]consumers.Declaration{
+		"chat-ui":  {QuotaProfile: "interactive"},
+		"override": {QuotaProfile: "batch", DefaultModel: "gpt-4o"}, // takes no model from batch
+	}
+	got, known := p.DefaultModels()
+	if want := map[string]string{"interactive": "qwen3"}; !known || !maps.Equal(got, want) {
+		t.Errorf("DefaultModels = (%v, %v), want (%v, true)", got, known, want)
+	}
+
+	// A consumer without a profile takes the default's; one without a model takes its profile's.
+	decls.valid["cli"] = consumers.Declaration{}
+	decls.valid["jobs"] = consumers.Declaration{QuotaProfile: "batch"}
+	got, _ = p.DefaultModels()
+	if want := map[string]string{"interactive": "qwen3", "batch": "llama3.2", "fallback": "small"}; !maps.Equal(got, want) {
+		t.Errorf("DefaultModels = %v, want %v", got, want)
+	}
+}
+
 func TestQuotaResetAfter(t *testing.T) {
 	now := time.Date(2026, 9, 29, 12, 30, 20, 0, time.UTC)
 	c := &fakeCounter{}

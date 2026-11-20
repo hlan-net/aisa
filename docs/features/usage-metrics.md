@@ -35,7 +35,7 @@ aisa also reports on its own state. These are not part of the proxy contract:
 | `aisa_consumers_loaded_timestamp_seconds` | When the consumers were last loaded |
 | `aisa_quota_profiles`, `aisa_quota_profiles_invalid` | Quota profiles read from Consul, and those that could not be parsed |
 | `aisa_quota_profiles_missing{source}` | Quota profiles that are named and not in Consul: by the default profile (`default`, 0 or 1) or by the consumers' declarations (`consumer`, one per consumer); their consumers get 503 |
-| `aisa_default_models_unknown{source}` | Configured `default_model` values that match no known model or alias in Consul, by source (`consumer` or `profile`); requests using them get 404 `model_not_found` |
+| `aisa_default_models_unknown{source}` | Configured `default_model` values that match no known model or alias in Consul, by source (`consumer` or `profile`); requests using them get 404 `model_not_found`. A profile counts only when some consumer takes its model from it: one that names the profile, or names none while it is the default, and sets no `default_model` of its own |
 | `aisa_quota_profile_loads_total{result}` | Reads of the quota profiles from Consul, `ok` or `error` |
 | `aisa_quota_errors_total{op}` | Failed reads (`check`) and writes (`charge`) of the quota counters in Redis; while reads fail, quotas are not enforced |
 | `aisa_budgets`, `aisa_budgets_invalid` | Consumers with a valid budget in Consul KV, and budgets that could not be parsed (their consumers get 503 on priced models) |
@@ -76,7 +76,7 @@ Shipped as [`dashboards/aisa.json`](../../dashboards/aisa.json) (see [`dashboard
 
 ## Alerts
 
-aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `prometheusRule.labels` for the Prometheus that selects it), on aisa's own metrics only, so they are the same for every proxy. `AisaDown` watches `up{}` of the ServiceMonitor's job, the Service `<release>-metrics`. The alerts of a feature that is off (`kubernetes.enabled`, `quotas.enabled`) are left out. The conditions:
+aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `prometheusRule.labels` for the Prometheus that selects it), on aisa's own metrics only, so they are the same for every proxy. `AisaDown` watches `up{}` of the ServiceMonitor's job, the Service `<release>-metrics`. The alerts of a feature that is off (`kubernetes.enabled`, `quotas.enabled`) are left out, with one exception: `AisaQuotaProfileInvalid` and `AisaQuotaProfileMissing` stay when either is on, because aisa reads the quota profiles without quotas too when it writes the consumers' Secrets. The conditions:
 
 | Alert | Condition |
 |---|---|
@@ -92,9 +92,9 @@ aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `promet
 | `AisaDown` | aisa's scrape target is down for 2 min, or Prometheus has no such target (fail policies are now in effect: an `open` backend serves any credential) |
 | `AisaConsumersStale` | the consumers were last loaded more than 5 min ago (aisa fails closed after 15 min) |
 | `AisaConsumersUnreadable` | `aisa_consumers_unreadable > 0` for 5 min: a consumer in Vault cannot be read and loses its access after 15 min |
-| `AisaQuotaProfileInvalid` | `aisa_quota_profiles_invalid > 0`: the consumers of a broken profile get 503 |
-| `AisaQuotaProfileMissing` | `aisa_quota_profiles_missing > 0`: the default profile or a consumer's names a profile that is not in Consul; its consumers get 503 |
-| `AisaDefaultModelUnknown` | `aisa_default_models_unknown > 0` for 5 min: a consumer declaration or quota profile names a `default_model` that matches no known model or alias in Consul |
+| `AisaQuotaProfileInvalid` | `aisa_quota_profiles_invalid > 0`: the consumers of a broken profile get 503 (with `quotas.enabled` or `kubernetes.enabled`: without quotas the profile only gives the Secrets their default model) |
+| `AisaQuotaProfileMissing` | `aisa_quota_profiles_missing > 0`: the default profile or a consumer's names a profile that is not in Consul; its consumers get 503 (with `quotas.enabled` or `kubernetes.enabled`, as above) |
+| `AisaDefaultModelUnknown` | `aisa_default_models_unknown > 0` for 5 min: a consumer declaration, or a quota profile that gives some consumer its model, names a `default_model` that matches no known model or alias in Consul |
 | `AisaConsumerDeclarationInvalid` | `aisa_consumer_declarations_invalid > 0`: a consumer with a broken declaration in Consul gets 503 |
 | `AisaConsumerSecretFailing` | `aisa_consumer_secrets{state!="ok"} > 0` for 10 min: a consumer's Secret is not written, because of its name, another consumer, or an error |
 | `AisaKubeWritesFailing`, `AisaKubeNoLeader` | `aisa_kube_passes_total{result="error"}` increases for 10 min, or `sum(aisa_kube_leader) == 0` for 5 min: the Kubernetes objects are not kept up to date |

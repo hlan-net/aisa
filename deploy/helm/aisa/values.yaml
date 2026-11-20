@@ -57,9 +57,10 @@ consul:
     fromVault: true
     path: consul/creds/aisa
 
-# Token quotas need Redis for their counters. Off: no Redis, and aisa reads no quota profiles and
-# limits no consumer; it still reads the consumers' declarations from Consul, authenticates and
-# keeps the books.
+# Token quotas need Redis for their counters. Off: no Redis, and aisa limits no consumer; it
+# still reads the consumers' declarations from Consul, authenticates and keeps the books. With
+# kubernetes.enabled it reads the quota profiles all the same, for the default_model they give
+# the consumers' Secrets, and the alerts on a broken or missing profile stay.
 quotas:
   enabled: true
   # The quota profile of a consumer whose declaration names none, such as "batch". Empty: such a

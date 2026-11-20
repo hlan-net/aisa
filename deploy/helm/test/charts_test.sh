@@ -224,6 +224,15 @@ helm template aisa "$AISA" "${REQUIRED[@]}" --set prometheusRule.enabled=true --
 case "$(alerts "$OUT/rule-min.yaml")" in
     *AisaKube*|*AisaConsumerSecret*|*AisaModel*|*AisaQuota*) fail "alerts of features that are off: $(alerts "$OUT/rule-min.yaml")" ;;
 esac
+# Without quotas aisa still reads the profiles for the Secrets' default_model: their alerts
+# stay, the one on the counters in Redis goes.
+helm template aisa "$AISA" "${REQUIRED[@]}" --set prometheusRule.enabled=true --set quotas.enabled=false \
+    >"$OUT/rule-no-quotas.yaml" 2>/dev/null
+case "$(alerts "$OUT/rule-no-quotas.yaml")" in
+    *AisaQuotaCountersFailing*) fail "the alert on the quota counters without quotas: $(alerts "$OUT/rule-no-quotas.yaml")" ;;
+    *"AisaQuotaProfileInvalid AisaQuotaProfileMissing"*) ;;
+    *) fail "no alerts on the quota profiles without quotas, with kubernetes.enabled: $(alerts "$OUT/rule-no-quotas.yaml")" ;;
+esac
 echo "ok: the PrometheusRule has the documented alerts, on aisa's metrics only"
 
 echo "ok: all chart tests passed"

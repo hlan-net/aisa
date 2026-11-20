@@ -157,11 +157,34 @@ func (p *Profiles) DefaultModel(name string) (string, bool) {
 	return pr.DefaultModel, p.loaded && ok
 }
 
-// DefaultModels returns each valid quota profile's non-empty default_model, and whether
-// profiles have been read at least once.
+// DefaultModels returns the non-empty default_model of each valid quota profile that gives a
+// consumer its model, and whether that is known yet. A profile gives a consumer its model when
+// the consumer's declaration sets no default_model and names the profile, or names none and
+// the profile is the default; one that no consumer takes its model from is left out, so a
+// model nobody is given is not reported as unknown. Without the consumers' declarations
+// (ProfileOptions.Consumers) every profile is returned; before they or the profiles have
+// been read, nothing is known.
 func (p *Profiles) DefaultModels() (map[string]string, bool) {
 	if p == nil {
 		return nil, false
+	}
+	var used map[string]bool
+	if p.opts.Consumers != nil {
+		valid, _, loaded := p.opts.Consumers.Snapshot()
+		if !loaded {
+			return nil, false
+		}
+		used = make(map[string]bool)
+		for _, decl := range valid {
+			if decl.DefaultModel != "" {
+				continue
+			}
+			profile := decl.QuotaProfile
+			if profile == "" {
+				profile = p.opts.Default
+			}
+			used[profile] = true
+		}
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -170,7 +193,7 @@ func (p *Profiles) DefaultModels() (map[string]string, bool) {
 	}
 	out := make(map[string]string)
 	for name, pr := range p.valid {
-		if pr.DefaultModel != "" {
+		if pr.DefaultModel != "" && (used == nil || used[name]) {
 			out[name] = pr.DefaultModel
 		}
 	}

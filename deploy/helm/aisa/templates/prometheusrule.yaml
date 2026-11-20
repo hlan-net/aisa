@@ -62,7 +62,9 @@ spec:
             description: >-
               A consumer whose declaration under aisa/consumers/ in Consul KV cannot be read, null
               included, is answered 503. aisa's log names the consumer.
-{{- if .Values.quotas.enabled }}
+{{- /* aisa reads the quota profiles for the quotas and, when it writes the consumers' Secrets,
+       for their default_model: with either on, a broken or missing profile is worth an alert. */}}
+{{- if or .Values.quotas.enabled .Values.kubernetes.enabled }}
         - alert: AisaQuotaProfileInvalid
           expr: aisa_quota_profiles_invalid > 0
           for: 1m
@@ -71,8 +73,9 @@ spec:
           annotations:
             summary: "{{ `{{ $value }}` }} quota profile(s) in Consul cannot be parsed"
             description: >-
-              The consumers of a broken profile under aisa/quotas/ in Consul KV are answered 503.
-              aisa's log names the profile.
+              The consumers of a broken profile under aisa/quotas/ in Consul KV are answered 503
+              when quotas are on, and their Secrets keep the default model they had. aisa's log
+              names the profile.
         - alert: AisaQuotaProfileMissing
           expr: aisa_quota_profiles_missing > 0
           for: 1m
@@ -83,7 +86,10 @@ spec:
             description: >-
               A profile that quotas.defaultProfile (source default) or a consumer's declaration
               (source consumer) names is not under aisa/quotas/ in Consul KV, so its consumers are
-              answered 503. aisa's log names it at every load of the profiles, and at every request.
+              answered 503 when quotas are on, and their Secrets keep the default model they had.
+              aisa's log names it at every load of the profiles, and at every request.
+{{- end }}
+{{- if .Values.quotas.enabled }}
         - alert: AisaQuotaCountersFailing
           expr: sum by (op) (rate(aisa_quota_errors_total[5m])) > 0
           for: 5m
