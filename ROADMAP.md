@@ -72,7 +72,7 @@ Budgets are enforced in tokens, like quotas. Prices turn tokens into currency fo
 
 ## v0.3.x: A paid provider behind aisa
 
-The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front a SaaS provider with a hard ceiling (`aisa/budgets/providers/<key>`, `on_exhausted: downgrade` to a local model), and first stop failing in the cluster it runs in. Done when Gemini or Vertex AI can be registered and its provider budget bounds what it costs.
+The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front a SaaS provider with a hard ceiling (`aisa/budgets/providers/<key>`, `on_exhausted: downgrade` to a local model), and first stop failing in the cluster it runs in. What that takes is built (the first table); what is left is to see it work against the providers themselves (the second). Done when the Gemini API, the OpenAI API and the Claude API have each been registered with a real key and served a request through the proxy, with its tokens in the ledger and its provider budget bounding what it costs.
 
 | Item | Scope | Status |
 |------|-------|--------|
@@ -80,6 +80,14 @@ The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front
 | Backend path prefix | A backend whose OpenAI-compatible API is not at `/v1`, such as Google's ([#91](https://github.com/hlan-net/aisa/issues/91)) | Done ([#94](https://github.com/hlan-net/aisa/pull/94)) |
 | Minted provider credentials | A provider key that Vault issues, such as Vertex AI's OAuth2 token from the GCP secrets engine ([#92](https://github.com/hlan-net/aisa/issues/92)) | Done ([#95](https://github.com/hlan-net/aisa/pull/95)); a consul-template change that reads a GCP token's expiry is prepared for upstream |
 | Model aliases | Other names of a model, such as Ollama tags, resolved in the decision; an unknown name is 404 `model_not_found` ([#89](https://github.com/hlan-net/aisa/issues/89)) | Done ([#100](https://github.com/hlan-net/aisa/pull/100)) |
+
+**Validation against the providers.** All three are reached as `openai-compatible` backends, which is what aisa and its proxy have today, so none of them is expected to need new code in aisa, and finding out is the point: a key in Vault, a backend in Consul's catalog, a price and a provider budget ([`docs/concepts/CONSUL.md`](docs/concepts/CONSUL.md#a-paid-provider-the-gemini-api)). A validation is a test that reads the provider's key from `.local/` and is skipped without it; it sends a few requests and costs accordingly. For each provider it shows: a chat completion through the proxy, streamed and not; the request's tokens in the usage ledger, equal to what the provider reports; the provider budget denying or downgrading to a local model when it is used up; and nothing of the provider's account reaching the application (US-2).
+
+| Provider | How it is reached | Status |
+|------|-------|--------|
+| Gemini API | Google's OpenAI-compatible endpoint, under `/v1beta/openai` (the backend's `path`) | Open. Documented with an example; not yet run against the provider |
+| OpenAI API | `api.openai.com`, under `/v1`, the default path | Open |
+| Claude API | Anthropic's OpenAI SDK compatibility layer, `api.anthropic.com` under `/v1` | Open, and with limits that are the provider's: Anthropic describes the layer as meant for testing and comparing models, not as a long-term or production path. It has no prompt caching, ignores `strict` on tool calls, moves system messages to the start of the conversation and returns none of the model's thinking. Part of this validation is to write these limits, as the run confirms them, into [`docs/features/client-integration.md`](docs/features/client-integration.md), which does not have them yet; the full Claude API is the Anthropic-native passthrough below |
 
 ## Direction: decided, not scheduled
 
@@ -98,7 +106,7 @@ Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/conc
 | Key deprecation warning | Return `X-Aisa-Key-Deprecated: <expiry>` during the rotation grace window, and publish `AISA_KEY_ROTATED_AT` in Secret | US-1 |
 | Trace correlation | Pass `X-Aisa-Request-Id` on proxy responses to correlate application traces with AISA access logs and metrics | US-1 (v0.3.2, [#122](https://github.com/hlan-net/aisa/pull/122)) |
 | Consumer self-declaration | Namespace-scoped `Consumer` CRD or Deployment annotation (`aisa.hlan.net/consumer`) for GitOps-native registration from app charts | US-1 |
-| Anthropic-native passthrough | `/v1/messages` endpoint preserving prompt caching (`cache_control`) for long system prompts | US-1, US-2 |
+| Anthropic-native passthrough | `/v1/messages` endpoint preserving prompt caching (`cache_control`) for long system prompts. Not part of v0.3.x, where the Claude API is reached through its OpenAI compatibility layer: the native API needs an adapter of its own. It authenticates with `x-api-key` and `anthropic-version` instead of a bearer token; it reports usage in other fields, with cache reads and writes that are priced apart; the proxy's gateway has no driver for it (APISIX 3.20 ships none, and the template renders only `openai-compatible` backends); and applications would speak the Anthropic API to aisa, a second client-facing contract beside the OpenAI-compatible one | US-1, US-2 |
 
 ## v0.4.0: Second proxy
 
