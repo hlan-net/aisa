@@ -87,7 +87,7 @@ The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front
 |------|-------|--------|
 | Gemini API | Google's OpenAI-compatible endpoint, under `/v1beta/openai` (the backend's `path`) | Open. Documented with an example; not yet run against the provider |
 | OpenAI API | `api.openai.com`, under `/v1`, the default path | Open |
-| Claude API | Anthropic's OpenAI SDK compatibility layer, `api.anthropic.com` under `/v1` | Open, and with limits that are the provider's: Anthropic describes the layer as meant for testing and comparing models, not as a long-term or production path. It has no prompt caching, ignores `strict` on tool calls, moves system messages to the start of the conversation and returns none of the model's thinking. The validation records these in [`docs/features/client-integration.md`](docs/features/client-integration.md); the full Claude API is the Anthropic-native passthrough below |
+| Claude API | Anthropic's OpenAI SDK compatibility layer, `api.anthropic.com` under `/v1` | Open, and with limits that are the provider's: Anthropic describes the layer as meant for testing and comparing models, not as a long-term or production path. It has no prompt caching, ignores `strict` on tool calls, moves system messages to the start of the conversation and returns none of the model's thinking. Part of this validation is to write these limits, as the run confirms them, into [`docs/features/client-integration.md`](docs/features/client-integration.md), which does not have them yet; the full Claude API is the Anthropic-native passthrough below |
 
 ## Direction: decided, not scheduled
 
