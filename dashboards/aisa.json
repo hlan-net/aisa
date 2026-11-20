@@ -825,8 +825,119 @@
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "description": "What aisa read from Consul and cannot use, each 0 when all is well: default_model values that name no model or alias, quota profiles that are named and not there or cannot be parsed, and consumer declarations, model descriptions, model prices and budgets that cannot be parsed. aisa's log names each of them.",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "entries",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 45 },
+      "id": 44,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max by (source) (aisa_default_models_unknown)",
+          "legendFormat": "default_model unknown ({{source}})",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max by (source) (aisa_quota_profiles_missing)",
+          "legendFormat": "quota profile missing ({{source}})",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max(aisa_quota_profiles_invalid)",
+          "legendFormat": "quota profiles invalid",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max(aisa_consumer_declarations_invalid)",
+          "legendFormat": "consumer declarations invalid",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max(aisa_model_descriptions_invalid)",
+          "legendFormat": "model descriptions invalid",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max(aisa_model_prices_invalid)",
+          "legendFormat": "model prices invalid",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max(aisa_budgets_invalid)",
+          "legendFormat": "budgets invalid",
+          "range": true,
+          "refId": "G"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "expr": "max(aisa_provider_budgets_invalid)",
+          "legendFormat": "provider budgets invalid",
+          "range": true,
+          "refId": "H"
+        }
+      ],
+      "title": "Configuration that needs attention",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 53 },
       "id": 50,
       "panels": [],
       "title": "6. Ledger consistency",
@@ -871,7 +982,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 46 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 54 },
       "id": 51,
       "options": {
         "legend": { "calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -929,7 +1040,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 46 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 54 },
       "id": 52,
       "options": {
         "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -984,7 +1095,7 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 54 },
       "id": 53,
       "options": {
         "legend": { "calcs": ["mean", "sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
@@ -1013,7 +1124,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 54 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 62 },
       "id": 60,
       "panels": [],
       "title": "7. Top consumers",
@@ -1045,7 +1156,7 @@
           }
         ]
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 55 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 63 },
       "id": 61,
       "options": {
         "cellHeight": "sm",

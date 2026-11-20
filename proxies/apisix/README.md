@@ -32,7 +32,7 @@ Client ──▶ [Port 9080: client route: POST /v1/chat/completions, POST /v1/e
 * The client-facing route (`server_port: 9080`) executes a `serverless-pre-function`:
   * **Strips client-supplied `X-Aisa-*` headers** (Rule 1) so clients cannot spoof consumer identities or models.
   * Extracts the model from the JSON request body and sets `X-Aisa-Requested-Model` (Rule 2).
-  * Injects `X-Aisa-Request-Id: $apisix_request_id` to correlate decision and usage events.
+  * Injects `X-Aisa-Request-Id: $request_id` to correlate decision and usage events. `$request_id` is nginx's own id of the request, which APISIX also exposes as `$apisix_request_id`; the two are the same value as long as the `request-id` plugin is not enabled, which this config never does. The client gets the same id in `X-Aisa-Request-Id` on every response of the client route.
 * `forward-auth` queries aisa `/v1/decide` with the client's `Authorization` and `X-Aisa-Requested-Model`.
 * On decision allow, forward-auth sets `X-Aisa-Consumer` and `X-Aisa-Model`, and forwards to the internal listener (`127.0.0.1:9081`).
 * Denials (400, 401, 403, 413, 429, 503) pass directly to the client with `Retry-After` when set (Rule 4).

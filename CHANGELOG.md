@@ -6,6 +6,14 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+- **`aisa_default_models_unknown{source="profile"}` counts only profiles in use**: a quota profile's unknown `default_model` is reported when some consumer takes its model from that profile (it names the profile, or names none while the profile is the default, and sets no `default_model` of its own). A profile nobody takes a model from no longer raises `AisaDefaultModelUnknown`.
+- **Grafana dashboard**: section 5 has a panel, "Configuration that needs attention", with `aisa_default_models_unknown`, `aisa_quota_profiles_missing` and the `aisa_*_invalid` gauges.
+
+### Fixed
+- **The quota profile alerts are installed without quotas too**: `AisaQuotaProfileInvalid` and `AisaQuotaProfileMissing` were left out of the chart's `PrometheusRule` with `quotas.enabled=false`, although since 0.3.2 aisa reads the profiles in that mode for the `default_model` of the consumers' Secrets, and 0.3.2's notes said the alerts report there. They are now rendered with `quotas.enabled` or `kubernetes.enabled`; `AisaQuotaCountersFailing` still needs quotas.
+- **The proxy's request id is tested where it is promised**: `runtime_test.sh` checks that `X-Aisa-Request-Id` on the client's response is the `request_id` of the request's usage event, for an allowed request, aisa's denials (401, 429) and the requests served or refused while aisa is unreachable. The proxy's README says `$request_id`, the variable the template uses; it is the same value as `$apisix_request_id`.
+
 ## [0.3.2] - 2026-11-20
 
 A default model in the consumers' Secrets, quota and trace headers on the applications' responses, a Terraform module and a Grafana dashboard; models under their other names, such as Ollama's tags, with a 404 `model_not_found` for a name aisa does not know; the consumers' monthly budgets in the admin interface; and the proxy's consul-template container fixed for Kubernetes: its Consul token watch now runs, and it no longer fills with zombies. The aliases and the quota headers are additions to contract 1, in `/v1/`; a catalog without aliases and a proxy that does not pass the headers on work as before.

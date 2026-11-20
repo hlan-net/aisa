@@ -204,7 +204,11 @@ routes:
         allow_degradation: true
         status_on_error: 503
       # Every response on the client route carries X-Aisa-Request-Id so application traces
-      # can be correlated with aisa's access logs and metrics.
+      # can be correlated with aisa's access logs and metrics: the allowed ones, aisa's denials,
+      # which forward-auth answers itself, and those served while aisa is unreachable. It is
+      # $request_id, nginx's id of the request, which is also what the decision gets as
+      # X-Request-Id and what the usage event reports; APISIX's $apisix_request_id is the same
+      # value unless the request-id plugin replaces it, and that plugin is not used here.
       response-rewrite:
         headers:
           set:

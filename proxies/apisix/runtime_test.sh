@@ -99,10 +99,11 @@ proxy() {
     fail "APISIX did not load the rendered routes"
 }
 
-# chat <key> <model>: sends one request and prints its status.
+# chat <key> <model> [<file>]: sends one request and prints its status; the response's headers
+# go to <file>.
 chat() {
-    local key=$1 model=$2
-    curl -sS -o /dev/null -w "$STATUS" -H "Authorization: Bearer $key" -H "$JSON" \
+    local key=$1 model=$2 headers=${3:-/dev/null}
+    curl -sS -o /dev/null -D "$headers" -w "$STATUS" -H "Authorization: Bearer $key" -H "$JSON" \
         -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"hello there\"}]}" \
         "$PROXY/v1/chat/completions"
 }
@@ -136,12 +137,18 @@ outcomes() {
 one() {
     local what=$1 key=$2 model=$3 status=$4 consumer=$5
     curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
-    expect "$what: status" "$status" "$(chat "$key" "$model")"
+    expect "$what: status" "$status" "$(chat "$key" "$model" "$OUT/headers")"
     sleep 2 # http-logger sends a batch after a second without events
     local got
     got=$(events)
     expect "$what: one usage event" "1" "$(grep -c . <<<"$got" || true)"
     expect "$what: event status and consumer" "$status $consumer" "$(jq -r "$OUTCOME" <<<"$got")"
+    # Trace correlation: the id the client gets is the one the usage event reports, whether
+    # aisa allowed the request, denied it or could not be asked.
+    local id
+    id=$(tr -d '\r' <"$OUT/headers" | awk -F': ' 'tolower($1) == "x-aisa-request-id" { print $2 }')
+    [[ -n "$id" ]] || fail "$what: no X-Aisa-Request-Id on the response"
+    expect "$what: X-Aisa-Request-Id is the usage event's request_id" "$id" "$(jq -r '.request_id' <<<"$got")"
     if [[ "$status" == 200 ]]; then
         # Served: the event is the internal hop's, with the backend's token counts.
         expect "$what: event has the token counts" "true" "$(jq -r '(.prompt_tokens | tonumber) > 0' <<<"$got")"
