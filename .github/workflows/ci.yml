@@ -18,9 +18,11 @@ permissions:
   contents: read
 
 # A new push to a pull request replaces the run of the one before it. Runs on main are never
-# cancelled: each is the only test of what was merged.
+# cancelled: each is the only test of what was merged. They are grouped by commit, not by
+# branch, because a group holds one waiting run at most and cancels the one that waited when
+# another arrives, which several merges in a row would be.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Fail early: static, lint and charts take well under a minute and catch what does not compile,
