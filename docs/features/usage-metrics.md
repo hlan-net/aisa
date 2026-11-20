@@ -76,7 +76,7 @@ Shipped as [`dashboards/aisa.json`](../../dashboards/aisa.json) (see [`dashboard
 
 ## Alerts
 
-aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `prometheusRule.labels` for the Prometheus that selects it), on aisa's own metrics only, so they are the same for every proxy. `AisaDown` watches `up{}` of the ServiceMonitor's job, the Service `<release>-metrics`. The alerts of a feature that is off (`kubernetes.enabled`, `quotas.enabled`) are left out. The conditions:
+aisa's chart ships them as a `PrometheusRule` (`prometheusRule.enabled`; `prometheusRule.labels` for the Prometheus that selects it), on aisa's own metrics only, so they are the same for every proxy. `AisaDown` watches `up{}` of the ServiceMonitor's job, the Service `<release>-metrics`. The alerts of a feature that is off (`kubernetes.enabled`, `quotas.enabled`) are left out, with one exception: `AisaQuotaProfileInvalid` and `AisaQuotaProfileMissing` stay when either is on, because aisa reads the quota profiles without quotas too when it writes the consumers' Secrets. The conditions:
 
 | Alert | Condition |
 |---|---|
