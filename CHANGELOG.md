@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-20
+
+Corrections to 0.3.2 and a quality pass. The alerts on a broken or missing quota profile are installed without quotas too, as the notes of 0.3.2 said they were; an unknown `default_model` is reported only for a profile some consumer takes its model from; and the proxy's chart moves to APISIX 3.20.0. CI fails early and a release is verified before it is published. Nothing needs a change from an existing install; one that does not set the proxy's image tag gets APISIX 3.20.0 with the upgrade.
+
 ### Changed
 - **APISIX 3.20.0** (`proxies/apisix/chart/values.yaml`, `dev/compose.yaml`, `proxies/apisix/runtime_test.sh`): the proxy's chart, the dev stack and the runtime tests move from 3.19.0 to 3.20.0 together, so that what is tested is what the chart installs. An install that sets the image tag itself (`apisix.image.tag` in the proxy's chart, `apisix.apisix.image.tag` through aisa's) is not affected.
 - **CI fails early and runs less twice** (`.github/workflows/`): a `static` job (gofmt, `go vet`, `terraform fmt` and `validate` of the module, the dashboard's JSON) and the lint and chart jobs gate the jobs that start a stack or a cluster; a new push to a pull request cancels the run before it; every job has a timeout; the test matrix runs both architectures to the end. The SonarQube scan is a job of the CI workflow and uses the coverage of its amd64 test run, in place of a workflow that ran the tests a third time, and the product image is built and checked in the install job, in place of a job that built it again. Dependabot groups the minor and patch updates of `k8s.io`, `golang.org/x` and the dev stack's images.
@@ -155,7 +159,8 @@ The first release: the design, the answered spikes, the dev stack and the start 
 - **Decision API** (unstable `/v1`): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
 - **CI actions**: `actions/setup-go` v6 → v7 and `golangci/golangci-lint-action` v8 → v9 (golangci-lint pinned to v2.14). The other actions were checked against their published tags and are current. Dependabot also watches the dev stack's Dockerfile and Compose images.
 
-[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/hlan-net/aisa/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/hlan-net/aisa/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/hlan-net/aisa/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/hlan-net/aisa/compare/v0.2.1...v0.3.0
