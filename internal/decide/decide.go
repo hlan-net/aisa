@@ -113,57 +113,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // decide answers the request and returns the result label of aisa_decisions_total it counted.
+// The stages run in the order of the contract: the credential, the model, the quota, the
+// consumer's budget, the provider's budget. Each returns its denial, or nil to go on.
 func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 	reqID := r.Header.Get(HeaderRequestID)
 	log := h.log.With("request_id", reqID)
 
-	key, ok := bearer(r.Header.Get("Authorization"))
-	if !ok {
-		return h.deny(w, log, metrics.ConsumerUnknown, denyAuth("missing or malformed credential: want Authorization: Bearer <key>"))
+	consumer, d := h.authenticate(r, log)
+	if d != nil {
+		return h.deny(w, log, metrics.ConsumerUnknown, *d)
 	}
-	stage := time.Now()
-	consumer, res := h.consumers.Lookup(r.Context(), key)
-	h.metrics.DecideStageDuration.WithLabelValues(metrics.StageConsumer).Observe(time.Since(stage).Seconds())
-	switch res {
-	case consumers.Unavailable:
-		// Fail closed: without current consumers aisa cannot tell a valid key from a revoked one.
-		log.Error("cannot decide: consumers are not available")
-		return h.deny(w, log, metrics.ConsumerUnknown, denial{
-			status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
-			typ: "server_error", code: "consumers_unavailable", msg: "aisa cannot verify credentials at the moment",
-		})
-	case consumers.Unknown:
-		return h.deny(w, log, metrics.ConsumerUnknown, denyAuth("unknown or invalid consumer key"))
-	}
-
-	model, err := requestedModel(r)
-	if errors.Is(err, errBodyTooLarge) {
-		return h.deny(w, log, consumer.Name, denial{
-			status: http.StatusRequestEntityTooLarge, result: metrics.ResultInvalid,
-			typ: "invalid_request_error", code: "request_too_large",
-			msg: "the request is too large for aisa to find its model; the gateway should send the model in X-Aisa-Requested-Model",
-		})
-	}
-	if errors.Is(err, errModelTooLong) {
-		return h.deny(w, log, consumer.Name, denial{
-			status: http.StatusBadRequest, result: metrics.ResultInvalid,
-			typ: "invalid_request_error", code: "invalid_model",
-			msg: fmt.Sprintf("the requested model name is longer than %d bytes", maxModel),
-		})
-	}
-	if model == "" {
-		return h.deny(w, log, consumer.Name, denial{
-			status: http.StatusBadRequest, result: metrics.ResultInvalid,
-			typ: "invalid_request_error", code: "missing_model", msg: "the requested model could not be determined",
-		})
-	}
-	model, known := h.resolve(model)
-	if !known {
-		return h.deny(w, log, consumer.Name, denial{
-			status: http.StatusNotFound, result: metrics.ResultUnknownModel,
-			typ: "invalid_request_error", code: "model_not_found",
-			msg: fmt.Sprintf("the model %q does not exist; GET /v1/models lists the models on offer", model),
-		})
+	model, d := h.model(r)
+	if d != nil {
+		return h.deny(w, log, consumer.Name, *d)
 	}
 	if consumer.QuotaProfile == "" {
 		if h.opts.DefaultQuotaProfile == "" {
@@ -175,75 +137,23 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 		}
 		consumer.QuotaProfile = h.opts.DefaultQuotaProfile
 	}
-	qh, d, denied := h.checkQuota(r.Context(), log, consumer)
+	qh, quotaDenial, denied := h.checkQuota(r.Context(), log, consumer)
 	if denied {
-		return h.deny(w, log, consumer.Name, d)
+		return h.deny(w, log, consumer.Name, quotaDenial)
 	}
-	result := metrics.ResultAllow
+	rt := route{model: model, result: metrics.ResultAllow}
 	// remaining is X-Aisa-Budget-Remaining, sent with an allowed request of a consumer that has
 	// a budget; a denial carries no header of the kind.
-	remaining := ""
-	if h.budget != nil {
-		v := h.budget.Check(r.Context(), consumer.Name, model)
-		switch v.Outcome {
-		case budgets.Unavailable:
-			// Fail closed: a broken budget must not lift the limit unnoticed.
-			log.Error("cannot check the budget", "consumer", consumer.Name, "error", v.Err)
-			return h.deny(w, log, consumer.Name, denial{
-				status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
-				typ: "server_error", code: "budget_unavailable", msg: "aisa cannot check the monthly budget at the moment",
-			})
-		case budgets.Exhausted:
-			if v.OnExhausted != budgets.Downgrade || v.DowngradeTo == "" || v.DowngradeTo == model {
-				return h.deny(w, log, consumer.Name, denial{
-					status: http.StatusTooManyRequests, result: metrics.ResultDenyBudget,
-					typ: "insufficient_quota", code: "budget_exhausted",
-					msg: fmt.Sprintf("monthly budget exhausted: %d of %d tokens used on priced models", v.Used, v.Limit),
-				})
-			}
-			// The request goes on, to the budget's downgrade model instead; the proxy routes
-			// by X-Aisa-Model and forwards the request with that model (proxy rule 3).
-			log.Info("downgrade", "consumer", consumer.Name, "model", model, "to", v.DowngradeTo)
-			model, _ = h.resolve(v.DowngradeTo)
-			result = metrics.ResultDowngrade
-		}
-		if v.Outcome != budgets.NoBudget && v.Err == nil {
-			remaining = strconv.FormatInt(v.Remaining, 10)
-		}
+	remaining, d := h.checkBudget(r.Context(), log, consumer.Name, &rt)
+	if d != nil {
+		return h.deny(w, log, consumer.Name, *d)
 	}
-	// The ceiling above the consumers (#33): the budgets of the provider keys that serve the
-	// model, the model the request goes to after a downgrade included. A downgrade here goes
-	// to the provider budget's model, and the consumer's remaining tokens stay as said: the
-	// holder's total is not the client's business.
-	if h.provider != nil {
-		// Twice at most: the downgrade's model is checked too, and is not downgraded again.
-		for downgraded := false; ; downgraded = true {
-			v := h.provider.Check(r.Context(), model)
-			if v.Outcome == budgets.Unavailable {
-				log.Error("cannot check the provider budget", "model", model, "provider", v.Provider, "error", v.Err)
-				return h.deny(w, log, consumer.Name, denial{
-					status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
-					typ: "server_error", code: "budget_unavailable", msg: "aisa cannot check the monthly budget at the moment",
-				})
-			}
-			if v.Outcome != budgets.Exhausted {
-				break
-			}
-			if downgraded || v.OnExhausted != budgets.Downgrade || v.DowngradeTo == "" || v.DowngradeTo == model {
-				return h.deny(w, log, consumer.Name, denial{
-					status: http.StatusTooManyRequests, result: metrics.ResultDenyProviderBudget,
-					typ: "insufficient_quota", code: "provider_budget_exhausted",
-					msg: fmt.Sprintf("the monthly budget of the provider account that serves %s is exhausted: %d of %d tokens used", model, v.Used, v.Limit),
-				})
-			}
-			log.Info("downgrade", "consumer", consumer.Name, "model", model, "to", v.DowngradeTo, "provider", v.Provider)
-			model, _ = h.resolve(v.DowngradeTo)
-			result = metrics.ResultDowngrade
-		}
+	if d := h.checkProvider(r.Context(), log, consumer.Name, &rt); d != nil {
+		return h.deny(w, log, consumer.Name, *d)
 	}
 
 	w.Header().Set(HeaderConsumer, consumer.Name)
-	w.Header().Set(HeaderModel, model)
+	w.Header().Set(HeaderModel, rt.model)
 	if remaining != "" {
 		w.Header().Set(HeaderBudgetRemaining, remaining)
 	}
@@ -252,11 +162,154 @@ func (h *Handler) decide(w http.ResponseWriter, r *http.Request) string {
 		w.Header().Set(HeaderQuotaReset, qh.reset)
 	}
 	w.WriteHeader(http.StatusOK)
-	h.metrics.Decisions.WithLabelValues(consumer.Name, result).Inc()
-	if result == metrics.ResultAllow {
-		log.Debug("allow", "consumer", consumer.Name, "model", model)
+	h.metrics.Decisions.WithLabelValues(consumer.Name, rt.result).Inc()
+	if rt.result == metrics.ResultAllow {
+		log.Debug("allow", "consumer", consumer.Name, "model", rt.model)
 	}
-	return result
+	return rt.result
+}
+
+// route is where an allowed request goes: the model, which a downgrade changes, and the result
+// it is counted under, allow or downgrade.
+type route struct {
+	model, result string
+}
+
+// downgrade sends the request to another model; the proxy routes by X-Aisa-Model and forwards
+// the request with that model (proxy rule 3).
+func (rt *route) downgrade(h *Handler, to string) {
+	rt.model, _ = h.resolve(to)
+	rt.result = metrics.ResultDowngrade
+}
+
+// authenticate returns the consumer of the request's key, or the denial of a request without
+// one that aisa knows.
+func (h *Handler) authenticate(r *http.Request, log *slog.Logger) (consumers.Consumer, *denial) {
+	key, ok := bearer(r.Header.Get("Authorization"))
+	if !ok {
+		d := denyAuth("missing or malformed credential: want Authorization: Bearer <key>")
+		return consumers.Consumer{}, &d
+	}
+	stage := time.Now()
+	consumer, res := h.consumers.Lookup(r.Context(), key)
+	h.metrics.DecideStageDuration.WithLabelValues(metrics.StageConsumer).Observe(time.Since(stage).Seconds())
+	switch res {
+	case consumers.Unavailable:
+		// Fail closed: without current consumers aisa cannot tell a valid key from a revoked one.
+		log.Error("cannot decide: consumers are not available")
+		return consumers.Consumer{}, &denial{
+			status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
+			typ: "server_error", code: "consumers_unavailable", msg: "aisa cannot verify credentials at the moment",
+		}
+	case consumers.Unknown:
+		d := denyAuth("unknown or invalid consumer key")
+		return consumers.Consumer{}, &d
+	}
+	return consumer, nil
+}
+
+// model returns the model the request asks for, an alias resolved to its model, or the denial
+// of a request whose model cannot be read or is not one aisa knows.
+func (h *Handler) model(r *http.Request) (string, *denial) {
+	model, err := requestedModel(r)
+	if errors.Is(err, errBodyTooLarge) {
+		return "", &denial{
+			status: http.StatusRequestEntityTooLarge, result: metrics.ResultInvalid,
+			typ: "invalid_request_error", code: "request_too_large",
+			msg: "the request is too large for aisa to find its model; the gateway should send the model in X-Aisa-Requested-Model",
+		}
+	}
+	if errors.Is(err, errModelTooLong) {
+		return "", &denial{
+			status: http.StatusBadRequest, result: metrics.ResultInvalid,
+			typ: "invalid_request_error", code: "invalid_model",
+			msg: fmt.Sprintf("the requested model name is longer than %d bytes", maxModel),
+		}
+	}
+	if model == "" {
+		return "", &denial{
+			status: http.StatusBadRequest, result: metrics.ResultInvalid,
+			typ: "invalid_request_error", code: "missing_model", msg: "the requested model could not be determined",
+		}
+	}
+	model, known := h.resolve(model)
+	if !known {
+		return "", &denial{
+			status: http.StatusNotFound, result: metrics.ResultUnknownModel,
+			typ: "invalid_request_error", code: "model_not_found",
+			msg: fmt.Sprintf("the model %q does not exist; GET /v1/models lists the models on offer", model),
+		}
+	}
+	return model, nil
+}
+
+// budgetUnavailable is the answer when a budget cannot be checked. Fail closed: a broken
+// budget must not lift the limit unnoticed.
+func budgetUnavailable() *denial {
+	return &denial{
+		status: http.StatusServiceUnavailable, result: metrics.ResultUnavailable,
+		typ: "server_error", code: "budget_unavailable", msg: "aisa cannot check the monthly budget at the moment",
+	}
+}
+
+// checkBudget applies the consumer's monthly budget: it returns the denial of a consumer
+// whose budget is used up or cannot be known, or sends the request to the budget's downgrade
+// model. The string is the consumer's remaining tokens, "" for a consumer without a budget.
+func (h *Handler) checkBudget(ctx context.Context, log *slog.Logger, consumer string, rt *route) (string, *denial) {
+	if h.budget == nil {
+		return "", nil
+	}
+	v := h.budget.Check(ctx, consumer, rt.model)
+	switch v.Outcome {
+	case budgets.Unavailable:
+		log.Error("cannot check the budget", "consumer", consumer, "error", v.Err)
+		return "", budgetUnavailable()
+	case budgets.Exhausted:
+		if v.OnExhausted != budgets.Downgrade || v.DowngradeTo == "" || v.DowngradeTo == rt.model {
+			return "", &denial{
+				status: http.StatusTooManyRequests, result: metrics.ResultDenyBudget,
+				typ: "insufficient_quota", code: "budget_exhausted",
+				msg: fmt.Sprintf("monthly budget exhausted: %d of %d tokens used on priced models", v.Used, v.Limit),
+			}
+		}
+		// The request goes on, to the budget's downgrade model instead.
+		log.Info("downgrade", "consumer", consumer, "model", rt.model, "to", v.DowngradeTo)
+		rt.downgrade(h, v.DowngradeTo)
+	}
+	if v.Outcome != budgets.NoBudget && v.Err == nil {
+		return strconv.FormatInt(v.Remaining, 10), nil
+	}
+	return "", nil
+}
+
+// checkProvider applies the ceiling above the consumers (#33): the budgets of the provider
+// keys that serve the model, the model the request goes to after a downgrade included. A
+// downgrade here goes to the provider budget's model, and the consumer's remaining tokens stay
+// as said: the holder's total is not the client's business.
+func (h *Handler) checkProvider(ctx context.Context, log *slog.Logger, consumer string, rt *route) *denial {
+	if h.provider == nil {
+		return nil
+	}
+	// Twice at most: the downgrade's model is checked too, and is not downgraded again.
+	for downgraded := false; ; downgraded = true {
+		v := h.provider.Check(ctx, rt.model)
+		if v.Outcome == budgets.Unavailable {
+			log.Error("cannot check the provider budget", "model", rt.model, "provider", v.Provider, "error", v.Err)
+			return budgetUnavailable()
+		}
+		if v.Outcome != budgets.Exhausted {
+			return nil
+		}
+		if downgraded || v.OnExhausted != budgets.Downgrade || v.DowngradeTo == "" || v.DowngradeTo == rt.model {
+			return &denial{
+				status: http.StatusTooManyRequests, result: metrics.ResultDenyProviderBudget,
+				typ: "insufficient_quota", code: "provider_budget_exhausted",
+				msg: fmt.Sprintf("the monthly budget of the provider account that serves %s is exhausted: %d of %d tokens used", rt.model, v.Used, v.Limit),
+			}
+		}
+		log.Info("downgrade", "consumer", consumer, "model", rt.model, "to", v.DowngradeTo, "provider", v.Provider)
+		rt.downgrade(h, v.DowngradeTo)
+	}
 }
 
 // resolve returns the model a name stands for, itself or the model of an alias, and false for a

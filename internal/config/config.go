@@ -218,6 +218,61 @@ func checkAddr(name, v string) error {
 	return nil
 }
 
+// metricsAddrFromEnv reads AISA_METRICS_ADDR, the listener of /metrics when it is not aisa's own.
+func metricsAddrFromEnv(getenv func(string) string, cfg *Config) error {
+	v := getenv("AISA_METRICS_ADDR")
+	if v == "" {
+		return nil
+	}
+	if err := checkAddr("AISA_METRICS_ADDR", v); err != nil {
+		return err
+	}
+	if v == cfg.Addr {
+		return fmt.Errorf("AISA_METRICS_ADDR: %q is AISA_ADDR too; unset it to serve /metrics there", v)
+	}
+	cfg.MetricsAddr = v
+	return nil
+}
+
+// logLevelFromEnv reads AISA_LOG_LEVEL. Not slog's own parser: it also takes offsets such as
+// INFO+1.
+func logLevelFromEnv(getenv func(string) string, cfg *Config) error {
+	v := getenv("AISA_LOG_LEVEL")
+	switch strings.ToLower(v) {
+	case "":
+	case "debug":
+		cfg.LogLevel = slog.LevelDebug
+	case "info":
+		cfg.LogLevel = slog.LevelInfo
+	case "warn":
+		cfg.LogLevel = slog.LevelWarn
+	case "error":
+		cfg.LogLevel = slog.LevelError
+	default:
+		return fmt.Errorf("AISA_LOG_LEVEL: want debug, info, warn or error, got %q", v)
+	}
+	return nil
+}
+
+// ledgerFromEnv reads the sizes of the usage ledger.
+func ledgerFromEnv(getenv func(string) string, l *Ledger) error {
+	if v := getenv("AISA_LEDGER_DEDUP_CAPACITY"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return fmt.Errorf("AISA_LEDGER_DEDUP_CAPACITY: want a positive integer, got %q", v)
+		}
+		l.DedupCapacity = n
+	}
+	if v := getenv("AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			return fmt.Errorf("AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS: want a non-negative integer, got %q", v)
+		}
+		l.EstimateDefaultTokens = n
+	}
+	return nil
+}
+
 // FromEnv reads the configuration with getenv, which is os.Getenv outside tests.
 func FromEnv(getenv func(string) string) (Config, error) {
 	cfg := Defaults()
@@ -227,29 +282,11 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return cfg, err
 	}
 	cfg.Addr = addr
-	if v := getenv("AISA_METRICS_ADDR"); v != "" {
-		if err := checkAddr("AISA_METRICS_ADDR", v); err != nil {
-			return cfg, err
-		}
-		if v == cfg.Addr {
-			return cfg, fmt.Errorf("AISA_METRICS_ADDR: %q is AISA_ADDR too; unset it to serve /metrics there", v)
-		}
-		cfg.MetricsAddr = v
+	if err := metricsAddrFromEnv(getenv, &cfg); err != nil {
+		return cfg, err
 	}
-	if v := getenv("AISA_LOG_LEVEL"); v != "" {
-		// Not slog's own parser: it also takes offsets such as INFO+1.
-		switch strings.ToLower(v) {
-		case "debug":
-			cfg.LogLevel = slog.LevelDebug
-		case "info":
-			cfg.LogLevel = slog.LevelInfo
-		case "warn":
-			cfg.LogLevel = slog.LevelWarn
-		case "error":
-			cfg.LogLevel = slog.LevelError
-		default:
-			return cfg, fmt.Errorf("AISA_LOG_LEVEL: want debug, info, warn or error, got %q", v)
-		}
+	if err := logLevelFromEnv(getenv, &cfg); err != nil {
+		return cfg, err
 	}
 	for _, d := range []struct {
 		name string
@@ -265,19 +302,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return cfg, err
 		}
 	}
-	if v := getenv("AISA_LEDGER_DEDUP_CAPACITY"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			return cfg, fmt.Errorf("AISA_LEDGER_DEDUP_CAPACITY: want a positive integer, got %q", v)
-		}
-		cfg.Ledger.DedupCapacity = n
-	}
-	if v := getenv("AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || n < 0 {
-			return cfg, fmt.Errorf("AISA_LEDGER_ESTIMATE_DEFAULT_TOKENS: want a non-negative integer, got %q", v)
-		}
-		cfg.Ledger.EstimateDefaultTokens = n
+	if err := ledgerFromEnv(getenv, &cfg.Ledger); err != nil {
+		return cfg, err
 	}
 	if cfg.Consumers.MaxStale < cfg.Consumers.Refresh {
 		return cfg, fmt.Errorf("AISA_CONSUMER_MAX_STALE (%s) must not be shorter than AISA_CONSUMER_REFRESH (%s)",

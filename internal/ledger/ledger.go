@@ -103,12 +103,42 @@ type providerCharge struct {
 
 // ServeHTTP answers POST /v1/usage.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	events, ok := h.readEvents(w, r)
+	if !ok {
+		return
+	}
+
+	b := batch{
+		charges:         map[charge]int64{},
+		budgetCharges:   map[charge]int64{},
+		providerCharges: map[providerCharge]int64{},
+		firstIndex:      -1,
+	}
+	for i, p := range events {
+		h.take(&b, i, p)
+	}
+	h.chargeAll(r.Context(), h.charger, b.charges, "quota")
+	h.chargeAll(r.Context(), h.budget, b.budgetCharges, "budget")
+	h.chargeProviders(r.Context(), b.providerCharges)
+
+	if b.rejected > 0 {
+		// One line per request, not per event: a sink with a systematic mistake sends every event
+		// of every batch wrong, up to 10 000 per request.
+		h.log.Warn("invalid usage events skipped",
+			"rejected", b.rejected, "events", len(events), "first_index", b.firstIndex, "first_error", b.firstErr)
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"accepted": b.accepted, "rejected": b.rejected})
+}
+
+// readEvents reads the events of a usage request. It answers a request that is not a POST, or
+// whose body cannot be read or parsed, itself, and returns false.
+func (h *Handler) readEvents(w http.ResponseWriter, r *http.Request) ([]Parsed, bool) {
 	if r.Method != http.MethodPost {
 		// Not counted: a log sink always POSTs, so this is a stray request (a probe, a scanner),
 		// not usage that is being lost.
 		w.Header().Set("Allow", http.MethodPost)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed: want POST"})
-		return
+		return nil, false
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
@@ -118,78 +148,79 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &maxBytesErr) {
 			h.log.Warn("usage request rejected: body too large", "limit_bytes", maxBody)
 			h.rejectRequest(w, http.StatusRequestEntityTooLarge, metrics.UsageRequestTooLarge, "request body too large")
-			return
+			return nil, false
 		}
 		h.log.Warn("usage request rejected: unreadable body", "error", err)
 		h.rejectRequest(w, http.StatusBadRequest, metrics.UsageRequestUnreadable, err.Error())
-		return
+		return nil, false
 	}
 
 	events, err := ParseEvents(body)
 	if err != nil {
 		h.log.Warn("usage request rejected: malformed events", "error", err)
 		h.rejectRequest(w, http.StatusBadRequest, metrics.UsageRequestMalformed, err.Error())
+		return nil, false
+	}
+	return events, true
+}
+
+// batch is what one usage request adds up to: the events taken and refused, and the tokens
+// to charge once the whole request has been read.
+type batch struct {
+	accepted, rejected int
+	// firstErr and firstIndex are the first event refused, for the request's one log line.
+	firstErr   error
+	firstIndex int
+	// charges are the tokens for the quotas, by consumer and minute.
+	charges map[charge]int64
+	// budgetCharges are those of priced models: the budgets bound the use of priced models
+	// only, so their tokens are charged to both.
+	budgetCharges map[charge]int64
+	// providerCharges count every request through a key, by the model and the backend that
+	// answered; a fail-open request, without a consumer, went through a key too.
+	providerCharges map[providerCharge]int64
+}
+
+// take adds the event at index i to the batch: refused when it is not valid, skipped when its
+// request has been seen, and recorded and charged otherwise.
+func (h *Handler) take(b *batch, i int, p Parsed) {
+	ev := p.Event
+	err := p.Err
+	if err == nil {
+		err = validateEvent(ev)
+	}
+	if err != nil {
+		h.metrics.UsageEvents.WithLabelValues(metrics.EventRejected).Inc()
+		if b.firstErr == nil {
+			b.firstErr, b.firstIndex = err, i
+		}
+		b.rejected++
+		return
+	}
+	b.accepted++
+	if h.dedup.SeenOrAdd(ev.RequestID) {
+		h.metrics.UsageEvents.WithLabelValues(metrics.EventDuplicate).Inc()
+		h.log.Debug("duplicate usage event skipped", "request_id", ev.RequestID)
 		return
 	}
 
-	accepted, rejected := 0, 0
-	charges := map[charge]int64{}
-	// The budgets bound the use of priced models only: their tokens are charged to both.
-	budgetCharges := map[charge]int64{}
-	// The provider budgets count every request through a key, by the model and the backend
-	// that answered; a fail-open request, without a consumer, went through a key too.
-	providerCharges := map[providerCharge]int64{}
-	var firstErr error
-	firstIndex := -1
-	for i, p := range events {
-		ev := p.Event
-		err := p.Err
-		if err == nil {
-			err = validateEvent(ev)
-		}
-		if err != nil {
-			h.metrics.UsageEvents.WithLabelValues(metrics.EventRejected).Inc()
-			if firstErr == nil {
-				firstErr, firstIndex = err, i
-			}
-			rejected++
-			continue
-		}
-		if h.dedup.SeenOrAdd(ev.RequestID) {
-			h.metrics.UsageEvents.WithLabelValues(metrics.EventDuplicate).Inc()
-			h.log.Debug("duplicate usage event skipped", "request_id", ev.RequestID)
-			accepted++
-			continue
-		}
-
-		h.metrics.UsageEvents.WithLabelValues(metrics.EventAccepted).Inc()
-		if tokens := h.recordEvent(ev); tokens > 0 {
-			minute := h.eventTime(ev).UTC().Truncate(time.Minute)
-			if ev.Consumer != "" {
-				key := charge{ev.Consumer, minute}
-				charges[key] = quotas.AddTokens(charges[key], tokens)
-				if h.paid(ev.Model) {
-					budgetCharges[key] = quotas.AddTokens(budgetCharges[key], tokens)
-				}
-			}
-			if h.provider != nil {
-				key := providerCharge{ev.Model, ev.Backend, minute}
-				providerCharges[key] = quotas.AddTokens(providerCharges[key], tokens)
-			}
-		}
-		accepted++
+	h.metrics.UsageEvents.WithLabelValues(metrics.EventAccepted).Inc()
+	tokens := h.recordEvent(ev)
+	if tokens <= 0 {
+		return
 	}
-	h.chargeAll(r.Context(), h.charger, charges, "quota")
-	h.chargeAll(r.Context(), h.budget, budgetCharges, "budget")
-	h.chargeProviders(r.Context(), providerCharges)
-
-	if rejected > 0 {
-		// One line per request, not per event: a sink with a systematic mistake sends every event
-		// of every batch wrong, up to 10 000 per request.
-		h.log.Warn("invalid usage events skipped",
-			"rejected", rejected, "events", len(events), "first_index", firstIndex, "first_error", firstErr)
+	minute := h.eventTime(ev).UTC().Truncate(time.Minute)
+	if ev.Consumer != "" {
+		key := charge{ev.Consumer, minute}
+		b.charges[key] = quotas.AddTokens(b.charges[key], tokens)
+		if h.paid(ev.Model) {
+			b.budgetCharges[key] = quotas.AddTokens(b.budgetCharges[key], tokens)
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"accepted": accepted, "rejected": rejected})
+	if h.provider != nil {
+		key := providerCharge{ev.Model, ev.Backend, minute}
+		b.providerCharges[key] = quotas.AddTokens(b.providerCharges[key], tokens)
+	}
 }
 
 // eventTime is when the gateway logged the event, or now when its ts is missing, unreadable
