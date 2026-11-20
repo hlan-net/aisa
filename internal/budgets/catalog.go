@@ -97,22 +97,8 @@ func (c *Catalog) apply(instances []consul.Instance) {
 		if key == "" {
 			continue
 		}
-		for _, name := range []string{in.ID, in.Address, net.JoinHostPort(in.Address, strconv.Itoa(in.Port))} {
-			if name == "" {
-				continue
-			}
-			if other, ok := byBackend[name]; ok && other != key {
-				ambiguous[name] = true
-			}
-			byBackend[name] = key
-		}
-		for model := range strings.SplitSeq(in.Meta["models"], ",") {
-			model = strings.TrimSpace(model)
-			if model == "" || slices.Contains(byModel[model], key) {
-				continue
-			}
-			byModel[model] = append(byModel[model], key)
-		}
+		nameBackend(byBackend, ambiguous, in, key)
+		addModels(byModel, in.Meta["models"], key)
 	}
 	for _, keys := range byModel {
 		sort.Strings(keys)
@@ -123,6 +109,31 @@ func (c *Catalog) apply(instances []consul.Instance) {
 	c.mu.Lock()
 	c.loaded, c.byModel, c.byBackend = true, byModel, byBackend
 	c.mu.Unlock()
+}
+
+// nameBackend records key under the names a usage event may give the instance: its id, its
+// address, and its address with the port. A name already taken by another key is ambiguous.
+func nameBackend(byBackend map[string]string, ambiguous map[string]bool, in consul.Instance, key string) {
+	for _, name := range []string{in.ID, in.Address, net.JoinHostPort(in.Address, strconv.Itoa(in.Port))} {
+		if name == "" {
+			continue
+		}
+		if other, ok := byBackend[name]; ok && other != key {
+			ambiguous[name] = true
+		}
+		byBackend[name] = key
+	}
+}
+
+// addModels adds key to each model of a backend's comma-separated models, once.
+func addModels(byModel map[string][]string, models, key string) {
+	for model := range strings.SplitSeq(models, ",") {
+		model = strings.TrimSpace(model)
+		if model == "" || slices.Contains(byModel[model], key) {
+			continue
+		}
+		byModel[model] = append(byModel[model], key)
+	}
 }
 
 // Loaded reports whether the catalog has been read.
