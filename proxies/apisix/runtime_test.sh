@@ -15,7 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NETWORK="${NETWORK:-aisa-dev_default}"
 CT_IMAGE="${CONSUL_TEMPLATE_IMAGE:-hashicorp/consul-template:0.43.0}"
-APISIX_IMAGE="${APISIX_IMAGE:-apache/apisix:3.19.0-debian}"
+APISIX_IMAGE="${APISIX_IMAGE:-apache/apisix:3.20.0-debian}"
 STUB="${STUB:-http://127.0.0.1:8081}"
 # The mock backend that serves qwen3: what it received is how a provider sees the gateway.
 MOCK_LOCAL="${MOCK_LOCAL:-http://127.0.0.1:8082}"
