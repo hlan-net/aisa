@@ -12,11 +12,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/hlan-net/aisa/internal/budgets"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/kube"
 	"github.com/hlan-net/aisa/internal/ledger"
 	"github.com/hlan-net/aisa/internal/metrics"
 	"github.com/hlan-net/aisa/internal/pricing"
+	"github.com/hlan-net/aisa/internal/quotas"
 	"github.com/hlan-net/aisa/internal/server"
 )
 
@@ -114,6 +116,39 @@ func TestObservePrices(t *testing.T) {
 		"aisa_model_prices_invalid":                {testutil.ToFloat64(m.ModelPricesInvalid), 1},
 		"aisa_model_price_loads_total{result=ok}":  {testutil.ToFloat64(m.ModelPriceLoads.WithLabelValues(metrics.LoadOK)), 1},
 		"aisa_model_price_loads_total{result=err}": {testutil.ToFloat64(m.ModelPriceLoads.WithLabelValues(metrics.LoadError)), 1},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", name, tc.got, tc.want)
+		}
+	}
+}
+
+// The other loads are observed as the prices are: a load that worked sets the gauges and counts
+// as ok, one that failed counts as an error and leaves the gauges as they were.
+func TestObserveLoads(t *testing.T) {
+	m := metrics.New("test")
+	down := errors.New("consul down")
+
+	observeBudgets(m, budgets.LoadStats{Valid: 3, Invalid: 1})
+	observeBudgets(m, budgets.LoadStats{Err: down, Valid: 9, Invalid: 9})
+	observeDeclarations(m, consumers.DeclarationStats{Valid: 4, Invalid: 2})
+	observeDeclarations(m, consumers.DeclarationStats{Err: down, Valid: 9, Invalid: 9})
+	observeProfiles(m, quotas.LoadStats{Valid: 5, Invalid: 1})
+	observeProfiles(m, quotas.LoadStats{Err: down, Valid: 9, Invalid: 9})
+
+	for name, tc := range map[string]struct{ got, want float64 }{
+		"aisa_budgets":                       {testutil.ToFloat64(m.Budgets), 3},
+		"aisa_budgets_invalid":               {testutil.ToFloat64(m.BudgetsInvalid), 1},
+		"budget loads ok":                    {testutil.ToFloat64(m.BudgetLoads.WithLabelValues(metrics.LoadOK)), 1},
+		"budget loads error":                 {testutil.ToFloat64(m.BudgetLoads.WithLabelValues(metrics.LoadError)), 1},
+		"aisa_consumer_declarations":         {testutil.ToFloat64(m.ConsumerDeclarations), 4},
+		"aisa_consumer_declarations_invalid": {testutil.ToFloat64(m.ConsumerDeclarationsInvalid), 2},
+		"consumer declaration loads ok":      {testutil.ToFloat64(m.ConsumerDeclarationLoads.WithLabelValues(metrics.LoadOK)), 1},
+		"consumer declaration loads error":   {testutil.ToFloat64(m.ConsumerDeclarationLoads.WithLabelValues(metrics.LoadError)), 1},
+		"aisa_quota_profiles":                {testutil.ToFloat64(m.QuotaProfiles), 5},
+		"aisa_quota_profiles_invalid":        {testutil.ToFloat64(m.QuotaProfilesInvalid), 1},
+		"quota profile loads ok":             {testutil.ToFloat64(m.QuotaProfileLoads.WithLabelValues(metrics.LoadOK)), 1},
+		"quota profile loads error":          {testutil.ToFloat64(m.QuotaProfileLoads.WithLabelValues(metrics.LoadError)), 1},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %v, want %v", name, tc.got, tc.want)

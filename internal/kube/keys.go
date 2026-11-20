@@ -347,7 +347,7 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target, mod
 	changed := rec.clean(now, current, k.opts.Unwritten, k.opts.Grace)
 
 	if current != "" && slices.Contains(rec.hashes, current) {
-		return k.keep(ctx, name, t, rec, secret, current, changed, model)
+		return k.keep(ctx, consumerRef{name: name, t: t, model: model}, rec, secret, current, changed)
 	}
 
 	reason := IssueMissing
@@ -364,9 +364,18 @@ func (k *Keys) reconcileConsumer(ctx context.Context, name string, t target, mod
 	return StateOK, nil
 }
 
+// consumerRef is a consumer in a pass: its name, where its Secret is, and the model the Secret
+// is to carry.
+type consumerRef struct {
+	name  string
+	t     target
+	model modelSetting
+}
+
 // keep handles a Secret that holds a key aisa issued: it clears the key's marks, restores what
 // else was changed, and replaces the key when it is due.
-func (k *Keys) keep(ctx context.Context, name string, t target, rec *record, secret *corev1.Secret, current string, changed bool, model modelSetting) (string, error) {
+func (k *Keys) keep(ctx context.Context, c consumerRef, rec *record, secret *corev1.Secret, current string, changed bool) (string, error) {
+	name, t, model := c.name, c.t, c.model
 	now := k.opts.Now()
 	if at, ok := rec.unwritten[current]; ok {
 		// The key reached the Secret, and the pass that wrote it did not clear its mark: it
