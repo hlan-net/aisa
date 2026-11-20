@@ -1128,7 +1128,6 @@ func TestCorruptedQuotaProfile(t *testing.T) {
 	}
 }
 
-
 // TestDefaultModel covers default_model on consumers and quota profiles: it is stored
 // trimmed, left out when empty, and returned by the lists.
 func TestDefaultModel(t *testing.T) {

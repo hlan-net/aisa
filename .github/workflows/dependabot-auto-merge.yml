@@ -17,9 +17,14 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: dependabot-auto-merge
+  cancel-in-progress: false
+
 jobs:
   sweep:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Merge first green non-major dependabot PR
         env:
