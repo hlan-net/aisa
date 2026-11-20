@@ -65,6 +65,20 @@ jobs:
             exit 1
           fi
 
+      - name: A tag of the version is this commit
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # A manual run may name a version that is tagged already. Its image and charts would
+          # be built again from this commit, so the tag must be this commit: otherwise the
+          # release and what is published under it would be of two different commits.
+          # The peeled line (^{}) of an annotated tag is its commit; a lightweight tag has one line.
+          tagged=$(git ls-remote --tags origin "refs/tags/$VERSION" "refs/tags/$VERSION^{}" | sort -k2 | tail -n1 | cut -f1)
+          if [[ -n "$tagged" && "$tagged" != "$(git rev-parse HEAD)" ]]; then
+            echo "::error::$VERSION is tagged at ${tagged:0:7}, and this run is of $(git rev-parse --short HEAD); run it from the tag"
+            exit 1
+          fi
+
       - name: The changelog has the version
         env:
           VERSION: ${{ steps.version.outputs.version }}
