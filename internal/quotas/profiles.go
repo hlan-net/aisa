@@ -168,23 +168,9 @@ func (p *Profiles) DefaultModels() (map[string]string, bool) {
 	if p == nil {
 		return nil, false
 	}
-	var used map[string]bool
-	if p.opts.Consumers != nil {
-		valid, _, loaded := p.opts.Consumers.Snapshot()
-		if !loaded {
-			return nil, false
-		}
-		used = make(map[string]bool)
-		for _, decl := range valid {
-			if decl.DefaultModel != "" {
-				continue
-			}
-			profile := decl.QuotaProfile
-			if profile == "" {
-				profile = p.opts.Default
-			}
-			used[profile] = true
-		}
+	used, known := p.givingModels()
+	if !known {
+		return nil, false
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -198,6 +184,31 @@ func (p *Profiles) DefaultModels() (map[string]string, bool) {
 		}
 	}
 	return out, true
+}
+
+// givingModels returns the profiles that some consumer takes its model from, and false while
+// the consumers' declarations have not been read. Without declarations to ask it returns nil,
+// which stands for every profile.
+func (p *Profiles) givingModels() (map[string]bool, bool) {
+	if p.opts.Consumers == nil {
+		return nil, true
+	}
+	valid, _, loaded := p.opts.Consumers.Snapshot()
+	if !loaded {
+		return nil, false
+	}
+	used := make(map[string]bool)
+	for _, decl := range valid {
+		if decl.DefaultModel != "" {
+			continue
+		}
+		profile := decl.QuotaProfile
+		if profile == "" {
+			profile = p.opts.Default
+		}
+		used[profile] = true
+	}
+	return used, true
 }
 
 // Ready returns nil once the profiles have been read and, when a default profile is set, it

@@ -305,6 +305,13 @@ jobs:
     needs: test
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # SonarQube shows the analysis it got last, and the runs of main are not cancelled and may
+    # finish in any order: the scan of an older merge that finished late replaced that of a
+    # newer one. So one scan of a branch runs at a time, and a scan of main whose commit is no
+    # longer the head of main is skipped (below): the head's own scan is the one that stands.
+    concurrency:
+      group: sonar-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: read
@@ -318,8 +325,20 @@ jobs:
         if: env.SONAR_TOKEN == ''
         run: echo "::notice::SONAR_TOKEN is not available to this run; SonarQube scan skipped."
 
+      - name: Is this still the head of the branch
+        id: head
+        if: env.SONAR_TOKEN != '' && github.event_name == 'push'
+        env:
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          tip=$(git ls-remote "$REPO_URL" "$GITHUB_REF" | cut -f1)
+          if [[ -n "$tip" && "$tip" != "$GITHUB_SHA" ]]; then
+            echo "::notice::${GITHUB_SHA:0:7} is no longer the head of $GITHUB_REF_NAME (${tip:0:7} is); its scan is skipped."
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout
-        if: env.SONAR_TOKEN != ''
+        if: env.SONAR_TOKEN != '' && steps.head.outputs.stale != 'true'
         uses: actions/checkout@v7
         with:
           # Full history for blame data and new-code detection.
@@ -327,11 +346,11 @@ jobs:
           persist-credentials: false
 
       - name: Download coverage
-        if: env.SONAR_TOKEN != ''
+        if: env.SONAR_TOKEN != '' && steps.head.outputs.stale != 'true'
         uses: actions/download-artifact@v8
         with:
           name: coverage
 
       - name: SonarQube scan
-        if: env.SONAR_TOKEN != ''
+        if: env.SONAR_TOKEN != '' && steps.head.outputs.stale != 'true'
         uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
