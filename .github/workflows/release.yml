@@ -14,10 +14,12 @@ on:
 # Each job asks for what it writes; nothing is granted to the workflow as a whole.
 permissions: {}
 
-# One release of a tag at a time, and never cancelled half way: a release that stops between
-# the image and the charts leaves a version with one and not the other.
+# One release at a time, whichever way it was started, and never cancelled half way: a tag and
+# a manual run of the same version have different refs, so the group is not by ref, and a
+# release that stops between the image and the charts leaves a version with one and not the
+# other.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -67,7 +69,9 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if ! grep -q "^## \[${VERSION#v}\]" CHANGELOG.md; then
+          # The heading as it is written, not as a pattern: the dots of a version match any
+          # character in one.
+          if ! awk -v h="## [${VERSION#v}]" 'index($0, h) == 1 { found = 1 } END { exit !found }' CHANGELOG.md; then
             echo "::error::CHANGELOG.md has no section [${VERSION#v}]; prepare the release first"
             exit 1
           fi
@@ -108,8 +112,8 @@ jobs:
           VER="${VERSION#v}"
 
           if [ -f CHANGELOG.md ]; then
-            awk -v ver="$VER" '
-              $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+            awk -v h="## [$VER]" '
+              index($0, h) == 1 { flag=1; next }
               flag && /^## \[/ { flag=0 }
               flag { print }
             ' CHANGELOG.md > "$NOTES_FILE"
@@ -148,7 +152,9 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "aisa $TAG" --notes-file RELEASE_NOTES.md
           else
-            gh release create "$TAG" --title "aisa $TAG" --notes-file RELEASE_NOTES.md
+            # A manual run of a version without a tag makes the tag here: at the commit that was
+            # verified, not at the head of the default branch.
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "aisa $TAG" --notes-file RELEASE_NOTES.md
           fi
 
   image:
