@@ -151,7 +151,10 @@ expect "a route for the long model name, by its full name" "\"http_x_aisa_model\
 expect "a fail-open route for the long model name" "\"http_x_aisa_requested_model\", \"==\", \"$LONG_MODEL\""
 
 # Timeouts (#14, #18): the default, the cap, and a backend left out for a value that is not seconds.
-route() { awk -v id="$1" '$0 == "  - id: " id { f = 1; next } /^  - id: / { f = 0 } f' "$RENDERED"; }
+route() {
+    local id=$1
+    awk -v id="$id" '$0 == "  - id: " id { f = 1; next } /^  - id: / { f = 0 } f' "$RENDERED"
+}
 expect_in_route() {
     local what=$1 id=$2 pattern=$3 text
     # Read whole, not piped into grep -q: with pipefail, grep's early exit on a match near the

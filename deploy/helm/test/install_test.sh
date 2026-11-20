@@ -168,7 +168,8 @@ profiles=$(awk '/^aisa_quota_profiles /{print $2}' <<<"$metrics")
 expect "aisa read its quota profiles from Consul (a token from Vault)" 1 "$profiles"
 # A consumer whose declared profile is not in Consul is counted before it sends anything (#82).
 missing_gauge() {
-    curl -fsS http://127.0.0.1:18090/metrics | awk -v s="$1" '$0 ~ "^aisa_quota_profiles_missing\\{source=\"" s "\"\\}" {print $2}'
+    local source=$1
+    curl -fsS http://127.0.0.1:18090/metrics | awk -v s="$source" '$0 ~ "^aisa_quota_profiles_missing\\{source=\"" s "\"\\}" {print $2}'
 }
 expect "no consumer names a quota profile that is not in Consul" 0 "$(missing_gauge consumer)"
 consul kv put aisa/consumers/typo '{"quota_profile": "nonesuch"}' >/dev/null

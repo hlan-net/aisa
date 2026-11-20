@@ -10,7 +10,11 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 TARGET="${TMPDIR}/apisix.yaml"
 STAGED="${TMPDIR}/staged.yaml"
-echo "initial-good-config" > "$TARGET"
+# What the tests write and look for more than once.
+GOOD_CONFIG="initial-good-config"
+QWEN3_ROUTE='model-qwen3'
+REPORT_FILES='\.json$'
+echo "$GOOD_CONFIG" > "$TARGET"
 
 # No APISIX here: the checks of the file itself come first. The Control API part is tested at
 # the end, against a fake one.
@@ -32,7 +36,7 @@ if ! grep -q 'id: client' "$TARGET"; then
 fi
 
 echo "== guard.sh: incomplete file (missing #END)"
-echo "initial-good-config" > "$TARGET"
+echo "$GOOD_CONFIG" > "$TARGET"
 cat << 'EOF' > "$STAGED"
 routes:
   - id: client
@@ -42,7 +46,7 @@ if "$GUARD" "$STAGED" "$TARGET" 2>/dev/null; then
   echo "FAIL: incomplete file should be rejected" >&2
   exit 1
 fi
-if [[ "$(cat "$TARGET")" != "initial-good-config" ]]; then
+if [[ "$(cat "$TARGET")" != "$GOOD_CONFIG" ]]; then
   echo "FAIL: target was modified on failure" >&2
   exit 1
 fi
@@ -80,7 +84,7 @@ if "$GUARD" "$STAGED" "$TARGET" 2>/dev/null; then
 fi
 
 echo "== guard.sh: another guard holds the lock"
-echo "initial-good-config" > "$TARGET"
+echo "$GOOD_CONFIG" > "$TARGET"
 cat << 'EOF' > "$STAGED"
 routes:
   - id: client
@@ -96,7 +100,7 @@ if out=$(GUARD_LOCK_WAIT=2 "$GUARD" "$STAGED" "$TARGET" 2>&1); then
   exit 1
 fi
 grep -q "another guard ($HOLDER)" <<< "$out" || { echo "FAIL: no error naming the lock's owner: $out" >&2; exit 1; }
-[[ "$(cat "$TARGET")" == "initial-good-config" ]] || { echo "FAIL: the target changed under a lock" >&2; exit 1; }
+[[ "$(cat "$TARGET")" == "$GOOD_CONFIG" ]] || { echo "FAIL: the target changed under a lock" >&2; exit 1; }
 [[ "$(cat "$TARGET.lock/pid")" == "$HOLDER" ]] || { echo "FAIL: the lock of a live guard was touched" >&2; exit 1; }
 echo "== guard.sh: the lock of a guard that is gone is taken over"
 kill "$HOLDER"; wait "$HOLDER" 2>/dev/null || true
@@ -105,7 +109,7 @@ grep -q "taking over the lock.*$HOLDER, which is gone" <<< "$out" || { echo "FAI
 grep -q 'id: client' "$TARGET" || { echo "FAIL: the file was not promoted after the takeover" >&2; exit 1; }
 [[ ! -d "$TARGET.lock" ]] || { echo "FAIL: the lock was not released" >&2; exit 1; }
 echo "== guard.sh: a lock without an owner is taken over after 120 s, not before"
-echo "initial-good-config" > "$TARGET"
+echo "$GOOD_CONFIG" > "$TARGET"
 cat << 'EOF' > "$STAGED"
 routes:
   - id: client
@@ -136,7 +140,8 @@ grep -q 'id: client' "$TARGET" || { echo "FAIL: the first render was not promote
 # In the pod a loop runs the guard again every 30 s during a hold, with GUARD_RECHECK set; here
 # the test does.
 with_models() {
-  cat << 'EOF' > "$1"
+  local file=$1
+  cat << 'EOF' > "$file"
 routes:
   - id: client
   - id: "model-qwen3"
@@ -145,7 +150,8 @@ routes:
 EOF
 }
 without_models() {
-  cat << 'EOF' > "$1"
+  local file=$1
+  cat << 'EOF' > "$file"
 routes:
   - id: client
   - id: no-backend
@@ -158,7 +164,7 @@ export GUARD_EMPTY_GRACE=3
 with_models "$TARGET"
 without_models "$STAGED"
 out=$("$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a hold is not a failure: $out" >&2; exit 1; }
-grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the current file was replaced within the grace period" >&2; exit 1; }
+grep -q "$QWEN3_ROUTE" "$TARGET" || { echo "FAIL: the current file was replaced within the grace period" >&2; exit 1; }
 [[ -f "$STAGED" ]] || { echo "FAIL: the held file is gone" >&2; exit 1; }
 [[ -s "$TARGET.empty-since" ]] || { echo "FAIL: no mark of when the model routes went" >&2; exit 1; }
 grep -q 'stays for another' <<< "$out" || { echo "FAIL: no warning about the hold: $out" >&2; exit 1; }
@@ -167,15 +173,15 @@ sleep 1
 echo "== guard.sh: a second render and a recheck during the hold are held too, on the same clock"
 without_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the second held render failed" >&2; exit 1; }
-grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the second render ended the hold early" >&2; exit 1; }
+grep -q "$QWEN3_ROUTE" "$TARGET" || { echo "FAIL: the second render ended the hold early" >&2; exit 1; }
 [[ "$(cat "$TARGET.empty-since")" == "$since" ]] || { echo "FAIL: the second render reset the clock" >&2; exit 1; }
 out=$(GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" 2>&1) || { echo "FAIL: a recheck during the hold failed: $out" >&2; exit 1; }
-grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: a recheck ended the hold early" >&2; exit 1; }
+grep -q "$QWEN3_ROUTE" "$TARGET" || { echo "FAIL: a recheck ended the hold early" >&2; exit 1; }
 [[ -z "$out" ]] || { echo "FAIL: a recheck that finds the hold still on is not quiet: $out" >&2; exit 1; }
 echo "== guard.sh: a recheck after the grace period promotes the file"
 sleep 2
 GUARD_RECHECK=1 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the recheck after the grace period failed" >&2; exit 1; }
-if grep -q 'model-qwen3' "$TARGET"; then
+if grep -q "$QWEN3_ROUTE" "$TARGET"; then
   echo "FAIL: the file without model routes was not promoted when the grace period ended" >&2
   exit 1
 fi
@@ -285,7 +291,7 @@ loaded 1700000100 client model-qwen3 no-backend
 # The guard's deadline is in whole seconds, so GUARD_VERIFY_TIMEOUT=1 can leave it milliseconds
 # to ask about every route. The guard returns as soon as all are loaded: a longer one costs nothing.
 GUARD_VERIFY_TIMEOUT=5 "$GUARD" "$STAGED" "$TARGET" >/dev/null
-grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: a file APISIX loaded was not kept" >&2; exit 1; }
+grep -q "$QWEN3_ROUTE" "$TARGET" || { echo "FAIL: a file APISIX loaded was not kept" >&2; exit 1; }
 [[ ! -e "$TARGET.last-good" ]] || { echo "FAIL: the copy of the previous file was left behind" >&2; exit 1; }
 
 echo "== guard.sh: APISIX left a route out"
@@ -298,7 +304,7 @@ if out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
   exit 1
 fi
 [[ "$(cat "$TARGET")" = "$PREVIOUS" ]] || { echo "FAIL: the previous file was not put back" >&2; exit 1; }
-grep -q 'model-qwen3' <<< "$out" || { echo "FAIL: the error does not name the route: $out" >&2; exit 1; }
+grep -q "$QWEN3_ROUTE" <<< "$out" || { echo "FAIL: the error does not name the route: $out" >&2; exit 1; }
 
 echo "== guard.sh: APISIX still runs the previous file"
 echo "$PREVIOUS" > "$TARGET"
@@ -342,7 +348,7 @@ if ! out=$("$GUARD" "$STAGED" "$TARGET" 2>&1); then
   echo "FAIL: a file that passed the checks was rejected without an answer from APISIX: $out" >&2
   exit 1
 fi
-grep -q 'model-qwen3' "$TARGET" || { echo "FAIL: the new file was not kept" >&2; exit 1; }
+grep -q "$QWEN3_ROUTE" "$TARGET" || { echo "FAIL: the new file was not kept" >&2; exit 1; }
 grep -q 'not checked' <<< "$out" || { echo "FAIL: no warning that the routes are not checked: $out" >&2; exit 1; }
 
 # Every render is reported to AISA_RENDER_URI when it is set (PROXY_CONTRACT.md, Reporting a
@@ -445,7 +451,7 @@ export GUARD_EMPTY_GRACE=60
 without_models "$STAGED"
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the held render failed" >&2; exit 1; }
 unset GUARD_EMPTY_GRACE
-queued=$(ls "$TARGET.reports" | grep -c '\.json$')
+queued=$(ls "$TARGET.reports" | grep -c "$REPORT_FILES")
 [[ "$queued" == 2 ]] || { echo "FAIL: $queued reports wait, want 2" >&2; exit 1; }
 echo "== guard.sh: --resend delivers the waiting reports in order, each with an id"
 : > "$REPORTS"
@@ -455,7 +461,7 @@ export AISA_RENDER_URI="http://127.0.0.1:$RPORT/v1/render"
   { echo "FAIL: the waiting reports were not delivered in order: $(cat "$REPORTS")" >&2; exit 1; }
 ids=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print("\n".join(json.loads(l)["id"] for l in sys.stdin))')
 [[ "$(sort -u <<< "$ids" | grep -c .)" == 2 ]] || { echo "FAIL: the reports do not have ids of their own: $ids" >&2; exit 1; }
-[[ -z "$(ls "$TARGET.reports" | grep '\.json$')" ]] || { echo "FAIL: delivered reports were not removed" >&2; exit 1; }
+[[ -z "$(ls "$TARGET.reports" | grep "$REPORT_FILES")" ]] || { echo "FAIL: delivered reports were not removed" >&2; exit 1; }
 "$GUARD" --resend "$TARGET" || { echo "FAIL: --resend with nothing waiting failed" >&2; exit 1; }
 [[ "$(grep -c . "$REPORTS")" == 2 ]] || { echo "FAIL: --resend with nothing waiting sent something" >&2; exit 1; }
 rm -f "$TARGET.empty-since"
@@ -484,7 +490,7 @@ export AISA_RENDER_URI="http://127.0.0.1:1/v1/render"
 rm -rf "$TARGET.reports"
 echo "$PREVIOUS" > "$TARGET"
 for i in 1 2 3; do stage; "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1; done
-[[ "$(ls "$TARGET.reports" | grep -c '\.json$')" == 3 ]] || { echo "FAIL: 3 reports should wait" >&2; exit 1; }
+[[ "$(ls "$TARGET.reports" | grep -c "$REPORT_FILES")" == 3 ]] || { echo "FAIL: 3 reports should wait" >&2; exit 1; }
 export AISA_RENDER_URI="http://127.0.0.1:$SPORT/v1/render"
 : > "$REPORTS"
 stage
@@ -492,9 +498,9 @@ started=$(date +%s)
 "$GUARD" "$STAGED" "$TARGET" >/dev/null 2>&1 || { echo "FAIL: the render failed with a slow aisa" >&2; exit 1; }
 took=$(( $(date +%s) - started ))
 [[ "$took" -le 6 ]] || { echo "FAIL: a render waited ${took}s for a slow aisa, want 3 s or so" >&2; exit 1; }
-[[ "$(ls "$TARGET.reports" | grep -c '\.json$')" -ge 2 ]] || { echo "FAIL: a render sent more of the queue than its 3 s allow" >&2; exit 1; }
+[[ "$(ls "$TARGET.reports" | grep -c "$REPORT_FILES")" -ge 2 ]] || { echo "FAIL: a render sent more of the queue than its 3 s allow" >&2; exit 1; }
 "$GUARD" --resend "$TARGET" >/dev/null 2>&1 || { echo "FAIL: --resend failed with a slow aisa" >&2; exit 1; }
-[[ -z "$(ls "$TARGET.reports" | grep '\.json$')" ]] || { echo "FAIL: --resend did not drain the queue within its time" >&2; exit 1; }
+[[ -z "$(ls "$TARGET.reports" | grep "$REPORT_FILES")" ]] || { echo "FAIL: --resend did not drain the queue within its time" >&2; exit 1; }
 # A report whose answer came too late is sent again, and arrives twice: that is what the ids
 # are for, and aisa counts it once. Every report arrived at least once.
 unique=$(sed 's/^[^ ]* //' "$REPORTS" | python3 -c 'import json, sys; print(len({json.loads(l)["id"] for l in sys.stdin}))')

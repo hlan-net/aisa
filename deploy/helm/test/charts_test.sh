@@ -213,7 +213,10 @@ echo "ok: admin.enabled=true sets AISA_ADMIN_ENABLED=true in deployment"
 
 # The alerts of docs/features/usage-metrics.md ship as a PrometheusRule, on aisa's metrics only;
 # AisaDown watches the job of the metrics Service. The groups of a feature that is off are left out.
-alerts() { awk '/^kind:/{r = ($2 == "PrometheusRule")} r && /- alert: /{print $3}' "$1" | LC_ALL=C sort | tr '\n' ' '; }
+alerts() {
+    local rendered=$1
+    awk '/^kind:/{r = ($2 == "PrometheusRule")} r && /- alert: /{print $3}' "$rendered" | LC_ALL=C sort | tr '\n' ' '
+}
 want="AisaBudgetCountersFailing AisaBudgetExhausted AisaBudgetInvalid AisaBudgetSoftLimit AisaConfigEmpty AisaConfigHeld AisaConfigRenderRejected AisaConsumerDeclarationInvalid AisaConsumerSecretFailing AisaConsumersStale AisaConsumersUnreadable AisaDefaultModelUnknown AisaDown AisaKubeNoLeader AisaKubeWritesFailing AisaModelUnavailable AisaProviderBudgetSoftLimit AisaQuotaCountersFailing AisaQuotaProfileInvalid AisaQuotaProfileMissing AisaSlowDecisions AisaSlowFirstToken AisaUsageEventsRejected AisaUsageMissing AisaUsageRequestsRejected "
 [[ "$(alerts "$OUT/monitoring.yaml")" == "$want" ]] || fail "alerts in the PrometheusRule: $(alerts "$OUT/monitoring.yaml")"
 grep -q 'up{job="aisa-metrics",namespace="aisa"}' "$OUT/monitoring.yaml" || fail "AisaDown does not watch the job aisa-metrics"
@@ -223,6 +226,7 @@ helm template aisa "$AISA" "${REQUIRED[@]}" --set prometheusRule.enabled=true --
     >"$OUT/rule-min.yaml" 2>/dev/null
 case "$(alerts "$OUT/rule-min.yaml")" in
     *AisaKube*|*AisaConsumerSecret*|*AisaModel*|*AisaQuota*) fail "alerts of features that are off: $(alerts "$OUT/rule-min.yaml")" ;;
+    *) ;;
 esac
 # Without quotas aisa still reads the profiles for the Secrets' default_model: their alerts
 # stay, the one on the counters in Redis goes.
