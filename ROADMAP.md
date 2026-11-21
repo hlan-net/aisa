@@ -9,7 +9,7 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 
 ---
 
-## Current state: v0.3.3 released
+## Current state: v0.3.4 released
 
 - Architecture and the three aisa ↔ proxy contracts are written down ([docs/concepts/](docs/concepts/)), with the Kubernetes objects applications see ([docs/concepts/KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md))
 - Quotas, budgets (in tokens) and usage metrics are specified ([docs/features/](docs/features/))

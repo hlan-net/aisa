@@ -98,7 +98,7 @@ function closeModal(id) {
 async function loadOverview() {
   try {
     const data = await api('/overview');
-    document.getElementById('version-tag').textContent = data.version || 'v0.2.0';
+    document.getElementById('version-tag').textContent = data.version || '';
     const statusDot = document.getElementById('system-status-indicator');
     const statusText = document.getElementById('system-status-text');
 

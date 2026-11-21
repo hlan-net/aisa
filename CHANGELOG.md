@@ -6,9 +6,14 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-21
+
+Two corrections to the admin page. Nothing needs a change from an existing install.
+
 ### Fixed
 
 - The admin page no longer offers a link to `/metrics` that answers 404. The link was fixed to the address of the admin interface, where aisa serves no metrics once `AISA_METRICS_ADDR` is set, as it is in every chart install. `GET /admin/api/overview` now carries `metrics_addr`, and the page shows the link only when aisa serves `/metrics` on the same address as the admin interface (`AISA_METRICS_ADDR` unset). When metrics have an address of their own, the link is left out and the page names that address instead. The link reads "View raw metrics (/metrics)", as it never led to a Prometheus server (#136).
+- The admin page shows no version when aisa reports none, instead of `v0.2.0`.
 
 ## [0.3.3] - 2026-11-20
 
@@ -163,7 +168,8 @@ The first release: the design, the answered spikes, the dev stack and the start 
 - **Decision API** (unstable `/v1`): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
 - **CI actions**: `actions/setup-go` v6 → v7 and `golangci/golangci-lint-action` v8 → v9 (golangci-lint pinned to v2.14). The other actions were checked against their published tags and are current. Dependabot also watches the dev stack's Dockerfile and Compose images.
 
-[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/hlan-net/aisa/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/hlan-net/aisa/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/hlan-net/aisa/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/hlan-net/aisa/compare/v0.3.0...v0.3.1

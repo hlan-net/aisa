@@ -223,6 +223,10 @@ expect "embeddings: the event has the prompt tokens" "4" "$(jq -r '.prompt_token
 curl -fsS -o /dev/null -X DELETE "$STUB/debug/requests"
 expect "embeddings, unknown key: refused" "401" "$(curl -sS -o /dev/null -w "$STATUS" \
     -H 'Authorization: Bearer wrong-key' -H "$JSON" -d '{"model":"qwen3","input":"hello"}' "$PROXY/v1/embeddings")"
+# The refusal is reported too. Waiting for its event here also keeps it out of the next check's
+# count: the proxy sends a batch a second after its last event, later than the next clear.
+sleep 2
+expect "embeddings, unknown key: one usage event, with no consumer" "401 " "$(outcomes)"
 
 echo "== account isolation"
 isolated "a completion" "hello there" 200 none
