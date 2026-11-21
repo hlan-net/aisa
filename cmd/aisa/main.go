@@ -267,8 +267,6 @@ func run(args []string) error {
 	return nil
 }
 
-// newQuotaProfiles returns the quota profiles watched from Consul KV. The profiles know the
-// default and the consumers' declarations, to report a profile that is named and not there (#82).
 // adminOptions are what the admin interface takes from the configuration. MetricsAddr is set
 // only when /metrics has an address of its own, which is how the page knows not to link to
 // /metrics on the address it is served from.
@@ -282,6 +280,8 @@ func adminOptions(cfg config.Config, usage admin.UsageReporter) admin.Options {
 	}
 }
 
+// newQuotaProfiles returns the quota profiles watched from Consul KV. The profiles know the
+// default and the consumers' declarations, to report a profile that is named and not there (#82).
 func newQuotaProfiles(cfg config.Config, cc *consul.Client, declarations *consumers.Declarations, m *metrics.Metrics, log *slog.Logger) *quotas.Profiles {
 	return quotas.NewProfiles(
 		quotas.ConsulSource{Client: cc, Prefix: cfg.Consul.Prefix + "/quotas/"},
