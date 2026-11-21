@@ -44,6 +44,9 @@ type Options struct {
 	VaultPrefix  string // Prefix in Vault KV v2 mount, defaults to "aisa"
 	// Budgets reports the consumers' use of their monthly budgets; nil when aisa counts none.
 	Budgets UsageReporter
+	// MetricsAddr is the address /metrics is served on when that is not the address of the
+	// admin interface; empty when /metrics is served beside it.
+	MetricsAddr string
 }
 
 // Handler serves both the admin JSON API and the embedded web dashboard.

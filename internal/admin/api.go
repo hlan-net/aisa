@@ -45,6 +45,9 @@ type OverviewResponse struct {
 	Ready   bool              `json:"ready"`
 	Checks  map[string]string `json:"checks"`
 	Counts  OverviewCounts    `json:"counts"`
+	// MetricsAddr is the listen address of /metrics when it is apart from the address the
+	// admin interface is on, and empty when /metrics is served on that address too.
+	MetricsAddr string `json:"metrics_addr"`
 }
 
 type OverviewCounts struct {
@@ -114,6 +117,7 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 			Backends:  len(backends),
 			Models:    len(modelSet),
 		},
+		MetricsAddr: h.opts.MetricsAddr,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

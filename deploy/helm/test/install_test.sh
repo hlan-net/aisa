@@ -384,6 +384,10 @@ echo "== admin interface"
 port_forward "$RELEASE" 18080 8080
 overview=$(curl -fsS http://127.0.0.1:18080/admin/api/overview)
 expect "admin: overview status" ok "$(jq -r .status <<<"$overview")"
+# The chart serves /metrics on its own port, so the page must be told not to link to it here.
+expect "admin: overview names the metrics address" :9090 "$(jq -r .metrics_addr <<<"$overview")"
+expect "admin: no /metrics on the API port" 404 \
+    "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/metrics)"
 # Refuse rotation for a consumer whose Secret is managed by Kubernetes
 consul kv put aisa/consumers/k8s-managed "{\"quota_profile\":\"interactive\",\"namespace\":\"$APP_NS\",\"secret\":\"test\"}" >/dev/null
 expect "admin: rotate refused for consumer with Secret" 400 \

@@ -240,9 +240,7 @@ func run(args []string) error {
 
 	var adminHandler http.Handler
 	if cfg.Admin.Enabled {
-		adminHandler = admin.New(cc, vc, m, log.With("component", "admin"),
-			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix, Budgets: budgetUsage},
-			checks...)
+		adminHandler = admin.New(cc, vc, m, log.With("component", "admin"), adminOptions(cfg, budgetUsage), checks...)
 	}
 
 	if cfg.Kubernetes.Enabled {
@@ -267,6 +265,19 @@ func run(args []string) error {
 	}
 	log.Info("stopped")
 	return nil
+}
+
+// adminOptions are what the admin interface takes from the configuration. MetricsAddr is set
+// only when /metrics has an address of its own, which is how the page knows not to link to
+// /metrics on the address it is served from.
+func adminOptions(cfg config.Config, usage admin.UsageReporter) admin.Options {
+	return admin.Options{
+		ConsulPrefix: cfg.Consul.Prefix,
+		VaultMount:   cfg.Vault.KVMount,
+		VaultPrefix:  cfg.Vault.Prefix,
+		Budgets:      usage,
+		MetricsAddr:  cfg.MetricsAddr,
+	}
 }
 
 // newQuotaProfiles returns the quota profiles watched from Consul KV. The profiles know the

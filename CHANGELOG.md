@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The admin page no longer offers a link to `/metrics` that answers 404. The link was fixed to the address of the admin interface, where aisa serves no metrics once `AISA_METRICS_ADDR` is set, as it is in every chart install. `GET /admin/api/overview` now carries `metrics_addr`, and the page shows the link only when aisa serves `/metrics` on the same address as the admin interface (`AISA_METRICS_ADDR` unset). When metrics have an address of their own, the link is left out and the page names that address instead. The link reads "View raw metrics (/metrics)", as it never led to a Prometheus server (#136).
+
 ## [0.3.3] - 2026-11-20
 
 Corrections to 0.3.2 and a quality pass. The alerts on a broken or missing quota profile are installed without quotas too, as the notes of 0.3.2 said they were; an unknown `default_model` is reported only for a profile some consumer takes its model from; and the proxy's chart moves to APISIX 3.20.0. CI fails early and a release is verified before it is published. Nothing needs a change from an existing install; one that does not set the proxy's image tag gets APISIX 3.20.0 with the upgrade.

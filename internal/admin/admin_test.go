@@ -234,6 +234,34 @@ func TestOverviewEndpoint(t *testing.T) {
 	}
 }
 
+// The overview says where /metrics is served, so that the page offers a link to it only
+// when the link can work: on the page's own address, and not on a metrics address apart.
+func TestOverviewMetricsAddr(t *testing.T) {
+	for name, addr := range map[string]string{"beside the admin interface": "", "on an address of its own": ":9090"} {
+		t.Run(name, func(t *testing.T) {
+			log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+			h := New(newMockConsul(), newMockVault(), metrics.New("test"), log, Options{MetricsAddr: addr})
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", w.Code)
+			}
+			var resp map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			got, ok := resp["metrics_addr"].(string)
+			if !ok {
+				t.Fatalf("metrics_addr = %v, want a string in every answer", resp["metrics_addr"])
+			}
+			if got != addr {
+				t.Errorf("metrics_addr = %q, want %q", got, addr)
+			}
+		})
+	}
+}
+
 func createTestConsumer(t *testing.T, h *Handler, mc *mockConsul, mv *mockVault) CreateConsumerResponse {
 	t.Helper()
 	body := `{"name":"test-app","quota_profile":"batch","generate_key":true}`
@@ -454,6 +482,18 @@ func TestWebUIAssets(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "aisa // Administration") {
 		t.Errorf("body missing title")
+	}
+	// The link to /metrics and the hint that replaces it are both hidden until the overview
+	// says which of them applies; a link shown from the start is a 404 in a chart install.
+	for _, el := range []string{`id="metrics-link" href="/metrics"`, `id="metrics-hint"`} {
+		i := strings.Index(w.Body.String(), el)
+		if i < 0 {
+			t.Fatalf("body missing %s", el)
+		}
+		tag := w.Body.String()[i:]
+		if tag = tag[:strings.Index(tag, ">")]; !strings.HasSuffix(tag, " hidden") {
+			t.Errorf("%s is not hidden at the start: %q", el, tag)
+		}
 	}
 
 	// Verify JS asset is served

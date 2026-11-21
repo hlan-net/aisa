@@ -70,8 +70,9 @@
           <div class="action-buttons">
             <button class="btn btn-primary" onclick="openModal('modal-add-consumer')">+ Declare Consumer</button>
             <button class="btn btn-secondary" onclick="openModal('modal-add-quota')">+ Add Quota Profile</button>
-            <a href="/metrics" target="_blank" class="btn btn-outline">View Prometheus Metrics ↗</a>
+            <a id="metrics-link" href="/metrics" target="_blank" class="btn btn-outline" hidden>View raw metrics (/metrics) ↗</a>
           </div>
+          <p id="metrics-hint" class="action-hint" hidden>Metrics are served apart from this interface, at <code>/metrics</code> on the metrics address <code id="metrics-addr"></code>.</p>
         </div>
       </div>
     </section>

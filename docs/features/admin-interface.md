@@ -40,6 +40,8 @@ API Client       ──▶ /admin/api/* ──────▶ REST Administratio
 ### 1. Dashboard Overview
 Displays real-time system readiness checks (Vault connectivity, Consul declarations, Redis quota store, and loaded consumers), as well as live gauges for declared consumers, keys present, quota profiles, active backends, and registered models.
 
+The link to aisa's raw metrics (`/metrics`) is offered only when aisa serves them on the address of the admin interface, which is the case when `AISA_METRICS_ADDR` is unset. With a metrics address of its own, as in every chart install (port 9090, Service `<release>-metrics`), the page names that address instead: whatever exposes the admin interface cannot be assumed to reach the metrics port.
+
 ### 2. Consumer Management
 - **List consumers**: Displays declared consumers in Consul KV (`aisa/consumers/<name>`), their assigned quota profile, default model, Kubernetes namespace and Secret binding, Vault key hash status, and synchronization state (`ready`, `missing_key`, `undeclared`, `invalid`).
 - **Create consumer**: Declares a consumer in Consul KV with optional quota profile, default model (`default_model`, written to the consumer's Secret), Kubernetes target Secret, and either automated key generation or custom key specification (minimum 16 characters). Key issuance is supported for standalone consumers; consumers bound to a Kubernetes Secret have their keys managed by Kubernetes reconciliation. Checks existence with check-and-set (CAS) and returns 409 Conflict if the consumer already exists.
@@ -74,7 +76,7 @@ All API endpoints return standard JSON responses with appropriate HTTP status co
 
 ### Overview
 `GET /admin/api/overview`
-Returns system status, readiness probe states, and entity counts.
+Returns system status, readiness probe states, and entity counts, and `metrics_addr`: the listen address of `/metrics` when it is apart from the admin interface's (`AISA_METRICS_ADDR`), or an empty string when `/metrics` is served on the same address.
 
 ### Consumers
 - `GET /admin/api/consumers`
