@@ -9,6 +9,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 ### Fixed
 
 - The admin page no longer offers a link to `/metrics` that answers 404. The link was fixed to the address of the admin interface, where aisa serves no metrics once `AISA_METRICS_ADDR` is set, as it is in every chart install. `GET /admin/api/overview` now carries `metrics_addr`, and the page shows the link only when aisa serves `/metrics` on the same address as the admin interface (`AISA_METRICS_ADDR` unset). When metrics have an address of their own, the link is left out and the page names that address instead. The link reads "View raw metrics (/metrics)", as it never led to a Prometheus server (#136).
+- The admin page shows no version when aisa reports none, instead of `v0.2.0`.
 
 ## [0.3.3] - 2026-11-20
 
