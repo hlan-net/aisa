@@ -240,9 +240,7 @@ func run(args []string) error {
 
 	var adminHandler http.Handler
 	if cfg.Admin.Enabled {
-		adminHandler = admin.New(cc, vc, m, log.With("component", "admin"),
-			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix, Budgets: budgetUsage, MetricsAddr: cfg.MetricsAddr},
-			checks...)
+		adminHandler = admin.New(cc, vc, m, log.With("component", "admin"), adminOptions(cfg, budgetUsage), checks...)
 	}
 
 	if cfg.Kubernetes.Enabled {
@@ -271,6 +269,19 @@ func run(args []string) error {
 
 // newQuotaProfiles returns the quota profiles watched from Consul KV. The profiles know the
 // default and the consumers' declarations, to report a profile that is named and not there (#82).
+// adminOptions are what the admin interface takes from the configuration. MetricsAddr is set
+// only when /metrics has an address of its own, which is how the page knows not to link to
+// /metrics on the address it is served from.
+func adminOptions(cfg config.Config, usage admin.UsageReporter) admin.Options {
+	return admin.Options{
+		ConsulPrefix: cfg.Consul.Prefix,
+		VaultMount:   cfg.Vault.KVMount,
+		VaultPrefix:  cfg.Vault.Prefix,
+		Budgets:      usage,
+		MetricsAddr:  cfg.MetricsAddr,
+	}
+}
+
 func newQuotaProfiles(cfg config.Config, cc *consul.Client, declarations *consumers.Declarations, m *metrics.Metrics, log *slog.Logger) *quotas.Profiles {
 	return quotas.NewProfiles(
 		quotas.ConsulSource{Client: cc, Prefix: cfg.Consul.Prefix + "/quotas/"},

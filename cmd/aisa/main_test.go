@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/hlan-net/aisa/internal/budgets"
+	"github.com/hlan-net/aisa/internal/config"
 	"github.com/hlan-net/aisa/internal/consumers"
 	"github.com/hlan-net/aisa/internal/kube"
 	"github.com/hlan-net/aisa/internal/ledger"
@@ -207,6 +208,31 @@ func TestRoutesAdmin(t *testing.T) {
 	srvWithAdmin.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/api/overview", nil))
 	if rec.Code != http.StatusOK || rec.Body.String() != "admin-ok" {
 		t.Errorf("GET /admin/api/overview with admin handler: %d %q, want 200 admin-ok", rec.Code, rec.Body.String())
+	}
+}
+
+// The admin page links to /metrics only when aisa serves it beside the page, so the admin
+// interface has to learn of a metrics address from the same variable the listener does.
+func TestAdminOptionsMetricsAddr(t *testing.T) {
+	for name, want := range map[string]string{"beside the API": "", "on an address of its own": ":9090"} {
+		t.Run(name, func(t *testing.T) {
+			env := map[string]string{
+				"VAULT_ADDR":        "http://127.0.0.1:8200",
+				"CONSUL_HTTP_ADDR":  "http://127.0.0.1:8500",
+				"AISA_METRICS_ADDR": want,
+			}
+			cfg, err := config.FromEnv(func(k string) string { return env[k] })
+			if err != nil {
+				t.Fatalf("config: %v", err)
+			}
+			opts := adminOptions(cfg, nil)
+			if opts.MetricsAddr != want {
+				t.Errorf("MetricsAddr = %q, want %q", opts.MetricsAddr, want)
+			}
+			if opts.ConsulPrefix != cfg.Consul.Prefix || opts.VaultMount != cfg.Vault.KVMount || opts.VaultPrefix != cfg.Vault.Prefix {
+				t.Errorf("options do not follow the configuration: %+v", opts)
+			}
+		})
 	}
 }
 
