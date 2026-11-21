@@ -117,6 +117,12 @@ async function loadOverview() {
     document.getElementById('stat-backends').textContent = data.counts.backends;
     document.getElementById('stat-models').textContent = data.counts.models;
 
+    // /metrics is on this address only when aisa has no metrics address of its own.
+    const metricsApart = Boolean(data.metrics_addr);
+    document.getElementById('metrics-link').hidden = metricsApart;
+    document.getElementById('metrics-hint').hidden = !metricsApart;
+    document.getElementById('metrics-addr').textContent = data.metrics_addr || '';
+
     // Checks
     const checksList = document.getElementById('readiness-list');
     checksList.innerHTML = Object.entries(data.checks || {}).map(([name, status]) => `

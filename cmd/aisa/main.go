@@ -241,7 +241,7 @@ func run(args []string) error {
 	var adminHandler http.Handler
 	if cfg.Admin.Enabled {
 		adminHandler = admin.New(cc, vc, m, log.With("component", "admin"),
-			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix, Budgets: budgetUsage},
+			admin.Options{ConsulPrefix: cfg.Consul.Prefix, VaultMount: cfg.Vault.KVMount, VaultPrefix: cfg.Vault.Prefix, Budgets: budgetUsage, MetricsAddr: cfg.MetricsAddr},
 			checks...)
 	}
 

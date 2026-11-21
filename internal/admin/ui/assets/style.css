@@ -285,6 +285,17 @@ body {
   flex-wrap: wrap;
 }
 
+.action-hint {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* The hidden attribute also hides what a class gives a display of its own (.btn). */
+[hidden] {
+  display: none !important;
+}
+
 /* Modals */
 .modal-overlay {
   position: fixed;
