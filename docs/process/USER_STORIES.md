@@ -90,3 +90,32 @@ aisa stands between the holder and its sources of truth, as it stands between th
 | 3 | Open. aisa cannot write a provider credential at all: its Vault policy covers the consumers only, and it does not read `secret/aisa/providers/`. With the decision above, the holder enters the credential and the user's token writes it; the value is not shown, returned or logged again. | [#133](https://github.com/hlan-net/aisa/issues/133) |
 | 4, 5 | Open. Proposed: the identifying data in the custom metadata of the KV v2 secret, which a policy can make readable without the secret's value. Nothing from a provider's account goes into a metric label (US-2). | Needs a design |
 | 6 | In part. A backend can name a credential that Vault issues, by the path and the field it is read from (`key_path`, `key_field`; [#92](https://github.com/hlan-net/aisa/issues/92), [`CONSUL.md`](../concepts/CONSUL.md#backends-consul-catalog)), so a secret that Vault maintains can be used. Open: the admin interface does not show a credential as managed by Vault, with its validity; and a provider that needs a step from the issued credential to a token needs that in its adapter. | Needs a design |
+
+## US-4: A shared cluster with several budgets
+
+> **As the** holder of a cluster that several parts of an organization share,
+> **I want to** give each business area and each environment a budget of its own, over all of its applications,
+> **so that** test and development cannot use what production needs, and what production uses can be held against the revenue it earns.
+
+One aisa serves the whole cluster. The parts of the organization are groups of consumers in it, not installs of their own: an install per part would split the books that the holder wants in one place, and the ceiling of a provider account that the parts share.
+
+### Acceptance criteria
+
+1. **A consumer belongs to a group.** The holder names the group of an application: a business area, an environment such as test or development, or both in one name.
+2. **A group has a budget.** A monthly budget in tokens bounds what the group's consumers use together. It stands between the consumer's own budget and the provider account's, and a request must fit all three.
+3. **Each group chooses what its limit does.** Test and development are denied at the limit. Production is warned before it and downgraded at it rather than stopped, because stopping what earns the revenue costs more than the overrun.
+4. **A budget can follow revenue.** The holder, or a process of the holder's, changes a group's budget as the revenue changes, and the change applies without a restart. aisa knows nothing about revenue.
+5. **Visible per group.** The holder sees use and cost per group from the `aisa_*` metrics, so that use per unit of revenue can be computed where the revenue is known.
+6. **One set of books.** All groups are in one aisa, and the budget of a provider account holds over all of them.
+7. **A group has its own administrator.** Someone who answers for a business area sees and changes that group's consumers and budgets, and nothing of another's.
+
+### Gaps
+
+| Criterion | State | Where |
+|---|---|---|
+| 1, 2 | Open. A budget exists per consumer and per provider account, and nothing bounds a set of consumers. Proposed: a `group` in the consumer's declaration and a budget in `aisa/budgets/groups/<group>`. | [#140](https://github.com/hlan-net/aisa/issues/140) |
+| 3 | Met for a consumer's budget, which has a soft limit with an alert and `on_exhausted` (`reject` or `downgrade`) ([`quotas-and-budgets.md`](../features/quotas-and-budgets.md)). Open for a group's. A budget counts priced models only, so the use of a free local model is bounded by the consumers' hourly quotas alone. | [#140](https://github.com/hlan-net/aisa/issues/140) |
+| 4 | Met for the budgets there are: a budget is a value in Consul KV that aisa follows, so anything that may write there can set it. Open for a group's. | [#140](https://github.com/hlan-net/aisa/issues/140) |
+| 5 | Open. The metrics are per consumer; a sum per group is a list of consumers kept in a dashboard. | [#140](https://github.com/hlan-net/aisa/issues/140) |
+| 6 | Met with one install. A second install in the same cluster keeps books of its own, and two installs cannot offer the same model, because `Model` objects are cluster-scoped ([`KUBERNETES_OBJECTS.md`](../concepts/KUBERNETES_OBJECTS.md#model)). | — |
+| 7 | Open. There is one holder, and the admin interface has no login yet (US-3 criterion 2). Who may change which group would be decided by Vault's policies, as there. | Needs a design |

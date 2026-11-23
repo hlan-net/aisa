@@ -41,6 +41,24 @@ A gateway that already exists and belongs to someone else can still be connected
 
 > **On the words.** "Gateway" in these documents is the product that serves as the proxy, such as APISIX. What makes a gateway work as aisa's proxy lives in `proxies/<name>/`, and the contract between aisa and its proxy is [`PROXY_CONTRACT.md`](./PROXY_CONTRACT.md). Until 2026-10 these were called adapters (`adapters/apisix/`, `ADAPTER_CONTRACT.md`); the spike files under `proxies/apisix/spikes/` and the released entries of `CHANGELOG.md` keep that word. "Adapter" now means only the provider-specific part of the table above.
 
+### A comparison: the inference service of a cloud
+
+The pay-per-token inference services of the clouds (Amazon Bedrock, Microsoft Foundry, Google's Vertex AI) have the same shape. What an application calls is a thin front that belongs to the platform: it authenticates the caller with the platform's own identity, applies quotas, meters the use and lists the models on offer. The inference is done behind it, by capacity that the callers share and none of them owns. aisa gives a cluster that front:
+
+| In a cloud | In a cluster with aisa |
+|---|---|
+| The platform's identity (IAM, a managed identity, a service account) | A consumer declared in Consul, with a key aisa issues into its Secret |
+| The model catalog | The `Model` objects |
+| Service quotas and billing per account | Token quotas, monthly budgets and the usage ledger per consumer |
+| The service's endpoint | The proxy |
+| The capacity behind the endpoint | The providers: an Ollama box, a cloud API |
+
+The comparison holds for the application's side and for the bookkeeping. It ends at the capacity:
+
+- **A cloud sells the front and the capacity as one product.** aisa is only the front. It runs no model and owns no capacity; the providers are separate parties, each with a contract and an account that stay with the holder.
+- **A provider can itself be one of these services.** Vertex AI behind aisa is a backend like any other ([`CONSUL.md`](./CONSUL.md)).
+- **aisa does not carry the traffic either.** A cloud's endpoint is part of its service, written by the vendor; aisa's proxy is an existing gateway.
+
 ### Where things are written, and what aisa makes of them
 
 ```

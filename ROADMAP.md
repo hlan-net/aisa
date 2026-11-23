@@ -5,7 +5,7 @@
 Offer inference to the applications of a Kubernetes cluster as a service of the cluster itself, and keep its use in check.
 aisa stands between the applications and the model providers: it gives every application an identity, a quota and a budget, passes its requests on with the holder's credentials, and keeps the books, using the Vault and Consul you already operate. It solves no inference itself and carries no traffic itself: an existing AI gateway is its proxy ([docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#what-aisa-is)).
 
-Who it is for, and what must be true for them, is in the user stories ([docs/process/USER_STORIES.md](docs/process/USER_STORIES.md)): US-1, inference that looks Kubernetes-native to the applications and is safe in cost, US-2, provider accounts that stay with their holder, and US-3, the holder managing aisa through aisa's own admin interface.
+Who it is for, and what must be true for them, is in the user stories ([docs/process/USER_STORIES.md](docs/process/USER_STORIES.md)): US-1, inference that looks Kubernetes-native to the applications and is safe in cost, US-2, provider accounts that stay with their holder, US-3, the holder managing aisa through aisa's own admin interface, and US-4, a cluster that several parts of an organization share, each with a budget of its own.
 
 ---
 
@@ -97,6 +97,7 @@ Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/conc
 |------|-------|-------|
 | No way around the proxy | Applications cannot reach a backend directly | US-1 |
 | Admin interface | An admin API and a UI on it (`/admin`); credentials with traceable metadata and expiry warnings; login through Vault | US-3 (Web UI and API in v0.2.1, the documentation in it in v0.3.0, the budgets in it in v0.3.2 ([#86](https://github.com/hlan-net/aisa/issues/86)); provider credentials written with the user's own Vault token are decided and open ([#133](https://github.com/hlan-net/aisa/issues/133)); a login for the interface, key metadata and expiry warnings remain) |
+| Group budgets | A consumer names a group (a business area, an environment), and a group has a monthly budget between the consumer's and the provider account's, with its use in the metrics ([#140](https://github.com/hlan-net/aisa/issues/140)) | US-4 |
 | Provider adapters | What is specific to a kind of provider, beyond `openai-compatible` (a provider key as a reference to any Vault path came with [#92](https://github.com/hlan-net/aisa/issues/92)) | US-2, US-3 |
 | Rendering without consul-template | A renderer in Go next to the proxy, which also logs in to Vault itself, in place of the template and the Vault Agent. It must follow leases as consul-template does | — |
 | Default model in Secret | Consumer declaration or quota profile carries `default_model`, written to Secret as `OPENAI_MODEL` / `LLM_MODEL` / `AISA_MODEL` for clean client fallbacks | US-1 (v0.3.2, [#119](https://github.com/hlan-net/aisa/pull/119)) |
