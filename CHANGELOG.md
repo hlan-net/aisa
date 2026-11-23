@@ -9,6 +9,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 ### Added
 
 - **A comparison with the inference services of the clouds** (`README.md`, `docs/concepts/ARCHITECTURE.md`): what aisa is to a cluster is likened to what Amazon Bedrock, Microsoft Foundry or Vertex AI is to its cloud, a front with identity, a model catalog, quotas and metering before shared capacity, with where the comparison ends: aisa owns no capacity and carries no traffic.
+- **US-4, a shared cluster with several budgets** (`docs/process/USER_STORIES.md`): a user story for an organization whose business areas and environments share one cluster, each with a budget over all of its applications, and production's use held against revenue. Its gaps are open: a budget for a group of consumers and its metrics ([#140](https://github.com/hlan-net/aisa/issues/140)), and a group's own administrator. `ROADMAP.md` lists the group budgets under the direction that is decided and not scheduled.
 
 ## [0.3.4] - 2026-11-21
 
