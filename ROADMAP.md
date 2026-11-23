@@ -28,18 +28,18 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 
 ## Readiness: from a row to an issue
 
-Every row below that is not done has a state, and the state says who can take the next step.
+Every piece of aisa's own work below that is not done has one of four states, in the versions, in the direction and under Later, and the state says who can take the next step. The upstream contributions at the end are work in other projects and have none.
 
 | State | Meaning | Next step |
 |---|---|---|
 | **Proposed** | An idea. The maintainer has not decided to do it. | The maintainer decides |
 | **Needs a design** | Decided, with questions open that an implementer must not answer alone. | The questions are answered, in the issue or a concept doc |
-| **Needs an issue** | Decided, and nothing known is open, but no issue describes the work. | An issue from the template |
+| **Needs an issue** | Decided, and nothing known is open, but no issue describes the work as the template asks. | An issue from the template, or an older issue rewritten with it |
 | **Ready** | An issue written with [the template](.github/ISSUE_TEMPLATE/implementation.md), with nothing under its open questions. It can be implemented as it stands, by a person or a coding agent. | A PR |
 
 - **One row, one issue, one PR.** Work too large for one PR gets a table of its own, as the versions below have, with a row for each PR and what it depends on.
 - **Only Ready work is handed to an implementer.** An implementer who finds a question the issue does not answer asks in the issue and does not decide it in the code.
-- **Needs the maintainer** marks a step that takes hardware or credentials an implementer does not have: a Raspberry Pi, a real Ollama, a provider's key. The rest of the work can still be Ready; that step is not replaced by a mock.
+- **Needs the maintainer** is a mark beside the state, not a state. It marks a step that takes hardware or credentials an implementer does not have: a Raspberry Pi, a real Ollama, a provider's key. The rest of the work can still be Ready; that step is not replaced by a mock.
 - **Done work leaves the tables of open work.** It is in the version it shipped with and in [CHANGELOG.md](CHANGELOG.md).
 
 ---
@@ -66,7 +66,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) | Done ([#23](https://github.com/hlan-net/aisa/pull/23)) |
 | 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | Done ([#26](https://github.com/hlan-net/aisa/pull/26)) |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | Done ([#28](https://github.com/hlan-net/aisa/pull/28)) |
-| 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, the checked config render ([#18](https://github.com/hlan-net/aisa/issues/18)), explicit `log_format` ([#5](https://github.com/hlan-net/aisa/issues/5)) and upstream timeouts ([#14](https://github.com/hlan-net/aisa/issues/14)), fail-open routes for backends with `fail_policy = "open"` ([#4](https://github.com/hlan-net/aisa/issues/4)), requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | Done in part ([#39](https://github.com/hlan-net/aisa/pull/39)); the Helm values came with PR 8; the empty catalog, an invalid `timeout` and the render report of #18 followed ([#54](https://github.com/hlan-net/aisa/pull/54), [#56](https://github.com/hlan-net/aisa/pull/56)). Open: [#16](https://github.com/hlan-net/aisa/issues/16), which needs the maintainer (a Raspberry Pi 4) |
+| 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, the checked config render ([#18](https://github.com/hlan-net/aisa/issues/18)), explicit `log_format` ([#5](https://github.com/hlan-net/aisa/issues/5)) and upstream timeouts ([#14](https://github.com/hlan-net/aisa/issues/14)), fail-open routes for backends with `fail_policy = "open"` ([#4](https://github.com/hlan-net/aisa/issues/4)), requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | Done in part ([#39](https://github.com/hlan-net/aisa/pull/39)); the Helm values came with PR 8; the empty catalog, an invalid `timeout` and the render report of #18 followed ([#54](https://github.com/hlan-net/aisa/pull/54), [#56](https://github.com/hlan-net/aisa/pull/56)). What is left is [#16](https://github.com/hlan-net/aisa/issues/16), **Needs an issue**: it predates the template and names the old `adapters/` paths. The measuring harness can be written by anyone; the run on a Raspberry Pi 4 needs the maintainer |
 | 6 | `feature/terraform-module` | Vault mount, policies and roles; Consul ACLs, KV and backend registrations | Done ([`terraform/`](terraform/)) |
 | 7 | `feature/dashboard` | Grafana dashboard and alert rules | Done: the alert rules ship with the chart as a `PrometheusRule` ([#72](https://github.com/hlan-net/aisa/pull/72)), and the Grafana dashboard is in [`dashboards/aisa.json`](dashboards/aisa.json) |
 | 8 | `feature/helm-chart` | `deploy/helm/aisa`: aisa with optional Redis, published with the image as an OCI chart on GHCR; `helm lint`, kubeconform and a kind/k3d install test on amd64 and arm64 ([#6](https://github.com/hlan-net/aisa/issues/6)). The chart also installs and removes the proxy, through the proxy's own chart (`proxies/apisix/chart`) | Done ([#45](https://github.com/hlan-net/aisa/pull/45)); the metrics on a port of their own ([#46](https://github.com/hlan-net/aisa/issues/46)) followed ([#51](https://github.com/hlan-net/aisa/pull/51)) |
@@ -101,13 +101,13 @@ The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front
 
 **Validation against the providers.** All three are reached as `openai-compatible` backends, which is what aisa and its proxy have today, so none of them is expected to need new code in aisa, and finding out is the point: a key in Vault, a backend in Consul's catalog, a price and a provider budget ([`docs/concepts/CONSUL.md`](docs/concepts/CONSUL.md#a-paid-provider-the-gemini-api)). A validation is a test that reads the provider's key from `.local/` and is skipped without it; it sends a few requests and costs accordingly. For each provider it shows: a chat completion through the proxy, streamed and not; the request's tokens in the usage ledger, equal to what the provider reports; the provider budget denying or downgrading to a local model when it is used up; and nothing of the provider's account reaching the application (US-2).
 
-The test itself needs no key to be written, and has no issue yet (**Needs an issue**). Each run **needs the maintainer**: a real key in `.local/`, and it costs money.
+All three rows are **Needs an issue**: the test needs no key to be written, and no issue describes it yet. Each run needs the maintainer: a real key in `.local/`, and it costs money.
 
 | Provider | How it is reached | Status |
 |------|-------|--------|
-| Gemini API | Google's OpenAI-compatible endpoint, under `/v1beta/openai` (the backend's `path`) | Open: needs the maintainer. Documented with an example; not yet run against the provider |
-| OpenAI API | `api.openai.com`, under `/v1`, the default path | Open: needs the maintainer |
-| Claude API | Anthropic's OpenAI SDK compatibility layer, `api.anthropic.com` under `/v1` | Open: needs the maintainer. With limits that are the provider's: Anthropic describes the layer as meant for testing and comparing models, not as a long-term or production path. It has no prompt caching, ignores `strict` on tool calls, moves system messages to the start of the conversation and returns none of the model's thinking. Part of this validation is to write these limits, as the run confirms them, into [`docs/features/client-integration.md`](docs/features/client-integration.md), which does not have them yet; the full Claude API is the Anthropic-native passthrough below |
+| Gemini API | Google's OpenAI-compatible endpoint, under `/v1beta/openai` (the backend's `path`) | Needs an issue; the run needs the maintainer. Documented with an example; not yet run against the provider |
+| OpenAI API | `api.openai.com`, under `/v1`, the default path | Needs an issue; the run needs the maintainer |
+| Claude API | Anthropic's OpenAI SDK compatibility layer, `api.anthropic.com` under `/v1` | Needs an issue; the run needs the maintainer. With limits that are the provider's: Anthropic describes the layer as meant for testing and comparing models, not as a long-term or production path. It has no prompt caching, ignores `strict` on tool calls, moves system messages to the start of the conversation and returns none of the model's thinking. Part of this validation is to write these limits, as the run confirms them, into [`docs/features/client-integration.md`](docs/features/client-integration.md), which does not have them yet; the full Claude API is the Anthropic-native passthrough below |
 
 ## Direction: not scheduled
 
@@ -140,6 +140,8 @@ Shipped from this direction, and so no longer in the table: the Kubernetes objec
 Prove the contract with a second gateway. **LiteLLM** is the most likely: its open source proxy supports custom auth and callbacks, which map to the decision API and usage events. The contract is marked stable only after this, so the rules that the user stories add to it ([#35](https://github.com/hlan-net/aisa/issues/35), and the client-facing paths of [#34](https://github.com/hlan-net/aisa/issues/34)) must be in the contract before the second proxy is written; otherwise it proves an incomplete contract. Later candidates: Envoy AI Gateway / Agent Router, API7 AISIX.
 
 ## Later
+
+Both are **Proposed**.
 
 - **Vault-issued JWTs** for people instead of static consumer keys ([docs/concepts/VAULT.md](docs/concepts/VAULT.md)). Applications get theirs as a Secret from aisa (v0.2.0 PR 12) and never log in to Vault
 - Dynamic provider credentials where supported (e.g. Azure OpenAI through Vault)

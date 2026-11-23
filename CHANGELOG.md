@@ -8,7 +8,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ### Changed
 
-- **The roadmap says what is ready to implement** (`ROADMAP.md`, `.github/ISSUE_TEMPLATE/implementation.md`): every open row has a state (Proposed, Needs a design, Needs an issue, Ready), steps that need the maintainer's hardware or a provider's key are marked, and what has shipped is out of the table of the direction. An issue template for work that is to be implemented asks for the decisions made, the scope, what it depends on, the contracts it touches and acceptance criteria that can be checked, so that a person or a coding agent can implement it without asking. Nothing changes in aisa.
+- **The roadmap says what is ready to implement** (`ROADMAP.md`, `.github/ISSUE_TEMPLATE/implementation.md`): every open row has a state (Proposed, Needs a design, Needs an issue, Ready), steps that need the maintainer's hardware or a provider's key are marked, and what has shipped is out of the table of the direction. An issue template for work that is to be implemented asks for the decisions made, the scope, what it depends on, the contracts it touches and acceptance criteria that can be checked, so that a person or a coding agent can implement it without asking. "No way around the proxy" now says in the roadmap, in `docs/concepts/ARCHITECTURE.md` and in US-1 what it covers: the backends that aisa offers, and not what an application uses with credentials of its own. Nothing changes in aisa.
 
 ### Added
 
