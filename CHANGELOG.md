@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-11-23
+
+The Gemini API, the OpenAI API and the Claude API are validated behind aisa with real keys, which is what v0.3.x was to show; nothing in aisa or the proxy had to change for them. The rest is documentation: the roadmap says what is ready to implement and carries the maintainer's decisions of 2026-11-23. The image and the charts are those of 0.3.4 with a new version; nothing needs a change from an existing install.
+
 ### Changed
 
 - **The maintainer's decisions of 2026-11-23 are in the roadmap** (`ROADMAP.md`, `docs/concepts/KUBERNETES_OBJECTS.md`, `docs/concepts/ARCHITECTURE.md`, `docs/process/USER_STORIES.md`): group budgets, the second proxy, the Anthropic-native API and a `Model` that says whether it is local or paid are to be built; an abandoned request stays charged; the admin interface logs in with the user's own Vault token for now and must authenticate when it is exposed through an ingress; a consumer's key hash stays in Vault; a provider adapter is part of aisa's core; an application becomes a consumer by a request that the holder approves, in advance if they choose; the proxy's chart is to support an egress; the second proxy is LiteLLM. "No way around the proxy" is restated in the roadmap, in `docs/concepts/ARCHITECTURE.md` and as US-1 criterion 9: who may use a backend is the backend's to enforce, and aisa gives it the means to accept only aisa, a credential that only the proxy presents or a source in the network that can be recognised. Four rows of the direction and the second proxy moved from Proposed or Needs a design to Needs an issue, and one row is new. Nothing changes in aisa.
@@ -179,7 +183,8 @@ The first release: the design, the answered spikes, the dev stack and the start 
 - **Decision API** (unstable `/v1`): the requested model is passed in `X-Aisa-Requested-Model` or the JSON body, a missing model is a 400, and adapters must strip client-supplied `X-Aisa-*` headers, route by `X-Aisa-Model` and answer 503 when aisa is unreachable. The dev stack's APISIX config files can be swapped with `APISIX_CONFIG` and `APISIX_ROUTES`.
 - **CI actions**: `actions/setup-go` v6 → v7 and `golangci/golangci-lint-action` v8 → v9 (golangci-lint pinned to v2.14). The other actions were checked against their published tags and are current. Dependabot also watches the dev stack's Dockerfile and Compose images.
 
-[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/hlan-net/aisa/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/hlan-net/aisa/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/hlan-net/aisa/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/hlan-net/aisa/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/hlan-net/aisa/compare/v0.3.1...v0.3.2

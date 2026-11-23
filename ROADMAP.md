@@ -9,7 +9,7 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 
 ---
 
-## Current state: v0.3.4 released
+## Current state: v0.3.5 released
 
 - Architecture and the three aisa ↔ proxy contracts are written down ([docs/concepts/](docs/concepts/)), with the Kubernetes objects applications see ([docs/concepts/KUBERNETES_OBJECTS.md](docs/concepts/KUBERNETES_OBJECTS.md))
 - Quotas, budgets (in tokens) and usage metrics are specified ([docs/features/](docs/features/))
@@ -21,6 +21,7 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 - Applications see what remains of their quota and budget, and a request id to follow a request by, in headers on their responses (`X-Aisa-Quota-Remaining`, `X-Aisa-Quota-Reset`, `X-Aisa-Budget-Remaining`, `X-Aisa-Request-Id`)
 - The APISIX proxy renders its routes from Consul and Vault, including backends whose API is not at `/v1` and credentials that Vault issues, keeps rendering when its Consul token rotates, also in Kubernetes, reports each render to aisa, and lets nothing of a provider's account through to the application ([proxies/apisix/](proxies/apisix/), [#35](https://github.com/hlan-net/aisa/issues/35))
 - aisa's Helm chart installs aisa, Redis and the proxy in one release, with the alerts as a `PrometheusRule` ([deploy/helm/aisa/](deploy/helm/aisa/)); CI installs it in kind on amd64 and arm64
+- The Gemini API, the OpenAI API and the Claude API are validated behind aisa with real keys, each as an `openai-compatible` backend with its tokens in the ledger and its provider budget bounding it ([proxies/apisix/providers_test.sh](proxies/apisix/providers_test.sh), 2026-11-23)
 - Each `v*` tag publishes a GitHub release, a multi-arch image on GHCR (`ghcr.io/hlan-net/aisa`) and both charts as OCI artifacts (`oci://ghcr.io/hlan-net/charts/aisa`, `oci://ghcr.io/hlan-net/charts/aisa-proxy-apisix`)
 - A Terraform module ([terraform/](terraform/)) sets up Vault policies and roles and Consul ACLs, KV entries and backend registrations, and a Grafana dashboard ([dashboards/aisa.json](dashboards/aisa.json)) covers all `aisa_*` metrics
 
@@ -107,7 +108,7 @@ The test is [`proxies/apisix/providers_test.sh`](proxies/apisix/providers_test.s
 
 | Provider | How it is reached | Status |
 |------|-------|--------|
-| Gemini API | Google's OpenAI-compatible endpoint, under `/v1beta/openai` (the backend's `path`) | Validated on 2026-11-23 with `gemini-2.5-flash-lite`: every check passes. One difference: Google answers a key that is not one with 400, not 401, so the client is told `invalid_request_error` where the other two give 502 `provider_error` ([#145](https://github.com/hlan-net/aisa/issues/145), Needs a design) |
+| Gemini API | Google's OpenAI-compatible endpoint, under `/v1beta/openai` (the backend's `path`) | Validated on 2026-11-23 with `gemini-2.5-flash-lite`: every check passes. One difference: Google answers a key that is not one with 400, not 401, so the client is told `invalid_request_error` where the other two give 502 `provider_error` ([#145](https://github.com/hlan-net/aisa/issues/145): documented for now, decided 2026-11-23) |
 | OpenAI API | `api.openai.com`, under `/v1`, the default path | Validated on 2026-11-23 with `gpt-4o-mini`: every check passes. A first run, while the key's account had no credit, showed the provider's 429 `insufficient_quota` reaching the client as the gateway's own 429 `provider_rate_limited` |
 | Claude API | Anthropic's OpenAI SDK compatibility layer, `api.anthropic.com` under `/v1` | Validated on 2026-11-23 with `claude-haiku-4-5-20251001`: every check passes, with the key as `Authorization: Bearer` and usage in the stream. The limits are the provider's: Anthropic describes the layer as meant for testing and comparing models, not as a long-term or production path. It has no prompt caching, ignores `strict` on tool calls, moves system messages to the start of the conversation and returns none of the model's thinking. The run checks none of these limits, so they are still to be confirmed and written into [`docs/features/client-integration.md`](docs/features/client-integration.md), which does not have them yet (**Needs an issue**); the full Claude API is the Anthropic-native passthrough below |
 
