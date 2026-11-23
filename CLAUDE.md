@@ -93,6 +93,7 @@ Read `docs/concepts/ARCHITECTURE.md` and `docs/concepts/PROXY_CONTRACT.md` befor
 - Fill in `.github/pull_request_template.md`.
 - Run the tests locally before pushing; the pre-push hook does this.
 - Design gaps found during review become GitHub issues with problem, current behaviour, proposed fix, test plan and acceptance criteria, not notes in chat.
+- Work to be implemented is an issue written with `.github/ISSUE_TEMPLATE/implementation.md`. `ROADMAP.md` (Readiness) gives each open row a state; implement only what is **Ready**, and when an issue leaves a question open, ask in the issue instead of deciding it in the code.
 
 ## Tests
 

@@ -26,6 +26,24 @@ Who it is for, and what must be true for them, is in the user stories ([docs/pro
 
 ---
 
+## Readiness: from a row to an issue
+
+Every row below that is not done has a state, and the state says who can take the next step.
+
+| State | Meaning | Next step |
+|---|---|---|
+| **Proposed** | An idea. The maintainer has not decided to do it. | The maintainer decides |
+| **Needs a design** | Decided, with questions open that an implementer must not answer alone. | The questions are answered, in the issue or a concept doc |
+| **Needs an issue** | Decided, and nothing known is open, but no issue describes the work. | An issue from the template |
+| **Ready** | An issue written with [the template](.github/ISSUE_TEMPLATE/implementation.md), with nothing under its open questions. It can be implemented as it stands, by a person or a coding agent. | A PR |
+
+- **One row, one issue, one PR.** Work too large for one PR gets a table of its own, as the versions below have, with a row for each PR and what it depends on.
+- **Only Ready work is handed to an implementer.** An implementer who finds a question the issue does not answer asks in the issue and does not decide it in the code.
+- **Needs the maintainer** marks a step that takes hardware or credentials an implementer does not have: a Raspberry Pi, a real Ollama, a provider's key. The rest of the work can still be Ready; that step is not replaced by a mock.
+- **Done work leaves the tables of open work.** It is in the version it shipped with and in [CHANGELOG.md](CHANGELOG.md).
+
+---
+
 ## v0.1.0: Spikes and dev environment
 
 Answer the open questions before writing the core. Everything runs locally: dev-mode Vault and Consul, APISIX in standalone mode, Redis and a mock OpenAI-compatible backend.
@@ -48,7 +66,7 @@ Answer the open questions before writing the core. Everything runs locally: dev-
 | 2 | `feature/decide-api` | `/v1/decide` with consumer keys from Vault (SHA-256, cached) | Done ([#23](https://github.com/hlan-net/aisa/pull/23)) |
 | 3 | `feature/usage-ledger` | Usage event ingestion, dedup by `request_id`, token metrics | Done ([#26](https://github.com/hlan-net/aisa/pull/26)) |
 | 4 | `feature/token-quotas` | Quota profiles from Consul KV, sliding windows in Redis | Done ([#28](https://github.com/hlan-net/aisa/pull/28)) |
-| 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, the checked config render ([#18](https://github.com/hlan-net/aisa/issues/18)), explicit `log_format` ([#5](https://github.com/hlan-net/aisa/issues/5)) and upstream timeouts ([#14](https://github.com/hlan-net/aisa/issues/14)), fail-open routes for backends with `fail_policy = "open"` ([#4](https://github.com/hlan-net/aisa/issues/4)), requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | Done in part ([#39](https://github.com/hlan-net/aisa/pull/39)); the Helm values came with PR 8; the empty catalog, an invalid `timeout` and the render report of #18 followed ([#54](https://github.com/hlan-net/aisa/pull/54), [#56](https://github.com/hlan-net/aisa/pull/56)). Open: #16 |
+| 5 | `feature/apisix-adapter` | Template, Helm values, integration test against the mock backend, the checked config render ([#18](https://github.com/hlan-net/aisa/issues/18)), explicit `log_format` ([#5](https://github.com/hlan-net/aisa/issues/5)) and upstream timeouts ([#14](https://github.com/hlan-net/aisa/issues/14)), fail-open routes for backends with `fail_policy = "open"` ([#4](https://github.com/hlan-net/aisa/issues/4)), requests and limits measured on a Raspberry Pi 4 ([#16](https://github.com/hlan-net/aisa/issues/16)) | Done in part ([#39](https://github.com/hlan-net/aisa/pull/39)); the Helm values came with PR 8; the empty catalog, an invalid `timeout` and the render report of #18 followed ([#54](https://github.com/hlan-net/aisa/pull/54), [#56](https://github.com/hlan-net/aisa/pull/56)). Open: [#16](https://github.com/hlan-net/aisa/issues/16), which needs the maintainer (a Raspberry Pi 4) |
 | 6 | `feature/terraform-module` | Vault mount, policies and roles; Consul ACLs, KV and backend registrations | Done ([`terraform/`](terraform/)) |
 | 7 | `feature/dashboard` | Grafana dashboard and alert rules | Done: the alert rules ship with the chart as a `PrometheusRule` ([#72](https://github.com/hlan-net/aisa/pull/72)), and the Grafana dashboard is in [`dashboards/aisa.json`](dashboards/aisa.json) |
 | 8 | `feature/helm-chart` | `deploy/helm/aisa`: aisa with optional Redis, published with the image as an OCI chart on GHCR; `helm lint`, kubeconform and a kind/k3d install test on amd64 and arm64 ([#6](https://github.com/hlan-net/aisa/issues/6)). The chart also installs and removes the proxy, through the proxy's own chart (`proxies/apisix/chart`) | Done ([#45](https://github.com/hlan-net/aisa/pull/45)); the metrics on a port of their own ([#46](https://github.com/hlan-net/aisa/issues/46)) followed ([#51](https://github.com/hlan-net/aisa/pull/51)) |
@@ -83,35 +101,41 @@ The budgets of v0.3.0 matter only for a paid backend. aisa must be able to front
 
 **Validation against the providers.** All three are reached as `openai-compatible` backends, which is what aisa and its proxy have today, so none of them is expected to need new code in aisa, and finding out is the point: a key in Vault, a backend in Consul's catalog, a price and a provider budget ([`docs/concepts/CONSUL.md`](docs/concepts/CONSUL.md#a-paid-provider-the-gemini-api)). A validation is a test that reads the provider's key from `.local/` and is skipped without it; it sends a few requests and costs accordingly. For each provider it shows: a chat completion through the proxy, streamed and not; the request's tokens in the usage ledger, equal to what the provider reports; the provider budget denying or downgrading to a local model when it is used up; and nothing of the provider's account reaching the application (US-2).
 
+The test itself needs no key to be written, and has no issue yet (**Needs an issue**). Each run **needs the maintainer**: a real key in `.local/`, and it costs money.
+
 | Provider | How it is reached | Status |
 |------|-------|--------|
-| Gemini API | Google's OpenAI-compatible endpoint, under `/v1beta/openai` (the backend's `path`) | Open. Documented with an example; not yet run against the provider |
-| OpenAI API | `api.openai.com`, under `/v1`, the default path | Open |
-| Claude API | Anthropic's OpenAI SDK compatibility layer, `api.anthropic.com` under `/v1` | Open, and with limits that are the provider's: Anthropic describes the layer as meant for testing and comparing models, not as a long-term or production path. It has no prompt caching, ignores `strict` on tool calls, moves system messages to the start of the conversation and returns none of the model's thinking. Part of this validation is to write these limits, as the run confirms them, into [`docs/features/client-integration.md`](docs/features/client-integration.md), which does not have them yet; the full Claude API is the Anthropic-native passthrough below |
+| Gemini API | Google's OpenAI-compatible endpoint, under `/v1beta/openai` (the backend's `path`) | Open: needs the maintainer. Documented with an example; not yet run against the provider |
+| OpenAI API | `api.openai.com`, under `/v1`, the default path | Open: needs the maintainer |
+| Claude API | Anthropic's OpenAI SDK compatibility layer, `api.anthropic.com` under `/v1` | Open: needs the maintainer. With limits that are the provider's: Anthropic describes the layer as meant for testing and comparing models, not as a long-term or production path. It has no prompt caching, ignores `strict` on tool calls, moves system messages to the start of the conversation and returns none of the model's thinking. Part of this validation is to write these limits, as the run confirms them, into [`docs/features/client-integration.md`](docs/features/client-integration.md), which does not have them yet; the full Claude API is the Anthropic-native passthrough below |
 
-## Direction: decided, not scheduled
+## Direction: not scheduled
 
-Decided on 2026-10-01 and described in [docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#state-of-this-direction); none of it has a version yet. The Kubernetes objects and consumers in Consul are now v0.2.0 PRs 11 and 12.
+What aisa is to become beyond the versions above; none of it has a version yet. The direction of 2026-10-01 is described in [docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#state-of-this-direction); later rows came from the user stories and from use. The states are those of [Readiness](#readiness-from-a-row-to-an-issue). Nothing here is Ready yet.
 
-| Item | Scope | Story |
-|------|-------|-------|
-| No way around the proxy | Applications cannot reach a backend directly | US-1 |
-| Admin interface | An admin API and a UI on it (`/admin`); credentials with traceable metadata and expiry warnings; login through Vault | US-3 (Web UI and API in v0.2.1, the documentation in it in v0.3.0, the budgets in it in v0.3.2 ([#86](https://github.com/hlan-net/aisa/issues/86)); provider credentials written with the user's own Vault token are decided and open ([#133](https://github.com/hlan-net/aisa/issues/133)); a login for the interface, key metadata and expiry warnings remain) |
-| Group budgets | A consumer names a group (a business area, an environment), and a group has a monthly budget between the consumer's and the provider account's, with its use in the metrics ([#140](https://github.com/hlan-net/aisa/issues/140)) | US-4 |
-| Provider adapters | What is specific to a kind of provider, beyond `openai-compatible` (a provider key as a reference to any Vault path came with [#92](https://github.com/hlan-net/aisa/issues/92)) | US-2, US-3 |
-| Rendering without consul-template | A renderer in Go next to the proxy, which also logs in to Vault itself, in place of the template and the Vault Agent. It must follow leases as consul-template does | — |
-| Default model in Secret | Consumer declaration or quota profile carries `default_model`, written to Secret as `OPENAI_MODEL` / `LLM_MODEL` / `AISA_MODEL` for clean client fallbacks | US-1 (v0.3.2, [#119](https://github.com/hlan-net/aisa/pull/119)) |
-| Namespaced keys in Secret | Secret publishes `AISA_BASE_URL` / `AISA_API_KEY` / `AISA_MODEL` alongside `OPENAI_*` to prevent collisions with direct provider credentials | US-1 (`AISA_BASE_URL` and `AISA_API_KEY` in v0.2.1; `AISA_MODEL` with `default_model`, [#119](https://github.com/hlan-net/aisa/pull/119)) |
-| Enriched Level 1 discovery | Return `capabilities` (e.g. tools, vision) and `context_length` in `GET /v1/models` so pods with `automountServiceAccountToken: false` need no CRD access | US-1 |
-| Pre-emptive quota headers | Return `X-Aisa-Quota-Remaining` and `X-Aisa-Quota-Reset` on inference responses; add consumer quota inspection endpoint | US-1 (response headers in v0.3.2, [#122](https://github.com/hlan-net/aisa/pull/122); consumer quota inspection endpoint remains) |
-| Key deprecation warning | Return `X-Aisa-Key-Deprecated: <expiry>` during the rotation grace window, and publish `AISA_KEY_ROTATED_AT` in Secret | US-1 |
-| Trace correlation | Pass `X-Aisa-Request-Id` on proxy responses to correlate application traces with AISA access logs and metrics | US-1 (v0.3.2, [#122](https://github.com/hlan-net/aisa/pull/122)) |
-| Consumer self-declaration | Namespace-scoped `Consumer` CRD or Deployment annotation (`aisa.hlan.net/consumer`) for GitOps-native registration from app charts | US-1 |
-| Anthropic-native passthrough | `/v1/messages` endpoint preserving prompt caching (`cache_control`) for long system prompts. Not part of v0.3.x, where the Claude API is reached through its OpenAI compatibility layer: the native API needs an adapter of its own. It authenticates with `x-api-key` and `anthropic-version` instead of a bearer token; it reports usage in other fields, with cache reads and writes that are priced apart; the proxy's gateway has no driver for it (APISIX 3.20 ships none, and the template renders only `openai-compatible` backends); and applications would speak the Anthropic API to aisa, a second client-facing contract beside the OpenAI-compatible one | US-1, US-2 |
+| Item | What is left | Story | State |
+|------|--------------|-------|-------|
+| No way around the proxy | An application cannot reach a backend that aisa offers past the proxy. A paid provider is already closed by its key, which no application has. A backend without a key, such as a local Ollama, is closed in the network: a NetworkPolicy, or a firewall on the backend's host ([docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#exposure)). What an application uses with credentials of its own, at a provider of its own, is not aisa's concern | US-1 | Needs a design |
+| Admin: prices, provider budgets, backends | The holder sets these in `/admin` instead of Consul. Consumers, quota profiles and the consumers' budgets are there already | US-3 | Needs an issue |
+| Admin: provider credentials | Written with the user's own Vault token (decided 2026-11-20). Open: how the token is held for a session and which actions need it ([#133](https://github.com/hlan-net/aisa/issues/133)) | US-3 | Needs a design |
+| Admin: login | The interface has no login and is off by default. The holder logs in through Vault, and Vault's policies decide who may change what | US-3 | Needs a design |
+| Admin: a credential's metadata and expiry | What identifies a credential at its provider and when it ends; a warning before it expires; a credential that Vault maintains shown as such | US-3 | Needs a design |
+| Group budgets | A consumer names a group (a business area, an environment), and a group has a monthly budget between the consumer's and the provider account's, with its use in the metrics. Four questions are open in [#140](https://github.com/hlan-net/aisa/issues/140); once answered it becomes a version with a row for each PR | US-4 | Proposed |
+| A group's own administrator | Someone who answers for a group sees and changes that group's consumers and budgets only. After the login above | US-4 | Proposed |
+| Provider adapters | What is specific to a kind of provider, beyond `openai-compatible`. A provider key as a reference to any Vault path came with [#92](https://github.com/hlan-net/aisa/issues/92) | US-2, US-3 | Needs a design |
+| Anthropic-native passthrough | `/v1/messages`, preserving prompt caching (`cache_control`) for long system prompts. Not part of v0.3.x, where the Claude API is reached through its OpenAI compatibility layer: the native API needs an adapter of its own. It authenticates with `x-api-key` and `anthropic-version` instead of a bearer token; it reports usage in other fields, with cache reads and writes that are priced apart; the proxy's gateway has no driver for it (APISIX 3.20 ships none, and the template renders only `openai-compatible` backends); and applications would speak the Anthropic API to aisa, a second client-facing contract beside the OpenAI-compatible one | US-1, US-2 | Needs a design |
+| Rendering without consul-template | A renderer in Go next to the proxy, which also logs in to Vault itself, in place of the template and the Vault Agent. It must follow leases as consul-template does | — | Needs a design |
+| Abandoned requests | A request whose client has gone is generated to the end and charged. Find which hop ignores the abort, stop the backend where the gateway allows, and show it in the usage event and the metrics. Open: whether an abandoned request is charged ([#139](https://github.com/hlan-net/aisa/issues/139)). The last check, against a real Ollama, needs the maintainer | US-1 | Needs a design |
+| Consumer self-declaration | A namespace-scoped `Consumer` CRD or a Deployment annotation (`aisa.hlan.net/consumer`), for registration from an application's chart. Open: which of the two, and how it stands with the principle that Kubernetes objects are never where aisa reads from | US-1 | Needs a design |
+| Enriched Level 1 discovery | `capabilities` (e.g. tools, vision) and `context_length` in `GET /v1/models`, so that pods with `automountServiceAccountToken: false` need no access to the `Model` objects | US-1 | Needs an issue |
+| Consumer quota inspection | An endpoint where a consumer reads its own quota. The response headers `X-Aisa-Quota-Remaining` and `X-Aisa-Quota-Reset` came in v0.3.2 | US-1 | Needs an issue |
+| Key deprecation warning | `X-Aisa-Key-Deprecated: <expiry>` during the rotation grace window, and `AISA_KEY_ROTATED_AT` in the Secret | US-1 | Needs an issue |
+
+Shipped from this direction, and so no longer in the table: the Kubernetes objects and consumers in Consul (v0.2.0 PRs 11 and 12); the admin interface with consumers and quota profiles (v0.2.1) and the consumers' budgets (v0.3.2, [#86](https://github.com/hlan-net/aisa/issues/86)); `AISA_BASE_URL` and `AISA_API_KEY` in the Secret (v0.2.1); the default model in the Secret as `OPENAI_MODEL`, `LLM_MODEL` and `AISA_MODEL` (v0.3.2, [#119](https://github.com/hlan-net/aisa/pull/119)); the quota headers and `X-Aisa-Request-Id` on responses (v0.3.2, [#122](https://github.com/hlan-net/aisa/pull/122)).
 
 ## v0.4.0: Second proxy
 
-Under review: with aisa bringing its own proxy, a second one proves the contract for a gateway that already exists and belongs to someone else, a case no user story asks for yet.
+**State: Proposed.** Under review: with aisa bringing its own proxy, a second one proves the contract for a gateway that already exists and belongs to someone else, a case no user story asks for yet.
 
 Prove the contract with a second gateway. **LiteLLM** is the most likely: its open source proxy supports custom auth and callbacks, which map to the decision API and usage events. The contract is marked stable only after this, so the rules that the user stories add to it ([#35](https://github.com/hlan-net/aisa/issues/35), and the client-facing paths of [#34](https://github.com/hlan-net/aisa/issues/34)) must be in the contract before the second proxy is written; otherwise it proves an incomplete contract. Later candidates: Envoy AI Gateway / Agent Router, API7 AISIX.
 

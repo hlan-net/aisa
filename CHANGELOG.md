@@ -6,10 +6,14 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **The roadmap says what is ready to implement** (`ROADMAP.md`, `.github/ISSUE_TEMPLATE/implementation.md`): every open row has a state (Proposed, Needs a design, Needs an issue, Ready), steps that need the maintainer's hardware or a provider's key are marked, and what has shipped is out of the table of the direction. An issue template for work that is to be implemented asks for the decisions made, the scope, what it depends on, the contracts it touches and acceptance criteria that can be checked, so that a person or a coding agent can implement it without asking. Nothing changes in aisa.
+
 ### Added
 
 - **A comparison with the inference services of the clouds** (`README.md`, `docs/concepts/ARCHITECTURE.md`): what aisa is to a cluster is likened to what Amazon Bedrock, Microsoft Foundry or Vertex AI is to its cloud, a front with identity, a model catalog, quotas and metering before shared capacity, with where the comparison ends: aisa owns no capacity and carries no traffic.
-- **US-4, a shared cluster with several budgets** (`docs/process/USER_STORIES.md`): a user story for an organization whose business areas and environments share one cluster, each with a budget over all of its applications, and production's use held against revenue. Its gaps are open: a budget for a group of consumers and its metrics ([#140](https://github.com/hlan-net/aisa/issues/140)), and a group's own administrator. `ROADMAP.md` lists the group budgets under the direction that is decided and not scheduled.
+- **US-4, a shared cluster with several budgets** (`docs/process/USER_STORIES.md`): a user story for an organization whose business areas and environments share one cluster, each with a budget over all of its applications, and production's use held against revenue. Its gaps are open: a budget for a group of consumers and its metrics ([#140](https://github.com/hlan-net/aisa/issues/140)), and a group's own administrator. `ROADMAP.md` lists the group budgets under its direction, as proposed.
 
 ## [0.3.4] - 2026-11-21
 
