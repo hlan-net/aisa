@@ -24,6 +24,8 @@ Proxying requests and translating between providers are solved problems. What is
 
 aisa is not a gateway. A gateway keeps proxying, streaming and translating between providers; aisa decides who may use what, hands the request the holder's credentials and accounts for it. An application manages no provider key.
 
+A comparison that helps: to an application, aisa is to its cluster roughly what Amazon Bedrock, Microsoft Foundry or Google's Vertex AI is to its cloud. One endpoint, the platform's own identity, a catalog of models, quotas and metering, with the inference done by shared capacity behind it. The difference is who owns that capacity: in a cloud the front and the capacity are one product of one vendor, while aisa is only the front, and the capacity is whatever providers the holder has contracts with, from an Ollama box to a cloud API.
+
 What aisa is, its parts and the direction it is taking are in [docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#what-aisa-is).
 
 ## How it fits together

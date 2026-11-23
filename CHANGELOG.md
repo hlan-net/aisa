@@ -6,6 +6,10 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **A comparison with the inference services of the clouds** (`README.md`, `docs/concepts/ARCHITECTURE.md`): what aisa is to a cluster is likened to what Amazon Bedrock, Microsoft Foundry or Vertex AI is to its cloud, a front with identity, a model catalog, quotas and metering before shared capacity, with where the comparison ends: aisa owns no capacity and carries no traffic.
+
 ## [0.3.4] - 2026-11-21
 
 Two corrections to the admin page. Nothing needs a change from an existing install.
