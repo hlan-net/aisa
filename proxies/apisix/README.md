@@ -124,6 +124,17 @@ Run against the dev stack (`docker compose -f dev/compose.yaml up -d --build --w
 * [`render_test.sh`](./render_test.sh): renders the template with consul-template against the dev Consul and Vault and checks the routes, also for model names that need an escaped or shortened route ID, and the timeouts: the default, the cap, and a backend left out for an invalid one.
 * [`runtime_test.sh`](./runtime_test.sh): runs APISIX on the rendered config with the stub aisa, and checks that a request aisa allows, denies, or cannot be asked about is reported to the usage sink exactly once, by the right route. It also runs `guard.sh` next to that APISIX: a file with a route APISIX's schema rejects is put back, and a valid one is kept, and both are reported to the stub's `/v1/render`.
 
+One test is not run by CI, because it needs real keys and costs money:
+
+* [`providers_test.sh`](./providers_test.sh): validates paid providers behind aisa ([#144](https://github.com/hlan-net/aisa/issues/144)): the Gemini API, the OpenAI API and the Claude API, each as an `openai-compatible` backend, with APISIX on the rendered config and the dev stack's real aisa. For each provider that has a key in `.local/<provider>-api-key` (`gemini`, `openai`, `claude`; the file holds the key and nothing else) it checks a chat completion, streamed and not; that the tokens in aisa's ledger are exactly the ones the provider reported; that no header and no error text of the provider's reaches the client; what a wrong key gives; and that a used-up provider budget downgrades to the local model or answers 429. A provider without a key is skipped, and without any key the script exits 0. A run sends at most six billed requests per provider, each with `max_tokens: 16`. The key goes to the dev stack's Vault for the run and is deleted at the end.
+
+  ```bash
+  docker compose -f dev/compose.yaml up -d --build --wait
+  ./proxies/apisix/providers_test.sh            # every provider that has a key
+  ./proxies/apisix/providers_test.sh gemini     # only this one
+  GEMINI_MODEL=gemini-3.1-flash-lite ./proxies/apisix/providers_test.sh gemini
+  ```
+
 The chart is installed in a kind cluster by [`deploy/helm/test/install_test.sh`](../../deploy/helm/test/install_test.sh) (CI, amd64 and arm64): the Vault Agent's login with Kubernetes auth, the Consul token from Vault and a provider key rendered from Vault are checked there.
 
 ### Metrics
