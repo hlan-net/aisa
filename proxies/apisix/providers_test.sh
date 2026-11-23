@@ -16,7 +16,8 @@
 # A provider without its file is skipped; with no file at all the script exits 0. The run costs
 # money: at most six billed requests per provider, each with a short prompt and max_tokens 16.
 # A key goes to the dev stack's Vault for the run and is deleted at the end. It is never
-# printed and never an argument of a command.
+# printed and never an argument of a command, and the rendered file that holds it is in a
+# directory only the owner can enter. One run at a time: the proxy's port is fixed.
 #
 # Needs curl, jq and docker. Exits non-zero when a provider fails a check; a provider that
 # fails does not stop the others.
@@ -28,6 +29,7 @@ KEY_DIR="${KEY_DIR:-$REPO_DIR/.local}"
 NETWORK="${NETWORK:-aisa-dev_default}"
 CT_IMAGE="${CONSUL_TEMPLATE_IMAGE:-hashicorp/consul-template:0.43.0}"
 APISIX_IMAGE="${APISIX_IMAGE:-apache/apisix:3.20.0-debian}"
+REDIS_IMAGE="${REDIS_IMAGE:-redis:8-alpine}"
 AISA="${AISA:-http://127.0.0.1:8084}"
 CONSUL="${CONSUL:-http://127.0.0.1:8500}"
 VAULT="${VAULT:-http://127.0.0.1:8200}"
@@ -36,7 +38,10 @@ VAULT_DEV_TOKEN="${VAULT_DEV_TOKEN:-dev-root}"
 AISA_INSIDE="${AISA_INSIDE:-http://aisa:8080}"
 PORT="${PROXY_PORT:-19081}"
 PROXY="http://127.0.0.1:$PORT"
-CONTAINER=aisa-proxy-providers-test
+# What this run registers carries the run's own name, so that it replaces and removes nothing
+# that was there before it: not another run's leftovers, and not a holder's own "validate".
+RUN="$(date +%s)-$$"
+CONTAINER="aisa-proxy-providers-test-$RUN"
 JSON='Content-Type: application/json'
 STATUS='%{http_code}'
 # The key of chat-ui, a consumer of the dev stack (dev/seed) with a quota and a budget far
@@ -64,24 +69,34 @@ declare -A REFUSED_KEY=([gemini]=400 [openai]=502 [claude]=502)
 # is the gateway's: on a 5xx it repeats the status the client gets, not the provider's.
 ALLOWED_HEADERS='^(content-type|cache-control|retry-after|content-length|transfer-encoding|connection|date|server|x-apisix-upstream-status|x-aisa-[a-z-]+)$'
 
+# Only the owner can enter the directory: the rendered file in it holds the keys.
 OUT=$(mktemp -d)
 active=()
+declare -A ID
+proxy_started=0
 
 # shellcheck disable=SC2329 # invoked by the trap
 cleanup() {
     local p
     for p in "${active[@]}"; do
-        curl -sS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/validate-$p" || true
-        curl -sS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/validate-$p-badkey" || true
-        curl -sS -o /dev/null -X DELETE "$CONSUL/v1/kv/aisa/budgets/providers/validate-$p" || true
-        # The month's total that aisa persisted for the key.
-        curl -sS -o /dev/null -X DELETE "$CONSUL/v1/kv/aisa/state/providers/validate-$p?recurse" || true
-        curl -sS -o /dev/null -X DELETE "$CONSUL/v1/kv/aisa/pricing/${MODEL[$p]}" || true
-        curl -sS -o /dev/null -X DELETE -H "X-Vault-Token: $VAULT_DEV_TOKEN" "$VAULT/v1/secret/metadata/aisa/providers/validate-$p" || true
-        curl -sS -o /dev/null -X DELETE -H "X-Vault-Token: $VAULT_DEV_TOKEN" "$VAULT/v1/secret/metadata/aisa/providers/validate-$p-badkey" || true
+        curl -sS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/${ID[$p]}" || true
+        curl -sS -o /dev/null -X PUT "$CONSUL/v1/agent/service/deregister/${ID[$p]}-badkey" || true
+        curl -sS -o /dev/null -X DELETE "$CONSUL/v1/kv/aisa/budgets/providers/${ID[$p]}" || true
+        # The month's total that aisa persisted for the key, and its counter in Redis.
+        curl -sS -o /dev/null -X DELETE "$CONSUL/v1/kv/aisa/state/providers/${ID[$p]}?recurse" || true
+        docker run --rm --network "$NETWORK" "$REDIS_IMAGE" sh -c \
+            'redis-cli -h redis --scan --pattern "$1" | xargs -r redis-cli -h redis del' sh "aisa:*${ID[$p]}*" >/dev/null 2>&1 || true
+        # The model's price as it was before the run, or none.
+        if [[ -s "$OUT/price.$p" ]]; then
+            curl -sS -o /dev/null -X PUT --data-binary "@$OUT/price.$p" "$CONSUL/v1/kv/aisa/pricing/${MODEL[$p]}" || true
+        elif [[ -e "$OUT/price.$p" ]]; then
+            curl -sS -o /dev/null -X DELETE "$CONSUL/v1/kv/aisa/pricing/${MODEL[$p]}" || true
+        fi
+        curl -sS -o /dev/null -X DELETE -H "X-Vault-Token: $VAULT_DEV_TOKEN" "$VAULT/v1/secret/metadata/aisa/providers/${ID[$p]}" || true
+        curl -sS -o /dev/null -X DELETE -H "X-Vault-Token: $VAULT_DEV_TOKEN" "$VAULT/v1/secret/metadata/aisa/providers/${ID[$p]}-badkey" || true
     done
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    # The rendered file holds the keys.
+    # Only a container this run started.
+    if [[ $proxy_started -eq 1 ]]; then docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; fi
     rm -rf "$OUT"
 }
 trap cleanup EXIT
@@ -183,26 +198,30 @@ register() {
     local p=$1 meta
     # The key travels from its file to Vault on standard input, never as an argument.
     jq -n --rawfile k "$KEY_DIR/$p-api-key" '{data: {api_key: ($k | gsub("\\s"; ""))}}' |
-        curl -fsS -o /dev/null -X POST -H "X-Vault-Token: $VAULT_DEV_TOKEN" -d @- "$VAULT/v1/secret/data/aisa/providers/validate-$p"
+        curl -fsS -o /dev/null -X POST -H "X-Vault-Token: $VAULT_DEV_TOKEN" -d @- "$VAULT/v1/secret/data/aisa/providers/${ID[$p]}"
     curl -fsS -o /dev/null -X POST -H "X-Vault-Token: $VAULT_DEV_TOKEN" -d '{"data": {"api_key": "not-a-key"}}' \
-        "$VAULT/v1/secret/data/aisa/providers/validate-$p-badkey"
-    meta=$(jq -n --arg m "${MODEL[$p]}" --arg k "validate-$p" --arg path "${BASE[$p]}" \
+        "$VAULT/v1/secret/data/aisa/providers/${ID[$p]}-badkey"
+    meta=$(jq -n --arg m "${MODEL[$p]}" --arg k "${ID[$p]}" --arg path "${BASE[$p]}" \
         '{provider: "openai-compatible", models: $m, key: $k} + (if $path == "" then {} else {path: $path} end)')
     # No check: a service without one counts as passing.
-    jq -n --arg id "validate-$p" --arg host "${HOST[$p]}" --argjson meta "$meta" \
+    jq -n --arg id "${ID[$p]}" --arg host "${HOST[$p]}" --argjson meta "$meta" \
         '{ID: $id, Name: "aisa-backend", Address: $host, Port: 443, Meta: $meta}' |
         curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register"
-    jq -n --arg id "validate-$p-badkey" --arg host "${HOST[$p]}" --argjson meta "$meta" --arg m "${MODEL[$p]}-badkey" \
+    jq -n --arg id "${ID[$p]}-badkey" --arg host "${HOST[$p]}" --argjson meta "$meta" --arg m "${MODEL[$p]}-badkey" \
         '{ID: $id, Name: "aisa-backend", Address: $host, Port: 443, Meta: ($meta + {models: $m, key: $id})}' |
         curl -fsS -o /dev/null -X PUT -d @- "$CONSUL/v1/agent/service/register"
-    # A price above zero makes the model a priced one, which budgets apply to.
+    # A price above zero makes the model a priced one, which budgets apply to. The price the
+    # model had, if any, is kept for cleanup; an empty file says it had none.
+    curl -sS -f -o "$OUT/price.$p" "$CONSUL/v1/kv/aisa/pricing/${MODEL[$p]}?raw" 2>/dev/null || : >"$OUT/price.$p"
     put_kv "aisa/pricing/${MODEL[$p]}" '{"input_per_1k": 0.001, "output_per_1k": 0.002, "currency": "USD"}'
-    put_kv "aisa/budgets/providers/validate-$p" '{"monthly_tokens": 1000000, "on_exhausted": "reject"}'
+    put_kv "aisa/budgets/providers/${ID[$p]}" '{"monthly_tokens": 1000000, "on_exhausted": "reject"}'
 }
 
 render() {
     mkdir -p "$OUT/rendered" "$OUT/rendered/apisix.yaml.reports"
-    chmod 777 "$OUT" "$OUT/rendered" "$OUT/rendered/apisix.yaml.reports" # consul-template runs as a user of its own
+    # consul-template runs as a user of its own in the container, so it needs these two open.
+    # They are reached from the host only through $OUT, which stays the owner's alone.
+    chmod 777 "$OUT/rendered" "$OUT/rendered/apisix.yaml.reports"
     docker run --rm --network "$NETWORK" \
         -e CONSUL_HTTP_ADDR=consul:8500 -e VAULT_ADDR=http://vault:8200 -e VAULT_TOKEN="$VAULT_DEV_TOKEN" \
         -e AISA_DECIDE_URI="$AISA_INSIDE/v1/decide" -e AISA_USAGE_URI="$AISA_INSIDE/v1/usage" \
@@ -214,7 +233,7 @@ render() {
 }
 
 proxy() {
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    proxy_started=1
     docker run -d --name "$CONTAINER" --network "$NETWORK" -p "127.0.0.1:$PORT:9080" \
         -v "$SCRIPT_DIR/config.yaml":/usr/local/apisix/conf/config.yaml:ro \
         -v "$OUT/rendered":/rendered:ro \
@@ -241,7 +260,7 @@ gateway_error() {
 # provider only.
 validate() {
     local p=$1
-    local model=${MODEL[$p]} backend="validate-$p" f="$OUT/$p"
+    local model=${MODEL[$p]} backend=${ID[$p]} f="$OUT/$p"
     local prompt completion before_p before_c before_b after_p after_c missing status stray spent refused
 
     echo "== $p: $model"
@@ -341,6 +360,7 @@ wanted=("$@")
 skipped=()
 for p in "${wanted[@]}"; do
     [[ -n "${HOST[$p]:-}" ]] || fail "unknown provider '$p': one of ${ALL[*]}"
+    ID[$p]="validate-$p-$RUN"
     if [[ -s "$KEY_DIR/$p-api-key" ]]; then active+=("$p"); else skipped+=("$p"); fi
 done
 if [[ ${#active[@]} -eq 0 ]]; then
