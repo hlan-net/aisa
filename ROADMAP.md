@@ -114,22 +114,22 @@ The test is [`proxies/apisix/providers_test.sh`](proxies/apisix/providers_test.s
 
 ## Group budgets (US-4)
 
-A consumer names a group (a business area, an environment), and a group has a monthly budget between the consumer's and the provider account's ([#140](https://github.com/hlan-net/aisa/issues/140), [docs/process/USER_STORIES.md](docs/process/USER_STORIES.md), US-4). Decided 2026-11-23: one group per consumer; the budget counts metered models, as a consumer's does, with no group quota beside it; `X-Aisa-Budget-Remaining` shows the smallest of the consumer's and the group's; the group has metrics of its own. The version it ships in is chosen when it is released.
+A consumer names a group (a business area, an environment), and a group has a monthly budget between the consumer's and the provider account's ([#140](https://github.com/hlan-net/aisa/issues/140), [docs/process/USER_STORIES.md](docs/process/USER_STORIES.md), US-4). Decided 2026-11-23: one group per consumer; the budget counts metered models, as a consumer's does, with no group quota beside it; `X-Aisa-Budget-Remaining` shows the smallest of the consumer's and the group's; the group has metrics of its own. The version it ships in is chosen when it is released. All six issues are approved (2026-11-23); each is Ready once the rows it depends on are merged.
 
 | PR | Issue | Scope | Depends on | State |
 |----|-------|-------|------------|-------|
-| 1 | [#152](https://github.com/hlan-net/aisa/issues/152) | `group` in a consumer's declaration: parsed, validated, shown in the admin list | — | Needs an issue: written, waits for approval |
-| 2 | [#153](https://github.com/hlan-net/aisa/issues/153) | `aisa/budgets/groups/<group>`: counters, persisted totals, the decision (429 `group_budget_exhausted` or a downgrade), the ledger's charge, the smallest remaining budget in the header | 1 | Needs an issue: written, waits for approval |
-| 3 | [#154](https://github.com/hlan-net/aisa/issues/154) | `aisa_group_tokens_total`, `aisa_group_cost_total`, the alert at the soft limit, the dashboard | 2 | Needs an issue: written, waits for approval |
-| 4 | [#155](https://github.com/hlan-net/aisa/issues/155) | A consumer's group and the groups' budgets in `/admin` and its API | 2 | Needs an issue: written, waits for approval |
-| 5 | [#156](https://github.com/hlan-net/aisa/issues/156) | `group` and `group_budgets` in the Terraform module | 1 | Needs an issue: written, waits for approval |
-| 6 | [#157](https://github.com/hlan-net/aisa/issues/157) | A group reaches its limit through the proxy: `dev/smoke.sh` and `install_test.sh` | 2 | Needs an issue: written, waits for approval |
+| 1 | [#152](https://github.com/hlan-net/aisa/issues/152) | `group` in a consumer's declaration: parsed, validated, shown in the admin list | — | Ready |
+| 2 | [#153](https://github.com/hlan-net/aisa/issues/153) | `aisa/budgets/groups/<group>`: counters, persisted totals, the decision (429 `group_budget_exhausted` or a downgrade), the ledger's charge, the smallest remaining budget in the header | 1 | Ready |
+| 3 | [#154](https://github.com/hlan-net/aisa/issues/154) | `aisa_group_tokens_total`, `aisa_group_cost_total`, the alert at the soft limit, the dashboard | 2 | Ready |
+| 4 | [#155](https://github.com/hlan-net/aisa/issues/155) | A consumer's group and the groups' budgets in `/admin` and its API | 2 | Ready |
+| 5 | [#156](https://github.com/hlan-net/aisa/issues/156) | `group` and `group_budgets` in the Terraform module | 1 | Ready |
+| 6 | [#157](https://github.com/hlan-net/aisa/issues/157) | A group reaches its limit through the proxy: `dev/smoke.sh` and `install_test.sh` | 2 | Ready |
 
 **Order.** 1, then 2; 3 to 6 can then be done side by side.
 
 ## Direction: not scheduled
 
-What aisa is to become beyond the versions above; none of it has a version yet. The direction of 2026-10-01 is described in [docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#state-of-this-direction); later rows came from the user stories and from use. The states are those of [Readiness](#readiness-from-a-row-to-an-issue). Three rows are Ready (2026-11-23); the others that say Needs an issue have their decisions and wait for an issue written with the template.
+What aisa is to become beyond the versions above; none of it has a version yet. The direction of 2026-10-01 is described in [docs/concepts/ARCHITECTURE.md](docs/concepts/ARCHITECTURE.md#state-of-this-direction); later rows came from the user stories and from use. The states are those of [Readiness](#readiness-from-a-row-to-an-issue). Three rows are Ready (2026-11-23), and so are the six of [Group budgets](#group-budgets-us-4); the others that say Needs an issue have their decisions and wait for an issue written with the template.
 
 | Item | What is left | Story | State |
 |------|--------------|-------|-------|

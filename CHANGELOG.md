@@ -8,7 +8,7 @@ The format is based on Keep a Changelog and follows semantic versioning.
 
 ### Changed
 
-- **The first work that is ready to implement** (`ROADMAP.md`): three rows of the direction are Ready, each with an issue written with the template and approved by the maintainer: a warning for a replaced key ([#149](https://github.com/hlan-net/aisa/issues/149)), a `Model` that says whether it is metered ([#150](https://github.com/hlan-net/aisa/issues/150)) and an endpoint where a consumer reads its own quota and budget ([#151](https://github.com/hlan-net/aisa/issues/151)). Group budgets have a section of their own with a row for each of six PRs ([#152](https://github.com/hlan-net/aisa/issues/152) to [#157](https://github.com/hlan-net/aisa/issues/157)), which wait for approval. Ready now also means that the maintainer has approved the issue's decisions. Nothing changes in aisa.
+- **The first work that is ready to implement** (`ROADMAP.md`): three rows of the direction are Ready, each with an issue written with the template and approved by the maintainer: a warning for a replaced key ([#149](https://github.com/hlan-net/aisa/issues/149)), a `Model` that says whether it is metered ([#150](https://github.com/hlan-net/aisa/issues/150)) and an endpoint where a consumer reads its own quota and budget ([#151](https://github.com/hlan-net/aisa/issues/151)). Group budgets have a section of their own with a row for each of six PRs ([#152](https://github.com/hlan-net/aisa/issues/152) to [#157](https://github.com/hlan-net/aisa/issues/157)), approved as well. Ready now also means that the maintainer has approved the issue's decisions. Nothing changes in aisa.
 
 ## [0.3.5] - 2026-11-23
 
