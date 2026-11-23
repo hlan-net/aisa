@@ -89,6 +89,8 @@ aisa/pricing/gemini-2.5-flash           {"input_per_1k": 0.0003, "output_per_1k"
 aisa/budgets/providers/gemini           {"monthly_tokens": 20000000, "on_exhausted": "downgrade", "downgrade_to": "qwen3"}
 ```
 
+This registration was run against the Gemini API on 2026-11-23, with `gemini-2.5-flash-lite` ([`proxies/apisix/providers_test.sh`](../../proxies/apisix/providers_test.sh), [#144](https://github.com/hlan-net/aisa/issues/144)): completions, streamed and not, arrive with their usage, and the ledger has exactly the provider's tokens. Google answers a key that is not one with 400 and not 401, so a client then gets 400 `invalid_request_error` and not 502: when every request to a Gemini model is answered 400, look at the key first ([#145](https://github.com/hlan-net/aisa/issues/145)).
+
 The scheme is `https`, the default for a backend with a key. The provider budget bounds every token that goes through the key, whichever consumer sends it; when the month's tokens are used, requests for `gemini-2.5-flash` are sent to `qwen3`, a local model, with `X-Aisa-Model` ([`quotas-and-budgets.md`](../features/quotas-and-budgets.md#budgets-v030)). The price (USD 0.30 and 2.50 per million tokens when this was written; check the provider's) makes the model priced, so the consumers' own budgets apply to it as well, and its cost shows in `aisa_cost_total`.
 
 ### A paid provider with a credential Vault issues: Vertex AI
