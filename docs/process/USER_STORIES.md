@@ -25,7 +25,7 @@ Kubernetes-native describes the **applications that consume inference**, not the
 6. **Visible.** The operator sees usage and cost per application from the `aisa_*` metrics.
 7. **Explains itself.** The service tells an application developer how to use it: the endpoint, how to get a credential, which models are offered, and what a denied or downgraded request looks like. Existing applications are not assumed to know any Kubernetes-native inference service; most call a provider directly with a base URL and an API key, or a provider SDK with no base URL at all. The instructions cover moving such an application over, and no other source is needed.
 8. **Models are found through Kubernetes.** The models on offer are objects in the cluster, in the manner of KubeAI's `Model`. An application lists them with a query to the Kubernetes API, by what they can do, and maps its own tasks to them. An application that does not talk to the Kubernetes API finds the same list at `/v1/models`.
-9. **No way around.** An application reaches a model only through the service. It cannot call a backend directly, past the quota and the books.
+9. **No way around.** An application reaches a model that the service offers only through the service. It cannot call one of the service's backends directly, past the quota and the books. What an application uses with credentials of its own, at a provider of its own, is its own affair and not the service's.
 
 ### Gaps
 

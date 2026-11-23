@@ -35,7 +35,7 @@ Everything below is the inside of the third box.
 | **adapter** | What is specific to one kind of provider: how to authenticate to it, where its credential comes from, what it reports as usage, which headers carry its account. Today there is one, `openai-compatible`, selected by a backend's `provider`. | one per kind of provider |
 | **holder** | The person who holds the contracts with the providers and operates aisa. | |
 
-The proxy is aisa's own part, not somebody else's system: **aisa installs and removes it**, and decides its configuration. At run time it works as independently of aisa as it can: it renders its own configuration and keeps serving `fail_policy = "open"` backends while aisa is down. Seen from the cluster it is the egress of inference traffic, so it must be the only way from an application to a provider ([Exposure](#exposure)).
+The proxy is aisa's own part, not somebody else's system: **aisa installs and removes it**, and decides its configuration. At run time it works as independently of aisa as it can: it renders its own configuration and keeps serving `fail_policy = "open"` backends while aisa is down. Seen from the cluster it is the egress of inference traffic, so it must be the only way from an application to a backend that aisa offers ([Exposure](#exposure)).
 
 A gateway that already exists and belongs to someone else can still be connected through the same contracts, but aisa is not designed around that case first: no user story asks for it yet.
 
@@ -161,7 +161,7 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> \
 
 Keep the gateway endpoint internal: behind an IP allowlist or on an internal-only ingress. A leaked consumer key on a public endpoint means unmetered use of paid providers until the key is revoked. aisa's decision and ingest endpoints are cluster-internal only (ClusterIP plus a NetworkPolicy that allows only the gateway pods). aisa serves `/metrics` on a port of its own (`AISA_METRICS_ADDR`; 9090 in the chart), so a scraper such as Prometheus is allowed that port only: `/v1/usage` takes usage events without authentication, and a peer that could reach it could charge consumers' quotas ([#46](https://github.com/hlan-net/aisa/issues/46)).
 
-The proxy is the egress of inference traffic, and a quota holds only if nothing goes around it. A paid provider is safe without further measures, because no application has its key. A backend without a key is not: an application that knows the address of a local Ollama can call it directly, past the quotas and the books. That path must be closed in the network, with a NetworkPolicy that denies applications the backends or a firewall on the backend's host. This is not designed yet.
+The proxy is the egress of the inference that aisa offers, and a quota holds only if nothing goes around it to a backend that aisa offers. What an application uses with credentials of its own, at a provider of its own, is outside aisa: it is not aisa's service, and aisa neither bounds it nor keeps its books. A paid provider is safe without further measures, because no application has its key. A backend without a key is not: an application that knows the address of a local Ollama can call it directly, past the quotas and the books. That path must be closed in the network, with a NetworkPolicy that denies applications the backends or a firewall on the backend's host. This is not designed yet.
 
 ## Failure modes
 
