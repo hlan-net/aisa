@@ -35,7 +35,7 @@ Everything below is the inside of the third box.
 | **adapter** | What is specific to one kind of provider: how to authenticate to it, where its credential comes from, what it reports as usage, which headers carry its account. Today there is one, `openai-compatible`, selected by a backend's `provider`. | one per kind of provider |
 | **holder** | The person who holds the contracts with the providers and operates aisa. | |
 
-The proxy is aisa's own part, not somebody else's system: **aisa installs and removes it**, and decides its configuration. At run time it works as independently of aisa as it can: it renders its own configuration and keeps serving `fail_policy = "open"` backends while aisa is down. Seen from the cluster it is the egress of inference traffic, so it must be the only way from an application to a backend that aisa offers ([Exposure](#exposure)).
+The proxy is aisa's own part, not somebody else's system: **aisa installs and removes it**, and decides its configuration. At run time it works as independently of aisa as it can: it renders its own configuration and keeps serving `fail_policy = "open"` backends while aisa is down. Seen from the cluster it is the egress of the inference that aisa offers, and a backend can be set to accept nothing else ([Exposure](#exposure)).
 
 A gateway that already exists and belongs to someone else can still be connected through the same contracts, but aisa is not designed around that case first: no user story asks for it yet.
 
@@ -84,7 +84,7 @@ The sections after this one describe what is designed and, where the status says
 | The non-secret part of a consumer (name, quota profile, the namespace and Secret of its application) in Consul instead of Vault | Built (v0.2.0 PR 11): a consumer is declared in Consul KV `aisa/consumers/<name>` ([`CONSUL.md`](./CONSUL.md#consumers-consul-kv)), and Vault holds only the hashes of its keys ([`VAULT.md`](./VAULT.md)) |
 | Admin interface | Decided, not designed (US-3) |
 | Provider adapters beyond `openai-compatible`; a provider key as a reference to any Vault path, so that secrets Vault maintains itself can be used | Decided, not designed |
-| No way around the proxy | Decided, not designed |
+| No way around the proxy | Decided 2026-11-23: the restriction is the backend's to make, and aisa gives it the means ([Exposure](#exposure)) |
 
 ## Traffic path
 
@@ -161,7 +161,12 @@ helm install aisa oci://ghcr.io/hlan-net/charts/aisa --version <x.y.z> \
 
 Keep the gateway endpoint internal: behind an IP allowlist or on an internal-only ingress. A leaked consumer key on a public endpoint means unmetered use of paid providers until the key is revoked. aisa's decision and ingest endpoints are cluster-internal only (ClusterIP plus a NetworkPolicy that allows only the gateway pods). aisa serves `/metrics` on a port of its own (`AISA_METRICS_ADDR`; 9090 in the chart), so a scraper such as Prometheus is allowed that port only: `/v1/usage` takes usage events without authentication, and a peer that could reach it could charge consumers' quotas ([#46](https://github.com/hlan-net/aisa/issues/46)).
 
-The proxy is the egress of the inference that aisa offers, and a quota holds only if nothing goes around it to a backend that aisa offers. What an application uses with credentials of its own, at a provider of its own, is outside aisa: it is not aisa's service, and aisa neither bounds it nor keeps its books. A paid provider is safe without further measures, because no application has its key. A backend without a key is not: an application that knows the address of a local Ollama can call it directly, past the quotas and the books. That path must be closed in the network, with a NetworkPolicy that denies applications the backends or a firewall on the backend's host. This is not designed yet.
+The proxy is the egress of the inference that aisa offers, and a quota holds only if nothing goes around it to a backend that aisa offers. What an application uses with credentials of its own, at a provider of its own, is outside aisa: it is not aisa's service, and aisa neither bounds it nor keeps its books. **Who closes the way around** (decided 2026-11-23). A provider answers for its own use being within its policy: Ollama, the OpenAI API, the Gemini API and the Claude API each decide whom they serve. If a backend is to be used only through aisa, that restriction is the backend's, or its holder's, to make. It is not aisa's job to make it. aisa's job is to give the backend the means to tell aisa from anyone else:
+
+- **A credential that only the proxy presents.** A backend that requires a credential and checks it is closed already, because the credential is in Vault and only the proxy is given it; no application has it. The service meta `key` is not that credential: it names the Vault secret that holds it (`secret/aisa/providers/<key>`), and setting it closes nothing unless the backend refuses a request without the credential. This is how the paid providers are closed. A backend that requires none, such as a local Ollama, can be made to require one by a reverse proxy in front of it.
+- **A source in the network that can be recognised.** A firewall on the backend's host can allow only the address the proxy's traffic comes from, if that address is stable and the proxy's alone. Binding the proxy's pods to chosen nodes (`nodeSelector`, `tolerations` and `affinity` in the proxy's chart) does not give that by itself: what a backend outside the cluster sees depends on the cluster's network, and can be a pod address, a node's address shared with every other pod on it, or the address of a NAT. It takes an egress or NAT address that only the proxy's traffic leaves from, or nodes that run nothing else and whose own addresses the traffic leaves from. Which of these aisa documents, and whether it supports an egress of its own, is not designed yet.
+
+Until its holder restricts it, a backend without a key answers any application that knows its address, past the quotas and the books.
 
 ## Failure modes
 
